@@ -4,9 +4,15 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 var phaseClock = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+
+// handed is the write's stamp at phaseClock, built through the stamp rule
+// like every stamp: no history, so the clock's reading.
+func handed() stamp.Instant { return stamp.Next(phaseClock, time.Time{}) }
 
 // at is the n-th instant of a history, so a case states its order by number.
 func at(n int) time.Time { return phaseClock.Add(time.Duration(n) * time.Minute) }
@@ -145,10 +151,13 @@ func TestPlanPhase(t *testing.T) {
 	}
 }
 
-// TestNextEventInstant states the stamp a write takes against the history it
+// TestStampNext states the stamp a write takes against the history it
 // saw: the clock's reading when it is past all of it, and otherwise the
 // instant just past the newest event, whichever order the history arrives in.
-func TestNextEventInstant(t *testing.T) {
+// Each case runs with its clock and history in UTC and again in a fixed
+// offset, and the stamp is in UTC either way: history read back from a store
+// can carry an offset, and a stamp is stored as text that sorts by spelling.
+func TestStampNext(t *testing.T) {
 	history := []IssueEvent{startEvent("e3", 3), startEvent("e1", 1), startEvent("e2", 2)}
 	for _, c := range []struct {
 		name string
@@ -161,17 +170,27 @@ func TestNextEventInstant(t *testing.T) {
 		{"a clock behind the history steps past its newest event", at(2), history, at(3).Add(time.Nanosecond)},
 		{"a clock at the newest event steps past it", at(3), history, at(3).Add(time.Nanosecond)},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			got := NextEventInstant(c.now, NewestInstant(c.seen))
-			if !got.Equal(c.want) {
-				t.Fatalf("NextEventInstant = %s, want %s", got, c.want)
-			}
-			for _, event := range c.seen {
-				written := IssueEvent{ID: "e0", CreatedAt: got}
-				if CompareEventRecency(written, event) <= 0 {
-					t.Errorf("the written event sorts at or before %s, which it was written against", event.ID)
+		for _, zone := range []*time.Location{time.UTC, time.FixedZone("UTC-5", -5*60*60)} {
+			t.Run(c.name+"/"+zone.String(), func(t *testing.T) {
+				seen := make([]IssueEvent, len(c.seen))
+				for i, event := range c.seen {
+					event.CreatedAt = event.CreatedAt.In(zone)
+					seen[i] = event
 				}
-			}
-		})
+				got := stamp.Next(c.now.In(zone), NewestInstant(seen)).Time()
+				if !got.Equal(c.want) {
+					t.Fatalf("stamp.Next = %s, want %s", got, c.want)
+				}
+				if got.Location() != time.UTC {
+					t.Fatalf("stamp.Next = %s in %s, want UTC", got, got.Location())
+				}
+				for _, event := range seen {
+					written := IssueEvent{ID: "e0", CreatedAt: got}
+					if CompareEventRecency(written, event) <= 0 {
+						t.Errorf("the written event sorts at or before %s, which it was written against", event.ID)
+					}
+				}
+			})
+		}
 	}
 }

@@ -193,7 +193,7 @@ func TestHandoverLive(t *testing.T) {
 }
 
 // everyAction is one sample value per verb in the sealed lifecycle sum, keyed by
-// the verb it persists as. After asks the sum exactly one question — is this a
+// the verb it persists as. PlanStatus asks the sum exactly one question — is this a
 // Start — and answers "ownership does not move" for every other variant through
 // a pass-through arm no compiler checks. Driving the cases off this table, and
 // the table off model.Actions(), is what makes a ninth variant decide rather
@@ -207,8 +207,8 @@ var everyAction = map[model.ActionName]model.Action{
 	model.ActionUnarchive: model.Unarchive{},
 	model.ActionDelete:    model.Delete{},
 	model.ActionRestore:   model.Restore{},
-	// A phase move is not a StatusAction, so After cannot be handed one: the
-	// claimant of a ticket whose phase moves is whoever held it before.
+	// A phase move is not a StatusAction, so PlanStatus cannot be handed one:
+	// the claimant of a ticket whose phase moves is whoever held it before.
 	model.ActionPhase: model.SetPhase{Phase: model.PhaseImpl},
 }
 
@@ -228,62 +228,93 @@ func TestEveryActionHasASample(t *testing.T) {
 	}
 }
 
-// TestAfterPreservesOwnershipForEveryStatusVerbButStart walks the sum rather
-// than a hand-picked couple. Taking work is `start`; every other transition
-// drives status on an axis orthogonal to who owns the row, so a `done` that
-// quietly rewrote the claimant would hand a lane to whoever happened to close a
-// ticket in it — and it is exactly that rewrite the engines' no-op comparison
-// would then read as a change worth recording.
-func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
+// heldTicket is an in-progress ticket assigned to ada whose history says
+// checkout A took it, so the plan's prior claimant is A's.
+func heldTicket(t *testing.T) (model.Issue, []model.IssueEvent) {
+	t.Helper()
+	issue := leaf(t, "T", "", model.StateInProgress)
+	issue.Assignee = "ada"
+	return issue, []model.IssueEvent{event("e1", "T", model.ActionStart, ago(time.Hour), streamA)}
+}
+
+// planStatus is claims.PlanStatus for a case that expects the action to be
+// accepted.
+func planStatus(t *testing.T, issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution) claims.StatusPlan {
+	t.Helper()
+	plan, err := claims.PlanStatus(issue, events, action, taker)
+	if err != nil {
+		t.Fatalf("PlanStatus(%s) error = %v", action.Name(), err)
+	}
+	return plan
+}
+
+// TestPlanStatusPreservesOwnershipForEveryStatusVerbButStart walks the sum
+// rather than a hand-picked couple. Taking work is `start`; every other
+// transition drives status on an axis orthogonal to who owns the row, so a
+// `done` that quietly rewrote the claimant would hand a lane to whoever
+// happened to close a ticket in it — and it is exactly that rewrite the
+// engines' no-op comparison would then read as a change worth recording.
+func TestPlanStatusPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+	issue, events := heldTicket(t)
 
 	for _, name := range model.Actions() {
 		action, drivesStatus := everyAction[name].(model.StatusAction)
 		_, takes := action.(model.Start)
 		if !drivesStatus || takes {
 			// Retention verbs act on the orthogonal axis and are not
-			// StatusActions at all, so After cannot be handed one; start is the
-			// one verb that does move the claimant, and has its own cases below.
+			// StatusActions at all, so PlanStatus cannot be handed one; start
+			// is the one verb that does move the claimant, and has its own
+			// cases below.
 			continue
 		}
-		if got := heldByA.After(action, streamB); got != heldByA {
-			t.Errorf("After(%q, %s) = %+v, want ownership unchanged at %+v", name, streamB.Stream(), got, heldByA)
+		plan := planStatus(t, issue, events, action, streamB)
+		if plan.Prior != heldByA || plan.Post != heldByA {
+			t.Errorf("PlanStatus(%q, %s) claimant %+v -> %+v, want ownership unchanged at %+v", name, streamB.Stream(), plan.Prior, plan.Post, heldByA)
 		}
 	}
 }
 
-// TestAfterStartInstallsTheTakingCheckout: the checkout After writes is the one
-// performing the action, not the one already on the record. Without that
-// substitution the taker's identity never reaches the comparison, so a
-// takeover between two checkouts sharing one assignee compares equal and
+// TestPlanStatusStartInstallsTheTakingCheckout: the checkout a start installs
+// is the one performing the action, not the one already on the record.
+// Without that substitution the taker's identity never reaches the comparison,
+// so a takeover between two checkouts sharing one assignee compares equal and
 // records nothing.
-func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
-	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+func TestPlanStatusStartInstallsTheTakingCheckout(t *testing.T) {
+	issue, events := heldTicket(t)
 
 	// Surrounding space on the way in, because `--assignee` is a flag value a
 	// shell can pad and the claimant is compared for equality: an untrimmed
 	// " bob " would read as a transfer away from "bob" on every re-run.
 	want := claims.Claimant{Established: true, Assignee: "bob", Checkout: streamB}
-	if got := heldByA.After(model.Start{Assignee: "  bob  "}, streamB); got != want {
-		t.Errorf("After(start, %s) = %+v, want %+v", streamB.Stream(), got, want)
+	if got := planStatus(t, issue, events, model.Start{Assignee: "  bob  "}, streamB).Post; got != want {
+		t.Errorf("PlanStatus(start, %s).Post = %+v, want %+v", streamB.Stream(), got, want)
 	}
 }
 
-// TestAfterStartEstablishesAnUnheldClaimant is the row a comparison on the two
-// identity halves alone cannot see: `lit new --assignee ada`, then ada starting
-// it from a checkout that resolves no stream token. The assignee does not move
-// and the checkout does not move, and it is still the ticket's first-ever take —
-// a real claim that owes a write.
-func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
+// TestPlanStatusStartEstablishesAnUnheldClaimant is the row a comparison on
+// the two identity halves alone cannot see: `lit new --assignee ada`, then ada
+// starting it from a checkout that resolves no stream token. The assignee does
+// not move and the checkout does not move, and it is still the ticket's
+// first-ever take — a real claim that owes a write.
+func TestPlanStatusStartEstablishesAnUnheldClaimant(t *testing.T) {
+	issue := leaf(t, "T", "", model.StateInProgress)
+	issue.Assignee = "ada"
 	preset := claims.Claimant{Assignee: "ada"}
 
-	got := preset.After(model.Start{Assignee: "ada"}, model.Attribution{})
+	plan := planStatus(t, issue, nil, model.Start{Assignee: "ada"}, model.Attribution{})
 	want := claims.Claimant{Established: true, Assignee: "ada"}
-	if got != want {
-		t.Errorf("After(start, absent) = %+v, want %+v", got, want)
+	if plan.Prior != preset {
+		t.Fatalf("PlanStatus(start).Prior = %+v, want the preset assignee %+v", plan.Prior, preset)
 	}
-	if got == preset {
+	if plan.Post != want {
+		t.Errorf("PlanStatus(start, absent).Post = %+v, want %+v", plan.Post, want)
+	}
+	if plan.Post == preset {
 		t.Error("a first start compared equal to the preset assignee it started from: neither identity half moved, and Established is the fact that did")
+	}
+	if !plan.Records() {
+		t.Error("a first start recorded nothing: it is a real claim that owes a write")
 	}
 }
 

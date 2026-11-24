@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 type State = lifecycle.State
@@ -464,11 +465,11 @@ var _ Refusal = FrozenIssueError{}
 // is intentionally unsupported here; that requires a dedicated disambiguation
 // design before containers ever become actionable. Containers reject every
 // action because their state is derived from children — structurally: AllOf
-// does not implement Actionable, and the Container branch here composes the
-// epic-aware rejection from the issue ID and child progress that only this
+// is not a lifecycle.StatusPrimitive, and the Container branch here composes
+// the epic-aware rejection from the issue ID and child progress that only this
 // boundary holds.
-// [LAW:types-are-the-program] No idempotent / from-state branching here: the
-// leaf's Apply is target-state, so same-state inputs round-trip through the
+// [LAW:types-are-the-program] No idempotent / from-state branching here:
+// lifecycle.Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
 // invariants (unhydrated lifecycle, container, frozen retention, a start whose
 // assignee no filter could select) — the leaf itself cannot fail, since
@@ -477,7 +478,7 @@ var _ Refusal = FrozenIssueError{}
 // [LAW:effects-at-boundaries] Planning takes no instant: whether the action is
 // refused and whether it moves the status are decided before anyone knows when
 // the write lands, so a caller that only asks — the CLI's hold gate — has no
-// instant to invent. Only StatusChange.At, the write's step, is handed one.
+// instant to invent. Only StatusChange.Updated, the write's step, is handed one.
 func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
@@ -487,10 +488,11 @@ func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 		// Every status action on a container is refused, including one whose
 		// target the children already establish: a container has no transition
 		// to make, so "already there" is a fact about the request rather than a
-		// licence to treat the call as a no-op. Letting it through would reach
-		// the engines' no-op rule, which compares StatusValue — vacuously "" for
-		// a container — and so would decide on the claimant alone, silently
-		// writing a claim onto an epic for a `start` that changed nothing.
+		// licence to treat the call as a no-op that writes only a claim onto
+		// an epic for a `start` that changed nothing. A container is no
+		// lifecycle.StatusPrimitive, so it never reaches the machine; this
+		// branch is where its refusal gets the epic-aware wording only this
+		// boundary can compose.
 		// The refusal stays; what the caller is TOLD is what Satisfied decides.
 		// Action is always set, and Error() depends on that: it renders the
 		// action's invocation verb, and Verb panics on a name outside the sealed
@@ -516,36 +518,112 @@ func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	}
 	// A start assigns the issue to whoever starts it, so the start is refused
 	// here, the check `lit start` runs before its takeover gate and both
-	// engines run before writing. [LAW:single-enforcer]
+	// engines run before writing. The change carries the start with its
+	// assignee in canonical form, so nothing downstream normalizes it again.
+	// [LAW:single-enforcer] [LAW:parse-dont-validate]
 	if start, ok := action.(lifecycle.Start); ok {
-		if _, err := NormalizeAssignee(start.Assignee); err != nil {
+		assignee, err := NormalizeAssignee(start.Assignee)
+		if err != nil {
 			return StatusChange{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
 		}
+		start.Assignee = assignee
+		action = start
 	}
-	actionable, ok := root.(lifecycle.Actionable)
-	if !ok {
+	if _, ok := root.(lifecycle.StatusPrimitive); !ok {
 		return StatusChange{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
 	}
-	return StatusChange{issue: i, leaf: actionable, action: action}, nil
+	return StatusChange{issue: i, action: action}, nil
 }
 
 // StatusChange is a status action the issue has accepted, not yet stamped:
-// the refusals are behind it, so what remains cannot fail.
+// the refusals are behind it, so what remains cannot fail. Only PlanStatus
+// builds one, and the issue it holds is the one copy of the leaf the action
+// moves.
 type StatusChange struct {
 	issue  Issue
-	leaf   lifecycle.Actionable
 	action lifecycle.StatusAction
 }
 
-// Changed reports whether the action moves the status.
-func (c StatusChange) Changed() bool { return lifecycle.Moves(c.leaf, c.action) }
+// leaf is the leaf status PlanStatus proved the issue's root to be. A
+// StatusChange built anywhere else holds none, and that is a programmer error
+// said here rather than a nil dereference somewhere inside the machine.
+// [LAW:no-silent-failure]
+func (c StatusChange) leaf() lifecycle.StatusPrimitive {
+	leaf, ok := c.issue.lifecycle.(lifecycle.StatusPrimitive)
+	if !ok {
+		panic("model: a StatusChange is built only by Issue.PlanStatus")
+	}
+	return leaf
+}
 
-// At is the issue after the action, stamped at the instant the write performing
-// it is stamped with: a close records at as its close time.
-func (c StatusChange) At(at time.Time) Issue {
+// Changed reports whether the action moves the status.
+func (c StatusChange) Changed() bool { return lifecycle.Moves(c.leaf(), c.action) }
+
+// Taking reports whether the change takes the ticket, which only a start does,
+// and the canonical assignee it takes it for.
+func (c StatusChange) Taking() (Text, bool) {
+	start, ok := c.action.(lifecycle.Start)
+	return Text(start.Assignee), ok
+}
+
+// Reclaims reports that the change is a start taking back a lane a sibling's
+// start moved away (lifecycle.Start.Reclaim).
+func (c StatusChange) Reclaims() bool {
+	start, ok := c.action.(lifecycle.Start)
+	return ok && start.Reclaim
+}
+
+// Updated is the issue after the change, written at at: the status the action
+// leads to, the assignee a start takes the ticket for, and at as both the
+// row's updated_at and a close's close time, so every instant the write
+// records is one value. [LAW:one-source-of-truth]
+func (c StatusChange) Updated(at stamp.Instant) Issue {
 	issue := c.issue
-	issue.replaceLifecycle(c.leaf.Apply(c.action, at))
+	issue.replaceLifecycle(lifecycle.Apply(c.leaf(), c.action, at))
+	if assignee, takes := c.Taking(); takes {
+		issue.Assignee = assignee
+	}
+	issue.UpdatedAt = at.Time()
 	return issue
+}
+
+// FieldChanges are the change rows the write records: one per status-axis
+// field Updated moves — the whole close payload, so a reopen's clearing of it
+// is as legible in history as the close that set it — and the assignee a
+// start moves. Both engines record these rows, so the history format has one
+// home. [LAW:one-source-of-truth]
+func (c StatusChange) FieldChanges(at stamp.Instant) []FieldChange {
+	before, after := c.issue, c.Updated(at)
+	var changes []FieldChange
+	add := func(field, from, to string) {
+		if from != to {
+			changes = append(changes, FieldChange{Field: field, From: from, To: to})
+		}
+	}
+	add("status", before.StatusValue(), after.StatusValue())
+	add("closed_at", formatChangeTime(before.ClosedAtValue()), formatChangeTime(after.ClosedAtValue()))
+	add("resolution", formatChangeString((*string)(before.ResolutionValue())), formatChangeString((*string)(after.ResolutionValue())))
+	add("redirect_target", formatChangeString(before.RedirectTargetValue()), formatChangeString(after.RedirectTargetValue()))
+	add("assignee", before.Assignee.Raw(), after.Assignee.Raw())
+	return changes
+}
+
+// formatChangeTime is an optional instant as a change row spells it: absent
+// as the empty string, present as RFC3339Nano.
+func formatChangeTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
+}
+
+// formatChangeString is an optional string as a change row spells it, absent
+// as the empty string.
+func formatChangeString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (i Issue) StatusValue() string {

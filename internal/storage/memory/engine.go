@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -244,7 +245,7 @@ func (e *Engine) ScratchDeletes() ([]storage.ScratchDelete, bool) {
 }
 
 // stamp is the instant a write planned against family's history takes.
-func (e *Engine) stamp(family map[model.ID]bool) time.Time {
+func (e *Engine) stamp(family map[model.ID]bool) stamp.Instant {
 	var seen []model.IssueEvent
 	for id := range family {
 		seen = append(seen, e.events[id]...)

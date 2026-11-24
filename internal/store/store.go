@@ -24,6 +24,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -815,7 +816,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if hook := s.planReadsHookForTest; hook != nil {
 			hook()
 		}
-		now := s.stamps.Stamp(s.clock, filed)
+		now := s.stamps.Stamp(s.clock, filed).Time()
 		issue = model.Issue{
 			Title:       model.Text(title),
 			Description: strings.TrimSpace(in.Description),
@@ -1612,8 +1613,9 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 
 // [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
 // Variability lives in the Change value: nil Action = no transition; empty Fields = no field write.
-// [LAW:types-are-the-program] Every target state is reachable by exactly one action variant;
-// no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
+// [LAW:types-are-the-program] Every action names the one state it leads to (Done and Close both lead
+// to closed, Close carrying an outcome); no compound chains, no from-state preconditions. The 3x3 minus
+// diagonal collapses to one call per change.
 // Same-state transitions flow through planStatusTransition unconditionally; the leaf decides what they
 // mean. A pure no-op (same state, same resulting claimant) records nothing — history reflects actual
 // mutations. A same-state start that moves the claimant is the canonical reclaim path and records the
@@ -1739,7 +1741,7 @@ func (s *Store) apply(ctx context.Context, id model.ID, plan storage.ChangePlan)
 					}
 				}
 				if hasFields {
-					if err := s.applyFieldsTx(ctx, tx, fw, at); err != nil {
+					if err := s.applyFieldsTx(ctx, tx, fw, at.Time()); err != nil {
 						return err
 					}
 				}
@@ -1843,7 +1845,7 @@ type lifecycleWrite interface {
 // three partition the sealed sum, so the dispatch is the sum's own structure —
 // a retention action reaching the status machine, or vice versa, is
 // unrepresentable. [LAW:types-are-the-program]
-func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.Action) (lifecycleWrite, error) {
+func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEvent, at stamp.Instant, actor string, reason string, action model.Action) (lifecycleWrite, error) {
 	switch a := action.(type) {
 	case model.StatusAction:
 		w, err := s.planStatusTransition(issue, history, at, actor, reason, a)
@@ -1852,13 +1854,13 @@ func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEven
 		}
 		return w, nil
 	case model.RetentionAction:
-		w, err := planRetentionTransition(issue, actor, reason, a, at)
+		w, err := planRetentionTransition(issue, actor, reason, a, at.Time())
 		if err != nil {
 			return nil, err
 		}
 		return w, nil
 	case model.SetPhase:
-		w, err := s.planPhaseMove(issue, history, at, actor, reason, a)
+		w, err := s.planPhaseMove(issue, history, at.Time(), actor, reason, a)
 		if err != nil {
 			return nil, err
 		}
@@ -1912,30 +1914,24 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
-// against a tx. planStatusTransition is the validate+compute half — it runs
-// Issue.PlanStatus's guards, the assignee rule, and the change-row diff over the
-// issue, the history and the instant Apply read for it, and reads and writes
+// against a tx. planStatusTransition is the compute half: claims.PlanStatus
+// runs Issue.PlanStatus's refusals and decides whether the write is owed, and
+// the plan's Updated and FieldChanges build the post-transition issue and its
+// change rows from the write's stamp, which is handed in; it reads and writes
 // nothing itself. applyTransitionTx is the write half: the redirect-target
 // validation, which reads a foreign row on the write's tx, then the single
 // UPDATE plus the event. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
-// field write. A noop plan records that the target state and assignee already
+// field write. A noop plan records that the target state and claimant already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
-	issueID           model.ID
-	toStatus          string
-	postAssignee      string
-	now               time.Time
-	closedAtArg       any
-	resolutionArg     any
-	redirectTargetArg any
-	action            model.ActionName
-	reason            string
-	actor             string
-	changes           []model.FieldChange
-	post              model.Issue
-	noop              bool
-	claimHandover     *claims.Handover
+	action        model.ActionName
+	reason        string
+	actor         string
+	changes       []model.FieldChange
+	post          model.Issue
+	noop          bool
+	claimHandover *claims.Handover
 }
 
 func (w transitionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
@@ -1945,7 +1941,7 @@ func (w transitionWrite) postIssue() model.Issue     { return w.post }
 func (w transitionWrite) isNoop() bool               { return w.noop }
 func (w transitionWrite) handover() *claims.Handover { return w.claimHandover }
 
-func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
+func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEvent, at stamp.Instant, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
 	// Who holds the ticket is the claimant claims owns, read from this issue's
 	// own history — never the assignee alone. The taker is s.attribution
 	// because it is exactly what recordEvent will stamp on the event this plan
@@ -1959,78 +1955,13 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if !plan.Records() {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
-	updated := plan.Updated(at)
-	fromStatus := issue.StatusValue()
-	toStatus := updated.StatusValue()
-	now := at
-	var closedAtArg any
-	if value := updated.ClosedAtValue(); value != nil {
-		closedAtArg = model.StampText(*value)
-	}
-	// The close outcome traveled through the state machine into the closed leaf,
-	// so the post-transition resolution is read back off the updated issue — no
-	// re-attachment, and a non-closed target structurally carries none, so a
-	// resolution can never linger on a non-closed row. [LAW:types-are-the-program]
-	postResolution := updated.ResolutionValue()
-	var resolutionArg any
-	if postResolution != nil {
-		resolutionArg = string(*postResolution)
-	}
-	// The redirect target traveled through the state machine into the closed
-	// leaf exactly like the resolution — only the redirecting outcomes carry
-	// one, structurally — so the plan reads it back off the post-transition
-	// issue. Its integrity (target exists, is not the issue itself, is not a
-	// deleted canonical) is validated by applyTransitionTx on the write's tx,
-	// not here: the plan reads nothing itself, and validateRedirectTarget reads
-	// a FOREIGN row. [LAW:effects-at-boundaries] [LAW:one-source-of-truth] The leaf is
-	// the single carrier; there is no separate outcome re-extraction to drift
-	// from it.
-	postRedirect := updated.RedirectTargetValue()
-	var redirectTargetArg any
-	if postRedirect != nil {
-		redirectTargetArg = *postRedirect
-	}
-	// [LAW:one-source-of-truth] Change rows mirror the columns that actually
-	// moved. A same-state reclaim records only the assignee row — a from==to
-	// status row would be a schema lie.
-	var changes []model.FieldChange
-	if fromStatus != toStatus {
-		changes = append(changes, model.FieldChange{Field: "status", From: fromStatus, To: toStatus})
-	}
-	priorClosedAt := issue.ClosedAtValue()
-	newClosedAt := updated.ClosedAtValue()
-	if !timesEqual(priorClosedAt, newClosedAt) {
-		changes = append(changes, model.TimestampChange(model.ClosedAtField, priorClosedAt, newClosedAt))
-	}
-	priorResolution := issue.ResolutionValue()
-	if !resolutionsEqual(priorResolution, postResolution) {
-		changes = append(changes, model.FieldChange{Field: "resolution", From: formatNullableResolution(priorResolution), To: formatNullableResolution(postResolution)})
-	}
-	priorRedirect := issue.RedirectTargetValue()
-	if !stringPointersEqual(priorRedirect, postRedirect) {
-		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
-	}
-	if plan.Prior.Assignee != plan.Post.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: plan.Prior.Assignee.Raw(), To: plan.Post.Assignee.Raw()})
-	}
-	updated.UpdatedAt = now
-	// updated already carries the leaf the write will persist — the outcome
-	// traveled through the machine, so there is no post-hoc rehydration to
-	// re-attach a resolution. [LAW:one-source-of-truth]
 	return transitionWrite{
-		issueID:           issue.ID,
-		toStatus:          toStatus,
-		postAssignee:      plan.Post.Assignee.Raw(),
-		now:               now,
-		closedAtArg:       closedAtArg,
-		resolutionArg:     resolutionArg,
-		redirectTargetArg: redirectTargetArg,
-		action:            action.Name(),
-		reason:            reason,
-		actor:             actor,
-		changes:           changes,
-		post:              updated,
-		claimHandover:     plan.Handover(),
+		action:        action.Name(),
+		reason:        reason,
+		actor:         actor,
+		changes:       plan.FieldChanges(at),
+		post:          plan.Updated(at),
+		claimHandover: plan.Handover(),
 	}, nil
 }
 
@@ -2038,25 +1969,41 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 // the redirect target, then performs the status UPDATE and the change event.
 // The redirect validation lives here rather than in planStatusTransition so the
 // plan stays pure: the FOREIGN row it reads (the redirect canonical) is read on
-// the tx of the write it guards. Everything else it does is a write, so it still composes into any transaction
-// a caller already holds — which is how Apply folds a transition and a field
-// write into one commit. [LAW:single-enforcer]
-// The redirect target rides the same UPDATE as status/closed_at/resolution, so
-// a reopen clears the whole close payload atomically — a stale redirect on a
-// live issue is unwritable, not guarded against. [LAW:one-source-of-truth]
+// the tx of the write it guards, under the held commit lock, so a delete of the
+// canonical is either before this read (refused) or after the commit.
+// [LAW:no-ambient-temporal-coupling] Everything else it does is a write, so it
+// still composes into any transaction a caller already holds — which is how
+// Apply folds a transition and a field write into one commit.
+//
+// Every column the UPDATE writes is read off the post-transition issue, so the
+// row's updated_at, its closed_at, and the event's created_at are the one stamp
+// Updated set. The redirect target rides the same UPDATE as
+// status/closed_at/resolution, so a reopen clears the whole close payload
+// atomically — a stale redirect on a live issue is unwritable, not guarded
+// against. [LAW:one-source-of-truth]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
-	// [LAW:single-enforcer] The redirect target is validated through the one
-	// validation site, reading existence+retention of the canonical on this tx.
-	// A non-redirecting transition carries no target, so this is a no-op there.
-	if err := validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
+	post := w.post
+	if err := storage.ValidateRedirectTarget(post, func(id model.ID) (model.Retention, error) {
+		return currentRetentionTx(ctx, tx, id)
+	}); err != nil {
 		return err
+	}
+	var closedAt, resolution, redirectTarget any
+	if value := post.ClosedAtValue(); value != nil {
+		closedAt = model.StampText(*value)
+	}
+	if value := post.ResolutionValue(); value != nil {
+		resolution = string(*value)
+	}
+	if value := post.RedirectTargetValue(); value != nil {
+		redirectTarget = *value
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
-		w.toStatus, w.postAssignee, model.StampText(w.now), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID); err != nil {
+		post.StatusValue(), post.AssigneeValue().Raw(), model.StampText(post.UpdatedAt), closedAt, resolution, redirectTarget, post.ID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
+	return s.recordEvent(ctx, tx, post.ID, string(w.action), w.reason, w.actor, post.UpdatedAt, w.changes)
 }
 
 // retentionWrite is a fully-planned retention transition, the retention-axis
@@ -2138,53 +2085,9 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
 }
 
-// validateRedirectTarget is the close-validation floor for the redirect
-// target the post-transition leaf carries. A NEW redirecting close must carry
-// its target (the CLI requires --of; this is the store's integrity floor for
-// any other caller — the leaf type alone admits a target-less redirecting
-// close because legacy rows genuinely occupy that state). A present target
-// must exist and cannot be the issue itself, so the redirect points at a real,
-// distinct ticket. It must also not be trash-bound: a redirect to a Deleted
-// canonical is a dangling pointer by design, while Archived stays legal —
-// "duplicate of something already done" is the most common real redirect
-// (decision on links-recut-relations-61nv.1). Deleted is matched as the
-// specific variant, not a broader frozen notion, so Archived falls into the
-// accept set by the same match.
-//
-// [LAW:single-enforcer] The one validation site for every close path.
-// [LAW:no-ambient-temporal-coupling] The canonical's existence and retention
-// are read on the SAME tx that persists the redirect, under the held commit
-// lock, so a delete of the canonical is either before this read (rejected
-// here) or after the commit. currentRetentionTx returns
-// NotFoundError when the row is absent (the existence half) and its retention
-// otherwise (the Deleted half), both decoded through the one
-// RetentionFromTimestamps boundary.
-//
-// [LAW:composability] A free function of (ctx, tx, values): it depends on no
-// Store state, so it carries no receiver — its signature advertises exactly
-// what it reads, matching its siblings currentRetentionTx / requireIssueExistsTx.
-func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID model.ID, resolution *model.Resolution, target *string) error {
-	if target == nil {
-		if resolution != nil && resolution.RedirectsToCanonical() {
-			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
-		}
-		return nil
-	}
-	if model.ID(*target) == closingID {
-		return fmt.Errorf("cannot redirect %s to itself", closingID)
-	}
-	retention, err := currentRetentionTx(ctx, tx, model.ID(*target))
-	if err != nil {
-		return err
-	}
-	if _, gone := retention.(model.Deleted); gone {
-		return fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)
-	}
-	return nil
-}
-
 // currentRetentionTx reads the live retention state of issueID inside tx, for
-// validateRedirectTarget's existence and Deleted checks. The pair decodes
+// storage.ValidateRedirectTarget's existence and Deleted checks: NotFoundError
+// when the row is absent, its retention otherwise. The pair decodes
 // through the single RetentionFromTimestamps boundary like every other read.
 func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID model.ID) (model.Retention, error) {
 	var archivedAt, deletedAt sql.NullString
@@ -2967,6 +2870,10 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 // scanTime parses a stored timestamp returned by a SQL row scan.
 // [LAW:single-enforcer] Every timestamp column parses through model.ParseStamp,
 // so the spelling the store holds is bound in one place.
+//
+// [LAW:parse-dont-validate] The instant comes back in UTC, the contract's one
+// form, whatever offset the stored text carries, so no reader downstream of
+// this boundary normalizes it again.
 func scanTime(value string) (time.Time, error) {
 	return model.ParseStamp(value)
 }
@@ -3217,47 +3124,6 @@ func timesEqual(a, b *time.Time) bool {
 		return false
 	}
 	return a.Equal(*b)
-}
-
-func formatNullableResolution(value *model.Resolution) string {
-	if value == nil {
-		return ""
-	}
-	return string(*value)
-}
-
-// resolutionsEqual compares two *model.Resolution pointers by value, the same
-// nil-aware contract as timesEqual so the event-change diff treats "no
-// resolution" symmetrically on both sides.
-func resolutionsEqual(a, b *model.Resolution) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
-}
-
-// formatNullableString renders an optional string for a FieldChange's from/to
-// value: nil → "" (SQL NULL via nullableString), as model.TimestampChange does.
-func formatNullableString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-// stringPointersEqual compares two *string by value, the same nil-aware
-// contract as timesEqual/resolutionsEqual.
-func stringPointersEqual(a, b *string) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
 }
 
 // nullableStringPtr stores a nil optional string as SQL NULL, the pointer

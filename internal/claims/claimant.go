@@ -1,9 +1,6 @@
 package claims
 
 import (
-	"strings"
-	"time"
-
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -60,26 +57,6 @@ func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
 // to have been addressable.
 func (c Claimant) Held() bool { return c.Established }
 
-// After returns the claimant a status action installs, taken by the checkout
-// performing it. Start is the act of taking a ticket, so it is the only action
-// that moves the claimant; every other transition preserves ownership, which is
-// orthogonal to the status it drives. [LAW:types-are-the-program] The new owner
-// comes from the one variant that carries one, not from a loose parameter every
-// other action would have to ignore.
-//
-// A storage engine compares After's result against ClaimantOf's to decide
-// whether a same-state transition owes a write. That comparison is the whole
-// reason the pair exists, and it is why a `done` re-run against an already-done
-// ticket still records nothing from a new checkout: done does not take, so the
-// claimant it installs is the one already there.
-func (c Claimant) After(action model.StatusAction, taker model.Attribution) Claimant {
-	start, ok := action.(model.Start)
-	if !ok {
-		return c
-	}
-	return Claimant{Established: true, Assignee: model.Text(strings.TrimSpace(start.Assignee)), Checkout: taker}
-}
-
 // Handover is a ticket's claim passing from one holder to another: the
 // claimant the record named before a start, and the one that start installed.
 type Handover struct {
@@ -91,10 +68,11 @@ type Handover struct {
 // was no claim to pass on, or the holder — the checkout — did not change. A new
 // assignee in the same checkout is a write and no handover.
 //
-// A storage engine asks it of the same pair it compares to decide whether the
-// write is owed, and reports the answer, so the handover a caller announces is
-// the one the write was decided on rather than a second reading of the rule.
-// [LAW:one-source-of-truth]
+// It reads the same pair StatusPlan.Records compares, and is the narrower of
+// the two questions: a handover moves the checkout, so the pair differs and
+// the write is owed, while a write need not hand anything over. A caller is
+// therefore never told of a handover for a write that was not made.
+// [LAW:one-source-of-truth] the pair is the one record both questions read.
 func (c Claimant) HandoverTo(next Claimant) *Handover {
 	if !c.Held() || next.Checkout == c.Checkout {
 		return nil
@@ -116,38 +94,41 @@ func (h Handover) Live(lane Standing) bool {
 	return ok && held.By == h.From.Checkout
 }
 
-// StatusPlan is what a status action does to one ticket: the issue before it,
-// the change it makes, and the claimant on each side. Both storage engines and
-// the CLI's hold gate read it, so "does this transition record anything" has
-// one owner. [LAW:one-source-of-truth]
+// StatusPlan is what a status action does to one ticket: the change the issue
+// accepted, and the claimant on each side. Both storage engines and the CLI's
+// hold gate read it, so "does this transition record anything" has one owner.
+// [LAW:one-source-of-truth]
 //
 // The plan holds no instant, so the gate asks it what a transition records
-// without one; only a write, through Updated, stamps the post-state.
+// without one; only a write, through the change's Updated, builds the stamped
+// post-state.
 type StatusPlan struct {
-	Current     model.Issue
+	model.StatusChange
 	Prior, Post Claimant
-	change      model.StatusChange
-	reclaims    bool
 }
 
 // PlanStatus runs action against issue, whose own history is events, as
 // taken by taker — the checkout the event it would record will name.
+//
+// Start is the act of taking a ticket, so it is the only change that moves the
+// claimant, to the assignee it takes the ticket for and the checkout taking
+// it; every other transition preserves ownership, which is orthogonal to the
+// status it drives. That is why a `done` re-run against an already-done ticket
+// still records nothing from a new checkout: done does not take, so the
+// claimant after it is the one already there.
+// [LAW:types-are-the-program] The new owner comes from the one change that
+// carries one.
 func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution) (StatusPlan, error) {
 	change, err := issue.PlanStatus(action)
 	if err != nil {
 		return StatusPlan{}, err
 	}
 	prior := ClaimantOf(issue, events)
-	start, isStart := action.(model.Start)
-	return StatusPlan{Current: issue, Prior: prior, Post: prior.After(action, taker), change: change, reclaims: isStart && start.Reclaim}, nil
-}
-
-// Updated is the issue after the transition, stamped at, the instant the write
-// recording it is stamped with, and assigned to the claimant it installs.
-func (p StatusPlan) Updated(at time.Time) model.Issue {
-	updated := p.change.At(at)
-	updated.Assignee = p.Post.Assignee
-	return updated
+	post := prior
+	if assignee, takes := change.Taking(); takes {
+		post = Claimant{Established: true, Assignee: assignee, Checkout: taker}
+	}
+	return StatusPlan{StatusChange: change, Prior: prior, Post: post}, nil
 }
 
 // Records reports that the transition writes: it moves the status, the
@@ -158,7 +139,7 @@ func (p StatusPlan) Updated(at time.Time) model.Issue {
 // lane a sibling's start moved away (model.Start.Reclaim), even though this
 // ticket's own claimant has not changed.
 func (p StatusPlan) Records() bool {
-	return p.change.Changed() || p.Post != p.Prior || p.reclaims
+	return p.Changed() || p.Post != p.Prior || p.Reclaims()
 }
 
 // Handover is the claim passing hands this transition records, nil for none.

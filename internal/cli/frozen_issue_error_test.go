@@ -11,7 +11,7 @@ import (
 )
 
 // Every status command on an archived or deleted ticket, driven through the
-// real command: the refusal has to travel from Issue.Apply through the store to
+// real command: the refusal has to travel from Issue.PlanStatus through the store to
 // the sink still typed, so a layer that wraps it untyped drops it back to exit 1
 // and the retry advice, and fails here.
 func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
@@ -58,7 +58,7 @@ func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
 }
 
 // `start` is the one status command with a gate ahead of Apply: the takeover
-// confirmation for a lane another checkout holds. What Issue.Apply refuses
+// confirmation for a lane another checkout holds. What Issue.PlanStatus refuses
 // whoever holds the lane answers before that gate, so the caller is never sent
 // to --take for a start that could not land. The live sibling is the control:
 // it meets the takeover gate, so the lane is held, and the frozen row is

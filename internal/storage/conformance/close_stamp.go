@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -11,7 +12,8 @@ import (
 // aCloseRecordsTheInstantItsWriteIsStamped closes a ticket on a clock behind
 // its own history, so the write's stamp steps past that history rather than
 // taking the clock's reading. The close time, the row's updated_at and the
-// close event's created_at are one instant all the same: the stamp.
+// close event's created_at are one instant all the same, the stamp, and each
+// reads back in UTC, the contract's one form.
 func aCloseRecordsTheInstantItsWriteIsStamped(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(laterInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
@@ -29,14 +31,31 @@ func aCloseRecordsTheInstantItsWriteIsStamped(t *testing.T, ctx context.Context,
 	if closedAt == nil {
 		t.Fatalf("ClosedAt after done = nil, want the write's stamp")
 	}
-	closing := detail.Events[len(detail.Events)-1]
-	if closing.Action != string(model.ActionDone) {
-		t.Fatalf("newest event = %q, want the done that closed the ticket", closing.Action)
+	var closing []model.IssueEvent
+	for _, event := range detail.Events {
+		if event.Action == string(model.ActionDone) {
+			closing = append(closing, event)
+		}
+	}
+	if len(closing) != 1 {
+		t.Fatalf("history holds %d done events, want the one that closed the ticket: %+v", len(closing), detail.Events)
 	}
 	if !closedAt.After(laterInstant) {
 		t.Errorf("ClosedAt = %v, want past the history's %v rather than the clock's %v", closedAt, laterInstant, earlierInstant)
 	}
-	if !closedAt.Equal(detail.Issue.UpdatedAt) || !closedAt.Equal(closing.CreatedAt) {
-		t.Errorf("closed_at %v, updated_at %v, close event created_at %v: want one instant", closedAt, detail.Issue.UpdatedAt, closing.CreatedAt)
+	for _, read := range []struct {
+		name string
+		at   time.Time
+	}{
+		{"closed_at", *closedAt},
+		{"updated_at", detail.Issue.UpdatedAt},
+		{"the close event's created_at", closing[0].CreatedAt},
+	} {
+		if !read.at.Equal(*closedAt) {
+			t.Errorf("%s = %v, want %v: a close records one instant", read.name, read.at, *closedAt)
+		}
+		if read.at.Location() != time.UTC {
+			t.Errorf("%s = %v in %v, want UTC", read.name, read.at, read.at.Location())
+		}
 	}
 }

@@ -18,7 +18,7 @@ func hydratedIssue(t *testing.T, issue Issue, status State) Issue {
 	return hydrated
 }
 
-func TestApplyRefusesContainerForEveryAction(t *testing.T) {
+func TestPlanStatusRefusesContainerForEveryAction(t *testing.T) {
 	childA := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
 	childB := hydratedIssue(t, Issue{ID: "b", IssueType: "task"}, StateOpen)
 	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{childA, childB})
@@ -35,7 +35,7 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 // A frozen leaf refuses every status action with one sentence that names its
 // state and the thaw, and no action's verb: the sentence is compared whole
 // across all four actions, so a verb spliced back in fails here.
-func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
+func TestPlanStatusRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
 		retention Retention
@@ -70,7 +70,7 @@ func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 // Unarchiving a container would not make any status action legal, so the
 // container refusal must win: a frozen refusal there names a thaw that leads
 // only to the next refusal.
-func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
+func TestPlanStatusOnFrozenContainerRefusesAsContainer(t *testing.T) {
 	child := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
 	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{child})
 	if err != nil {
@@ -83,12 +83,12 @@ func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
 	}
 }
 
-// TestApplyTargetStateOnLeafProducesTargetState exercises every (from, action)
+// TestPlanStatusTargetStateOnLeafProducesTargetState exercises every (from, action)
 // pair on a hydrated leaf to confirm a planned status change obeys the
 // target-state contract: action determines the post-state regardless of
 // from-state, same-state pairs succeed as no-ops, and the plan reports which
 // pairs move the status before any instant is handed to it.
-func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
+func TestPlanStatusTargetStateOnLeafProducesTargetState(t *testing.T) {
 	matrix := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
 	for _, from := range []State{StateOpen, StateInProgress, StateClosed} {
 		for _, action := range matrix {
@@ -101,18 +101,18 @@ func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
 				if got, want := change.Changed(), from != action.Target(); got != want {
 					t.Fatalf("PlanStatus(%s on %s).Changed() = %v, want %v", action.Name(), from, got, want)
 				}
-				if next := change.At(phaseClock); next.State() != action.Target() {
-					t.Fatalf("PlanStatus(%s on %s).At().State() = %q, want %q", action.Name(), from, next.State(), action.Target())
+				if next := change.Updated(handed()); next.State() != action.Target() {
+					t.Fatalf("PlanStatus(%s on %s).Updated().State() = %q, want %q", action.Name(), from, next.State(), action.Target())
 				}
 			})
 		}
 	}
 }
 
-// TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect: every assignee filter
+// TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect: every assignee filter
 // splits on commas, so a start by "Doe, J" is refused as a ValidationError
 // (exit 3) naming the start, while the same name without the comma starts.
-func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
+func TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 
 	_, err := leaf.PlanStatus(Start{Assignee: "Doe, J"})
@@ -128,17 +128,17 @@ func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 	}
 }
 
-// TestApplyCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
+// TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
 // accessor chain for the payload threading: a Close's outcome, having traveled
 // through the state machine into the closed leaf, must surface through
 // Issue.ResolutionValue(); the neutral Done records none.
-func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
+func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 	closing, err := leaf.PlanStatus(Close{Outcome: Duplicate{Of: "links-abc1"}})
 	if err != nil {
 		t.Fatalf("PlanStatus(close duplicate) error = %v", err)
 	}
-	closed := closing.At(phaseClock)
+	closed := closing.Updated(handed())
 	got := closed.ResolutionValue()
 	if got == nil || *got != ResolutionDuplicate {
 		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
@@ -151,8 +151,56 @@ func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanStatus(done) error = %v", err)
 	}
-	if got := finishing.At(phaseClock).ResolutionValue(); got != nil {
+	if got := finishing.Updated(handed()).ResolutionValue(); got != nil {
 		t.Fatalf("ResolutionValue() after done = %v, want nil — done records no resolution", got)
+	}
+}
+
+// A written transition records one instant: the stamp it is handed is the
+// row's updated_at and a close's close time, and the change rows the write
+// records spell that same instant.
+func TestUpdatedRecordsTheStampOnce(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task", UpdatedAt: phaseClock.Add(-time.Hour)}, StateInProgress)
+	change, err := leaf.PlanStatus(Done{})
+	if err != nil {
+		t.Fatalf("PlanStatus(done) error = %v", err)
+	}
+	closed := change.Updated(handed())
+	if !closed.UpdatedAt.Equal(phaseClock) {
+		t.Errorf("UpdatedAt after done = %v, want the stamp %v", closed.UpdatedAt, phaseClock)
+	}
+	if closedAt := closed.ClosedAtValue(); closedAt == nil || !closedAt.Equal(phaseClock) {
+		t.Errorf("ClosedAtValue() after done = %v, want the stamp %v", closedAt, phaseClock)
+	}
+	want := []FieldChange{
+		{Field: "status", From: "in_progress", To: "closed"},
+		{Field: "closed_at", From: "", To: phaseClock.Format(time.RFC3339Nano)},
+	}
+	if got := change.FieldChanges(handed()); !slices.Equal(got, want) {
+		t.Errorf("FieldChanges(done) = %+v, want %+v", got, want)
+	}
+}
+
+// A start takes the ticket for the assignee in canonical form, so the row and
+// its change rows carry the name a filter selects, not the padding it came in.
+func TestUpdatedStartTakesTheTicketForTheCanonicalAssignee(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+	change, err := leaf.PlanStatus(Start{Assignee: "  bob  "})
+	if err != nil {
+		t.Fatalf("PlanStatus(start) error = %v", err)
+	}
+	if assignee, takes := change.Taking(); !takes || assignee != "bob" {
+		t.Errorf("Taking() = %q, %v; want bob, true", assignee, takes)
+	}
+	if got := change.Updated(handed()).Assignee; got != "bob" {
+		t.Errorf("Assignee after start = %q, want bob", got)
+	}
+	want := []FieldChange{
+		{Field: "status", From: "open", To: "in_progress"},
+		{Field: "assignee", From: "", To: "bob"},
+	}
+	if got := change.FieldChanges(handed()); !slices.Equal(got, want) {
+		t.Errorf("FieldChanges(start) = %+v, want %+v", got, want)
 	}
 }
 

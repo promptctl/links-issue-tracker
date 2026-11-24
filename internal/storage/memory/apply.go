@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -64,12 +65,13 @@ func (e *Engine) apply(id model.ID, plan storage.ChangePlan) (storage.Change, st
 	// [LAW:one-source-of-truth] One change has one author, normalized once and
 	// recorded on every event the change produces.
 	actor := storage.Actor(c.Actor)
-	now := e.stamp(model.LaneFamily(rec.id, e.relations))
+	at := e.stamp(model.LaneFamily(rec.id, e.relations))
+	now := at.Time()
 
 	// The field write baselines on the POST-action issue, so a start's new
 	// assignee is what the patch diffs against rather than a second assignee
 	// change row restating what the transition already recorded.
-	afterAction, actionEvents, handover, err := e.planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)
+	afterAction, actionEvents, handover, err := e.planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, at)
 	if err != nil {
 		return storage.Change{}, storage.Applied{}, err
 	}
@@ -95,17 +97,17 @@ func (e *Engine) apply(id model.ID, plan storage.ChangePlan) (storage.Change, st
 // A nil action is no transition at all, which the type carries as data. Only
 // the status machine can take a ticket, so it is the one axis that can hand
 // a claim over. [LAW:types-are-the-program]
-func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action model.Action, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
+func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action model.Action, at stamp.Instant) (model.Issue, []eventSpec, *claims.Handover, error) {
 	switch a := action.(type) {
 	case nil:
 		return current, nil, nil, nil
 	case model.StatusAction:
-		return e.planStatus(current, actor, reason, a, now)
+		return e.planStatus(current, actor, reason, a, at)
 	case model.RetentionAction:
-		post, events, err := planRetention(current, actor, reason, a, now)
+		post, events, err := planRetention(current, actor, reason, a, at.Time())
 		return post, events, nil, err
 	case model.SetPhase:
-		post, events, err := e.planPhase(current, actor, reason, a, now)
+		post, events, err := e.planPhase(current, actor, reason, a, at.Time())
 		return post, events, nil, err
 	default:
 		// [LAW:no-silent-failure] The sealed sum has no fourth axis; only an
@@ -137,9 +139,9 @@ func (e *Engine) planPhase(current model.Issue, actor, reason string, action mod
 
 // planStatus walks the status state machine. Every rejection it can produce is
 // the machine's own — frozen work is out of the flow, a container's state is
-// its children's — and the engine adds only the claimant rule and the
-// integrity floor under a redirecting close.
-func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
+// its children's — or the integrity floor under a redirecting close; the
+// engine supplies only the canonical's retention to that floor.
+func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, at stamp.Instant) (model.Issue, []eventSpec, *claims.Handover, error) {
 	// Who holds the ticket is the claimant claims owns, read from this issue's
 	// own history — never the assignee alone, because lane ownership is keyed
 	// on the checkout recorded on events rather than on
@@ -158,16 +160,15 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	if !plan.Records() {
 		return current, nil, nil, nil
 	}
-	updated := plan.Updated(now)
-	if err := e.validateRedirectTarget(updated); err != nil {
+	updated := plan.Updated(at)
+	if err := storage.ValidateRedirectTarget(updated, e.retentionOf); err != nil {
 		return model.Issue{}, nil, nil, err
 	}
-	updated.UpdatedAt = now
 	return updated, []eventSpec{{
 		action:  string(action.Name()),
 		reason:  reason,
 		actor:   actor,
-		changes: statusChanges(current, updated),
+		changes: plan.FieldChanges(at),
 	}}, plan.Handover(), nil
 }
 
@@ -192,32 +193,15 @@ func planRetention(current model.Issue, actor, reason string, action model.Reten
 	}}, nil
 }
 
-// validateRedirectTarget is the integrity floor under a redirecting close: the
-// canonical it points at must be named, must not be the closing issue, and
-// must not itself be deleted — a redirect into the trash is a dangling pointer
-// by design. Archived stays legal, because "duplicate of something already
-// done" is the most common real redirect. A non-redirecting transition carries
-// no target, so this is nothing there. [LAW:single-enforcer]
-func (e *Engine) validateRedirectTarget(closing model.Issue) error {
-	resolution := closing.ResolutionValue()
-	target := closing.RedirectTargetValue()
-	if target == nil {
-		if resolution != nil && resolution.RedirectsToCanonical() {
-			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
-		}
-		return nil
-	}
-	if model.ID(*target) == closing.ID {
-		return fmt.Errorf("cannot redirect %s to itself", closing.ID)
-	}
-	canonical, err := e.mustRecord(model.ID(*target))
+// retentionOf is the retention of the issue id names, for the redirect floor
+// storage.ValidateRedirectTarget holds; an absent issue is the contract's
+// NotFoundError.
+func (e *Engine) retentionOf(id model.ID) (model.Retention, error) {
+	rec, err := e.mustRecord(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if _, gone := canonical.retention.(model.Deleted); gone {
-		return fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closing.ID, *target)
-	}
-	return nil
+	return rec.retention, nil
 }
 
 // fieldPatch is a planned field write: the post-patch issue, the change rows
@@ -252,33 +236,6 @@ func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string,
 	patch.issue.UpdatedAt = now
 	patch.events = []eventSpec{{reason: in.Reason, actor: actor, changes: changes}}
 	return patch, nil
-}
-
-// statusChanges reports the status axis's change rows — the whole close
-// payload, so that a reopen's clearing of it is as legible in history as the
-// close that set it.
-func statusChanges(before, after model.Issue) []model.FieldChange {
-	var changes []model.FieldChange
-	if before.StatusValue() != after.StatusValue() {
-		changes = append(changes, model.FieldChange{Field: "status", From: before.StatusValue(), To: after.StatusValue()})
-	}
-	if !timesEqual(before.ClosedAtValue(), after.ClosedAtValue()) {
-		changes = append(changes, model.TimestampChange(model.ClosedAtField, before.ClosedAtValue(), after.ClosedAtValue()))
-	}
-	if !resolutionsEqual(before.ResolutionValue(), after.ResolutionValue()) {
-		changes = append(changes, model.FieldChange{
-			Field: "resolution", From: formatResolution(before.ResolutionValue()), To: formatResolution(after.ResolutionValue()),
-		})
-	}
-	if !stringsEqual(before.RedirectTargetValue(), after.RedirectTargetValue()) {
-		changes = append(changes, model.FieldChange{
-			Field: "redirect_target", From: formatString(before.RedirectTargetValue()), To: formatString(after.RedirectTargetValue()),
-		})
-	}
-	if before.Assignee != after.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: before.Assignee.Raw(), To: after.Assignee.Raw()})
-	}
-	return changes
 }
 
 // retentionChanges reports the retention axis's change rows against the

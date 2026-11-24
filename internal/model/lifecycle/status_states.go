@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"strings"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 // The leaf lifecycle of a single issue is a sum type: one variant per state.
@@ -15,15 +17,15 @@ import (
 // orthogonal to the status state machine and lives on the issue itself, not in
 // the lifecycle. [LAW:decomposition]
 
-// StatusPrimitive is the sealed leaf lifecycle carrying a single issue's status.
+// StatusPrimitive is the sealed leaf lifecycle carrying a single issue's status,
+// the one kind of lifecycle a status action can be applied to (Apply).
 // Its only implementations are the three state variants below; AllOf (a
-// container, whose state derives from children) is deliberately not one, since
-// it does not satisfy Actionable.
+// container, whose state derives from children) is deliberately not one.
 // [LAW:one-type-per-behavior] One contract identifies "this lifecycle is an
 // own-able leaf status" so the projection boundary discriminates on it instead
 // of enumerating concrete variants.
 type StatusPrimitive interface {
-	Actionable
+	Lifecycle
 	// ClosedAt is the close timestamp, present only on the closed state and nil
 	// on every other. The projection seam reads it without knowing the variant.
 	ClosedAt() *time.Time
@@ -53,9 +55,6 @@ func (openState) Resolution() *Resolution {
 func (openState) RedirectTarget() *string {
 	return nil
 }
-func (o openState) Apply(action StatusAction, at time.Time) Lifecycle {
-	return applyStatusAction(o, action, at)
-}
 
 type inProgressState struct{}
 
@@ -69,9 +68,6 @@ func (inProgressState) Resolution() *Resolution {
 }
 func (inProgressState) RedirectTarget() *string {
 	return nil
-}
-func (s inProgressState) Apply(action StatusAction, at time.Time) Lifecycle {
-	return applyStatusAction(s, action, at)
 }
 
 type closedState struct {
@@ -105,9 +101,6 @@ func (c closedState) Resolution() *Resolution {
 func (c closedState) RedirectTarget() *string {
 	return cloneString(c.redirectTarget)
 }
-func (c closedState) Apply(action StatusAction, at time.Time) Lifecycle {
-	return applyStatusAction(c, action, at)
-}
 
 // NewStatus builds the leaf variant for state, attaching closedAt, resolution,
 // and redirectTarget only to the closed variant (ignored for the others). Blank
@@ -132,36 +125,34 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 	}
 }
 
-// applyStatusAction is the target-state transition shared by every leaf state:
-// the action names the desired terminal state and we return that state's
-// variant. A same-state call returns the receiver so the store recognizes it as
-// a no-op — including a re-close, which keeps the existing resolution rather
-// than silently rewriting it. Transitioning into closed records at as the close
-// time and attaches the action's outcome — resolution and redirect target both — so
-// a close's payload travels through the machine instead of being re-attached
-// after it; every other target carries none of them, so a close time,
-// resolution, or redirect target can never linger on a non-closed state.
+// Apply is the target-state transition shared by every leaf state: the action
+// names the state it leads to, and the result is that state's variant, built
+// through NewStatus like every other leaf. A same-state call returns the
+// receiver (Moves). A move into closed records at, the stamp of the write
+// performing it, as the close time, and attaches the action's outcome —
+// resolution and redirect target both — so a close's payload travels through
+// the machine instead of being re-attached after it; NewStatus gives every
+// other target none of them, so a close time, resolution, or redirect target
+// can never linger on a non-closed state. The actor and reason of a transition
+// are event provenance owned by the store's write boundary, and so is its
+// instant: the machine computes the next state and reads no clock.
+// [LAW:effects-at-boundaries]
 // It cannot fail: Target is total over StatusAction.
-// [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
-// this function maintains no parallel table.
-func applyStatusAction(current Lifecycle, action StatusAction, at time.Time) Lifecycle {
+// [LAW:one-source-of-truth] The action→target mapping is the variant's Target,
+// and the state→variant table is NewStatus's; this function holds neither.
+func Apply(current StatusPrimitive, action StatusAction, at stamp.Instant) StatusPrimitive {
 	if !Moves(current, action) {
 		return current
 	}
-	switch action.Target() {
-	case Closed:
-		return closedState{closedAt: &at, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
-	case InProgress:
-		return inProgressState{}
-	default:
-		return openState{}
-	}
+	closedAt := at.Time()
+	return NewStatus(action.Target(), &closedAt, closeResolution(action), closeRedirectTarget(action))
 }
 
 // Moves reports whether action moves current off the state it is in. One that
-// does not is the same-state no-op Apply returns the receiver for, so a caller
+// does not is the same-state rule: Apply returns the receiver unchanged, so a
+// re-close keeps the close time and outcome it already records and a caller
 // asks here, with no instant, whether a transition moves anything.
-// [LAW:one-source-of-truth]
+// [LAW:one-source-of-truth] the one owner of the same-state rule.
 func Moves(current Lifecycle, action StatusAction) bool {
 	return current.State() != action.Target()
 }
@@ -185,7 +176,7 @@ func closeResolution(action StatusAction) *Resolution {
 
 // closeRedirectTarget projects the redirect target a closing action records:
 // only the redirecting Outcome variants carry one, read structurally off the
-// variant's field.
+// variant's field. It is the raw target; NewStatus normalizes it.
 // [LAW:dataflow-not-control-flow] Like closeResolution, the variant is the
 // value the one transition varies on.
 func closeRedirectTarget(action StatusAction) *string {
@@ -193,25 +184,23 @@ func closeRedirectTarget(action StatusAction) *string {
 	if !ok {
 		return nil
 	}
-	var target string
 	switch o := c.Outcome.(type) {
 	case Duplicate:
-		target = o.Of
+		return &o.Of
 	case Superseded:
-		target = o.By
+		return &o.By
 	default:
 		return nil
 	}
-	return normalizeRedirectTarget(&target)
 }
 
 // normalizeRedirectTarget is the one definition of the target's canonical
 // form: trimmed, with blank as nil, so "a redirecting close whose target is
 // unknown" has exactly one representation for the store's validation floor
-// and every reader to key on. Both leaf-construction boundaries — the close
-// transition and NewStatus hydration (which can receive an empty string from
-// JSON or a legacy row) — route through it, so a second representation of
-// absence cannot reach a leaf. Returns a fresh pointer, never an alias of
+// and every reader to key on. NewStatus, which every leaf is built through —
+// the close transition and hydration alike (which can receive an empty string
+// from JSON or a legacy row) — routes through it, so a second representation
+// of absence cannot reach a leaf. Returns a fresh pointer, never an alias of
 // the input. [LAW:one-source-of-truth]
 func normalizeRedirectTarget(target *string) *string {
 	if target == nil {
