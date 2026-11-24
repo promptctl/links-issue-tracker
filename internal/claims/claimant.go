@@ -116,28 +116,39 @@ func (h Handover) Live(lane Standing) bool {
 	return ok && held.By == h.From.Checkout
 }
 
-// StatusPlan is what a status action does to one ticket: the issue before and
-// after it, and the claimant on each side. Both storage engines and the CLI's
+// StatusVerdict is what a status action does to one ticket: whether the issue
+// admits it, and the claimant on each side. Both storage engines and the CLI's
 // hold gate read it, so "does this transition record anything" has one owner.
-// [LAW:one-source-of-truth]
-type StatusPlan struct {
-	Current, Updated model.Issue
-	Prior, Post      Claimant
-	reclaims         bool
+// [LAW:one-source-of-truth] It needs no instant: the gate reads only the
+// verdict, and a write stamps it with At. [LAW:effects-at-boundaries]
+type StatusVerdict struct {
+	transition  model.StatusTransition
+	Prior, Post Claimant
+	reclaims    bool
 }
 
-// PlanStatus runs action at the instant at against issue, whose own history is
-// events, as taken by taker — the checkout the event it would record will name.
-func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution, at time.Time) (StatusPlan, error) {
-	updated, err := issue.Apply(action, at)
+// JudgeStatus judges action against issue, whose own history is events, as
+// taken by taker — the checkout the event it would record will name.
+func JudgeStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution) (StatusVerdict, error) {
+	transition, err := issue.Apply(action)
 	if err != nil {
-		return StatusPlan{}, err
+		return StatusVerdict{}, err
 	}
 	prior := ClaimantOf(issue, events)
-	post := prior.After(action, taker)
-	updated.Assignee = post.Assignee
 	start, isStart := action.(model.Start)
-	return StatusPlan{Current: issue, Updated: updated, Prior: prior, Post: post, reclaims: isStart && start.Reclaim}, nil
+	return StatusVerdict{transition: transition, Prior: prior, Post: prior.After(action, taker), reclaims: isStart && start.Reclaim}, nil
+}
+
+// At is the ticket after the action, written at the instant at: the admitted
+// transition taken at it, assigned to the post-action claimant, and updated at
+// it. A write hands the instant it stamps its event with, so a close's
+// closed_at, its updated_at and its event's created_at are one instant.
+// [LAW:one-source-of-truth]
+func (v StatusVerdict) At(at time.Time) model.Issue {
+	updated := v.transition.At(at)
+	updated.Assignee = v.Post.Assignee
+	updated.UpdatedAt = at
+	return updated
 }
 
 // Records reports that the transition writes: it moves the status, the
@@ -147,9 +158,9 @@ func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.Statu
 // claimant records who took the ticket. So does a start that takes back a
 // lane a sibling's start moved away (model.Start.Reclaim), even though this
 // ticket's own claimant has not changed.
-func (p StatusPlan) Records() bool {
-	return p.Updated.StatusValue() != p.Current.StatusValue() || p.Post != p.Prior || p.reclaims
+func (v StatusVerdict) Records() bool {
+	return v.transition.Moves() || v.Post != v.Prior || v.reclaims
 }
 
 // Handover is the claim passing hands this transition records, nil for none.
-func (p StatusPlan) Handover() *Handover { return p.Prior.HandoverTo(p.Post) }
+func (v StatusVerdict) Handover() *Handover { return v.Prior.HandoverTo(v.Post) }

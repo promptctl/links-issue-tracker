@@ -168,6 +168,18 @@ keys are empty when no focus label narrowed the run.
 | `backlog.trimmed` | How many rows `--limit` cut from the list; 0 when it cut none. |
 | `counts.backlog.rows_gathered` | How many tickets the list was drawn from: the workable tickets its filter selects, before a focus label or `--limit` narrows them. |
 
+## What reading claims records
+
+A command that reads who holds a lane, such as `lit next`, `lit backlog`, or a
+`lit start`, `lit phase` or `lit done` that checks a hold, records whether it
+could list this machine's checkouts. When it could not, it also prints a
+warning to stderr, and the reading rests on freshness alone: no claim is
+voided because its worktree is gone, and no claim line shows a local address.
+
+| Key | Meaning |
+| --- | --- |
+| `claims.local_checkouts_enumerated` | `true` when the command listed this machine's checkouts; `false` when it could not. |
+
 ## What a statusline-file write records
 
 Every command that works on the tickets of the checkout it runs in, such as

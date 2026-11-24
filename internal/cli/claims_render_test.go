@@ -62,8 +62,8 @@ func laneWithProgress(t *testing.T, done, total int, activeID model.ID) (claims.
 func TestFormatClaimLineUnclaimedLaneRendersNothing(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
-	cc := claimContext{standings: claims.Standings{}, evidence: evidence}
-	if _, ok := formatClaimLine(cc, lane, renderNow); ok {
+	cc := claimContext{standings: claims.Standings{}, evidence: evidence, judgedAt: renderNow}
+	if _, ok := formatClaimLine(cc, lane); ok {
 		t.Fatalf("formatClaimLine on an Unclaimed lane rendered a line; want none")
 	}
 }
@@ -79,9 +79,9 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
 		By: elsewhereHolder, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
 	}}}
-	cc := claimContext{standings: standings, evidence: evidence} // no addresses
+	cc := claimContext{standings: standings, evidence: evidence, judgedAt: renderNow} // no addresses
 
-	line, ok := formatClaimLine(cc, lane, renderNow)
+	line, ok := formatClaimLine(cc, lane)
 	if !ok {
 		t.Fatalf("formatClaimLine on a Held lane returned ok=false")
 	}
@@ -105,11 +105,12 @@ func TestFormatClaimLineNamesOnlyTheCheckout(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{
+		judgedAt:  renderNow,
 		standings: claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: hereHolder, LastActivity: renderNow}}},
 		evidence:  evidence,
 		addresses: map[model.Attribution]workspace.Checkout{hereHolder: {Path: "../wt", Branch: "topic"}},
 	}
-	line, ok := formatClaimLine(cc, lane, renderNow)
+	line, ok := formatClaimLine(cc, lane)
 	if !ok {
 		t.Fatalf("formatClaimLine on a Held lane returned ok=false")
 	}
@@ -129,6 +130,7 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 		By: hereHolder, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
 	}}}
 	cc := claimContext{
+		judgedAt:  renderNow,
 		standings: standings,
 		evidence:  evidence,
 		addresses: map[model.Attribution]workspace.Checkout{
@@ -136,7 +138,7 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 		},
 	}
 
-	line, ok := formatClaimLine(cc, lane, renderNow)
+	line, ok := formatClaimLine(cc, lane)
 	if !ok {
 		t.Fatalf("formatClaimLine on a Held lane returned ok=false")
 	}
@@ -146,8 +148,8 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 
 	// The same holder, on a machine that never enumerated (or that isn't
 	// this holder's machine at all) gets the dossier and nothing more.
-	remote := claimContext{standings: standings, evidence: evidence}
-	remoteLine, ok := formatClaimLine(remote, lane, renderNow)
+	remote := claimContext{standings: standings, evidence: evidence, judgedAt: renderNow}
+	remoteLine, ok := formatClaimLine(remote, lane)
 	if !ok {
 		t.Fatalf("formatClaimLine on a Held lane (no addresses) returned ok=false")
 	}
@@ -169,13 +171,14 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{
+		judgedAt:  renderNow,
 		standings: claims.Standings{lane: claims.Unclaimed{}},
 		evidence:  evidence,
 		addresses: map[model.Attribution]workspace.Checkout{
 			hereHolder: {Path: "../links-wt-pgct", Branch: ""},
 		},
 	}
-	if line, ok := formatClaimLine(cc, lane, renderNow); ok || line != "" {
+	if line, ok := formatClaimLine(cc, lane); ok || line != "" {
 		t.Fatalf("formatClaimLine on an unclaimed lane with a resolvable address = (%q, %v), want nothing: there is no claim to describe", line, ok)
 	}
 }
@@ -270,9 +273,9 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			evidence, lane := laneWithProgress(t, 0, 1, "")
-			cc := claimContext{standings: claims.Standings{lane: row.standing}, evidence: evidence, self: row.self}
+			cc := claimContext{standings: claims.Standings{lane: row.standing}, evidence: evidence, self: row.self, judgedAt: renderNow}
 
-			line, ok := formatClaimLine(cc, lane, renderNow)
+			line, ok := formatClaimLine(cc, lane)
 			if !ok {
 				t.Fatalf("formatClaimLine on a %T lane returned ok=false", row.standing)
 			}
@@ -283,5 +286,50 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 				t.Fatalf("line = %q, must never announce the public checkout as this one", line)
 			}
 		})
+	}
+}
+
+// A claim line measures its holder's age from the instant the claim context
+// was judged at, and from nothing else: the same standing reads two hours old
+// at one judged instant and three days old at another.
+func TestFormatClaimLineMeasuresAgeFromTheJudgedInstant(t *testing.T) {
+	t.Parallel()
+	evidence, lane := laneWithProgress(t, 0, 1, "")
+	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: elsewhereHolder, LastActivity: renderNow}}}
+	for _, tc := range []struct {
+		judgedAt time.Time
+		want     string
+	}{
+		{renderNow.Add(2 * time.Hour), "2 hours ago"},
+		{renderNow.Add(72 * time.Hour), "3 days ago"},
+	} {
+		line, ok := formatClaimLine(claimContext{standings: standings, evidence: evidence, judgedAt: tc.judgedAt}, lane)
+		if !ok {
+			t.Fatalf("formatClaimLine on a Held lane returned ok=false")
+		}
+		if !strings.Contains(line, tc.want) {
+			t.Fatalf("judged at %s: line = %q, want it to say %q", tc.judgedAt, line, tc.want)
+		}
+	}
+}
+
+// A holder's age reads as how long before the judged instant it last acted,
+// and activity recorded after that instant says it is in the future instead
+// of passing for activity a moment ago.
+func TestActivityAgeSaysWhenActivityIsAheadOfTheJudgedInstant(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		lastActivity time.Time
+		want         string
+	}{
+		{"behind", renderNow.Add(-3 * time.Hour), "3 hours ago"},
+		{"at", renderNow, "under a minute ago"},
+		{"ahead", renderNow.Add(5 * time.Minute), "5 minutes in the future"},
+		{"just ahead", renderNow.Add(time.Nanosecond), "under a minute in the future"},
+	} {
+		if got := activityAge(tc.lastActivity, renderNow); got != tc.want {
+			t.Errorf("%s: activityAge = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

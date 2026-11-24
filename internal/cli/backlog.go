@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -180,7 +179,6 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 		}
 	}
 
-	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
 		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", cells))
@@ -188,7 +186,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 			return err
 		}
 		lane := model.LaneOf(entry.Issue, details[entry.ID].Parent)
-		group := above.advance(entry.ParentEpic, cc, lane, now)
+		group := above.advance(entry.ParentEpic, cc, lane)
 		if err := printBacklogContext(w, entry, facts.Unblocks(entry.ID), group); err != nil {
 			return err
 		}
@@ -244,11 +242,11 @@ type backlogRowContext struct {
 
 // advance resolves what a row under epic, in lane, states for itself given the
 // run above it. Both facts are looked up on every row; only the values differ.
-func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext, lane model.LaneID, now time.Time) backlogRowContext {
+func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext, lane model.LaneID) backlogRowContext {
 	// formatClaimLine answers "" for an unclaimed lane, which is already the
 	// printer's "no line" value — the discarded bool restates the empty string
 	// rather than carrying a signal this drops.
-	claim, _ := formatClaimLine(cc, lane, now)
+	claim, _ := formatClaimLine(cc, lane)
 	here := backlogRun{epicID: epicID(epic), lane: lane, claim: claim}
 	return backlogRowContext{
 		epic:     openingRun(backlogEpicLine(epic), here.epicID, above.epicID),

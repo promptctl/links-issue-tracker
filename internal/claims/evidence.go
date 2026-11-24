@@ -25,6 +25,7 @@ package claims
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -202,6 +203,18 @@ type LaneProgress struct {
 
 // Lane is one lane of this evidence. A lane this evidence never saw has no
 // members and no events — the same total-map-read convention Standings.Of uses.
+// Newest is the newest instant among every lane's events, the zero time for
+// none: how far the history a judgment over this evidence read reaches.
+func (e Evidence) Newest() time.Time {
+	var newest time.Time
+	for _, events := range e.events {
+		if instant := model.NewestInstant(events); instant.After(newest) {
+			newest = instant
+		}
+	}
+	return newest
+}
+
 func (e Evidence) Lane(lane model.LaneID) Lane {
 	return partition(e).lane(lane)
 }
@@ -243,6 +256,10 @@ func (l Lane) LastTaker() (model.Attribution, bool) {
 	establisher, found := LatestEstablisher(l.events)
 	return establisher.Attribution, found
 }
+
+// Newest is the newest instant among this lane's events, the zero time for
+// none: how far the history a judgment of this lane read reaches.
+func (l Lane) Newest() time.Time { return model.NewestInstant(l.events) }
 
 // Standing applies the claim predicate to this lane: what Derive answers for
 // it, by the same derivation.

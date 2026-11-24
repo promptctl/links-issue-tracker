@@ -144,31 +144,30 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// own history — never the assignee alone, because lane ownership is keyed
 	// on the checkout recorded on events rather than on
 	// the row. [LAW:one-source-of-truth] Whether the call records anything is
-	// claims.StatusPlan's to say, where the Dolt engine and the hold gate read
+	// claims.StatusVerdict's to say, where the Dolt engine and the hold gate read
 	// it too.
 	//
 	// The no-op is decided BEFORE the redirect target is checked, because the
 	// check guards a write and there is no write here to guard. Checking first
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
-	plan, err := claims.PlanStatus(current, e.eventsFor(current.ID), action, e.attribution, now)
+	verdict, err := claims.JudgeStatus(current, e.eventsFor(current.ID), action, e.attribution)
 	if err != nil {
 		return model.Issue{}, nil, nil, err
 	}
-	if !plan.Records() {
+	if !verdict.Records() {
 		return current, nil, nil, nil
 	}
-	updated := plan.Updated
+	updated := verdict.At(now)
 	if err := e.validateRedirectTarget(updated); err != nil {
 		return model.Issue{}, nil, nil, err
 	}
-	updated.UpdatedAt = now
 	return updated, []eventSpec{{
 		action:  string(action.Name()),
 		reason:  reason,
 		actor:   actor,
 		changes: statusChanges(current, updated),
-	}}, plan.Handover(), nil
+	}}, verdict.Handover(), nil
 }
 
 // planRetention moves the retention axis. The legal moves and every rejection

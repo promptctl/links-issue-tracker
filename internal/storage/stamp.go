@@ -24,10 +24,15 @@ type StampTally struct {
 }
 
 // Stamp is the instant a write takes when clock is the clock it reads and
-// newest is the newest instant in the history it was planned against.
+// newest is the newest instant in the history it was planned against, in UTC.
+//
+// Either input may carry a zone: the clock's reading, or a history event parsed
+// with its offset, which NextEventInstant hands back when history wins. So the
+// normalization is here, on the result, the one place every stamped instant
+// passes. [LAW:single-enforcer]
 func (t *StampTally) Stamp(clock Clock, newest time.Time) time.Time {
-	now := clock.Now()
-	at := model.NextEventInstant(now, newest)
+	now := clock()
+	at := model.NextEventInstant(now, newest).UTC()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.corrected = t.corrected.after(at.Sub(now))

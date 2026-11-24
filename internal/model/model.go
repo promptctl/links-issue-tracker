@@ -473,10 +473,13 @@ var _ Refusal = FrozenIssueError{}
 // invariants (unhydrated lifecycle, container, frozen retention, a start whose
 // assignee no filter could select) — the leaf itself cannot fail, since
 // StatusAction makes an unsupported action unrepresentable.
-func (i Issue) Apply(action lifecycle.StatusAction, at time.Time) (Issue, error) {
+// [LAW:parse-dont-validate] What comes back is the admitted transition, not
+// the post-state: whether it moves the issue needs no instant, so a caller
+// that only asks that never invents one, and the write stamps it with At.
+func (i Issue) Apply(action lifecycle.StatusAction) (StatusTransition, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
-		return Issue{}, err
+		return StatusTransition{}, err
 	}
 	if _, ok := root.(lifecycle.Container); ok {
 		// Every status action on a container is refused, including one whose
@@ -495,7 +498,7 @@ func (i Issue) Apply(action lifecycle.StatusAction, at time.Time) (Issue, error)
 		// deliberately not softened to a fallback here: a fallback is the silent
 		// wrong answer, and it would trade a loud programmer error for a quiet
 		// one. [LAW:no-silent-failure]
-		return Issue{}, ContainerActionError{
+		return StatusTransition{}, ContainerActionError{
 			ID:       i.ID,
 			Action:   action.Name(),
 			Target:   State(action.Target()),
@@ -507,22 +510,41 @@ func (i Issue) Apply(action lifecycle.StatusAction, at time.Time) (Issue, error)
 	// caller the thaw makes the command legal, which is false for a container
 	// whatever its retention.
 	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
-		return Issue{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
+		return StatusTransition{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
 	}
 	// A start assigns the issue to whoever starts it, so the start is refused
 	// here, the check `lit start` runs before its takeover gate and both
 	// engines run before writing. [LAW:single-enforcer]
 	if start, ok := action.(lifecycle.Start); ok {
 		if _, err := NormalizeAssignee(start.Assignee); err != nil {
-			return Issue{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
+			return StatusTransition{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
 		}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
-		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
+		return StatusTransition{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
 	}
-	i.replaceLifecycle(actionable.Apply(action, at))
-	return i, nil
+	return StatusTransition{issue: i, leaf: actionable, action: action}, nil
+}
+
+// StatusTransition is a status action Issue.Apply admitted on one issue. It
+// can only be built there, so holding one is the proof the issue's refusals
+// already ran.
+type StatusTransition struct {
+	issue  Issue
+	leaf   lifecycle.Actionable
+	action lifecycle.StatusAction
+}
+
+// Moves reports whether the transition changes the issue's state. A
+// same-state action leaves the leaf as it was.
+func (t StatusTransition) Moves() bool { return t.leaf.State() != t.action.Target() }
+
+// At is the issue after the transition, taken at the instant at.
+func (t StatusTransition) At(at time.Time) Issue {
+	post := t.issue
+	post.replaceLifecycle(t.leaf.Apply(t.action, at))
+	return post
 }
 
 func (i Issue) StatusValue() string {

@@ -23,24 +23,36 @@ import (
 // clone. The address (path, branch) renders only when cc.addresses resolves
 // the holder to a live worktree THIS machine enumerated; a remote claimant
 // gets the dossier and nothing more. [privacy invariant]
-func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string, bool) {
+func formatClaimLine(cc claimContext, lane model.LaneID) (string, bool) {
 	held, ok := cc.standings.Of(lane).(claims.Held)
 	if !ok {
 		return "", false
 	}
-	return claimLineOf(held, cc.evidence.Lane(lane), cc.addresses, now), true
+	return claimLineOf(held, cc.evidence.Lane(lane), cc.addresses, cc.judgedAt), true
 }
 
 // claimLineOf is formatClaimLine for a lane already known to be held, on the
 // values it reads, for a reader holding one lane and no claimContext. It takes
 // the hold because a listing asks once a row, so an unclaimed lane has to cost
 // nothing and counting a lane's progress has to wait for one.
-func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	parts := []string{claimPrefix(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
+func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, judgedAt time.Time) string {
+	parts := []string{claimPrefix(held.By, addresses), activityAge(held.LastActivity, judgedAt)}
 	if progress := formatLaneProgress(lane.Progress()); progress != "" {
 		parts = append(parts, progress)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// activityAge is how long before judgedAt a holder last acted, the one
+// rendering of a holder's age the claim line and the hold gate share.
+// [LAW:one-source-of-truth] Activity recorded after judgedAt says so: folded
+// into "under a minute ago" it would read as ordinary fresh activity and hide
+// the skew that put it there. [LAW:no-silent-failure]
+func activityAge(lastActivity, judgedAt time.Time) string {
+	if age := judgedAt.Sub(lastActivity); age >= 0 {
+		return humanizeCoarseDuration(age) + " ago"
+	}
+	return humanizeCoarseDuration(lastActivity.Sub(judgedAt)) + " in the future"
 }
 
 // claimPrefix is the badge half of the claim line: where a listing can walk

@@ -208,6 +208,8 @@ var cases = []engineCase{
 	{"a_container_lists_before_everything_inside_it", aContainerListsBeforeEverythingInsideIt},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"a_close_is_stamped_with_its_writes_instant", aCloseIsStampedWithItsWritesInstant},
+	{"a_stamp_past_history_is_the_next_instant_in_utc", aStampPastHistoryIsTheNextInstantInUTC},
+	{"a_stamp_past_an_imported_offset_is_in_utc", aStampPastAnImportedOffsetIsInUTC},
 	{"follow_ups_link_both_ways", followUpsLinkBothWays},
 	{"a_purge_removes_the_issue_and_everything_it_owns", aPurgeRemovesTheIssueAndEverythingItOwns},
 	{"a_purge_refuses_a_container_that_holds_tickets", aPurgeRefusesAContainerThatHoldsTickets},
@@ -1559,12 +1561,8 @@ func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store,
 
 	// Both columns, because a create reads the clock once and an engine that
 	// stamped only one of them from it would be half-honoring the seam.
-	if !issue.CreatedAt.Equal(earlierInstant) {
-		t.Errorf("CreatedAt = %s, want the pinned %s", issue.CreatedAt, earlierInstant)
-	}
-	if !issue.UpdatedAt.Equal(earlierInstant) {
-		t.Errorf("UpdatedAt = %s, want the pinned %s", issue.UpdatedAt, earlierInstant)
-	}
+	assertUTCInstant(t, "CreatedAt", issue.CreatedAt, earlierInstant)
+	assertUTCInstant(t, "UpdatedAt", issue.UpdatedAt, earlierInstant)
 
 	// And it is the STORED stamp, not something the create's return value
 	// carried out of a value the engine never wrote.
@@ -1572,9 +1570,7 @@ func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store,
 	if err != nil {
 		t.Fatalf("GetIssue error = %v", err)
 	}
-	if !read.CreatedAt.Equal(earlierInstant) {
-		t.Errorf("stored CreatedAt = %s, want the pinned %s", read.CreatedAt, earlierInstant)
-	}
+	assertUTCInstant(t, "stored CreatedAt", read.CreatedAt, earlierInstant)
 }
 
 // listOrdersTimestampsByInstant states that a timestamp sort key orders by the
@@ -4182,6 +4178,15 @@ func assertOrder(t *testing.T, ctx context.Context, st storage.Store, what strin
 
 // assertState reads an issue back and pins its derived state, including the
 // out-of-flow issues a default listing would not show.
+// assertUTCInstant pins both halves of a stored instant: when it is, and that
+// it is spelled in UTC, which time.Equal alone would not notice.
+func assertUTCInstant(t *testing.T, what string, got, want time.Time) {
+	t.Helper()
+	if !got.Equal(want) || got.Location() != time.UTC {
+		t.Errorf("%s = %v, want %v in UTC", what, got, want)
+	}
+}
+
 func assertState(t *testing.T, ctx context.Context, st storage.Store, id model.ID, want model.State, why string) {
 	t.Helper()
 	issue, err := st.GetIssue(ctx, id)

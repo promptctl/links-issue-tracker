@@ -53,7 +53,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stderr, ap)
 		if err != nil {
 			return err
 		}

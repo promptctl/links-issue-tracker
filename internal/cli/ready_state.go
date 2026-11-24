@@ -1091,7 +1091,7 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, cc claimConte
 	if err := printIDListLine(w, contextIndent, "blocked by", ClassifyReadiness(entry.Annotations).DependencyLabels()); err != nil {
 		return err
 	}
-	line, ok := formatClaimLine(cc, lane, time.Now())
+	line, ok := formatClaimLine(cc, lane)
 	if !ok {
 		return nil
 	}

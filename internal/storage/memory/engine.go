@@ -243,8 +243,11 @@ func (e *Engine) ScratchDeletes() ([]storage.ScratchDelete, bool) {
 	return nil, false
 }
 
-// Clock is the clock New was handed, the one every write here is stamped with.
-func (e *Engine) Clock() storage.Clock { return e.clock }
+// StampInstant is the instant a write planned against history reaching newest
+// would be stamped with now.
+func (e *Engine) StampInstant(newest time.Time) time.Time {
+	return e.stamps.Stamp(e.clock, newest)
+}
 
 // stamp is the instant a write planned against family's history takes.
 func (e *Engine) stamp(family map[model.ID]bool) time.Time {

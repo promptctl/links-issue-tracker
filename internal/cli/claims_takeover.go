@@ -82,21 +82,12 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 		take := fs.Bool("take", false, "Confirm acting on a ticket whose lane another checkout holds right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
 		// One enumeration of this machine's checkouts per invocation, made the
 		// first time a gate needs it: `lit bulk` gates every id against the
-		// same machine, and the enumeration is a subprocess. One reading of
-		// the store's clock per invocation, too: the instant every gate plans
-		// at is the instant freshness is judged at and a holder's age is
-		// measured from, so the verdict and the line that reports it agree.
-		// [LAW:one-source-of-truth]
+		// same machine, and the enumeration is a subprocess.
 		var gathered *checkoutFacts
-		var now *time.Time
 		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (model.Action, afterApply, error) {
-			if now == nil {
-				read := ap.Store.Clock().Now()
-				now = &read
-			}
 			checkouts := func() (checkoutFacts, error) {
 				if gathered == nil {
-					facts, err := gatherCheckouts(inv.Env, inv.Stdout, ap, *now)
+					facts, err := gatherCheckouts(ctx, inv.Env, inv.Stderr, ap)
 					if err != nil {
 						return checkoutFacts{}, err
 					}
@@ -104,7 +95,7 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 				}
 				return *gathered, nil
 			}
-			action, hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, *take, *now, checkouts)
+			action, hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, *take, checkouts)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -140,7 +131,7 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 // The action returned is the one Apply writes: a start on a ticket whose own record
 // already names this checkout, in a lane somebody took since, comes back as a
 // reclaim, so taking the lane back records the event that does it.
-func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, take bool, now time.Time, gather func() (checkoutFacts, error)) (model.Action, holdReading, string, error) {
+func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, take bool, gather func() (checkoutFacts, error)) (model.Action, holdReading, string, error) {
 	// A takeover is worth confirming only for a transition that can land. The
 	// issue's own rules refuse a frozen issue, a container, and a phase move
 	// off in-progress work whoever holds the lane, so their refusal answers
@@ -154,7 +145,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	// cannot see: its lane may have been taken through a sibling since, and
 	// only the lane read below can tell.
 	self := ownAttribution(ap)
-	records, err := landable(prior, action, self, now)
+	records, err := landable(prior, action, self)
 	if err != nil {
 		return nil, holdReading{}, "", err
 	}
@@ -193,7 +184,12 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	if err != nil {
 		return nil, holdReading{}, "", err
 	}
-	standing := lane.Standing(checkouts.fresh, checkouts.local)
+	// The lane is judged at the instant the store would stamp a write planned
+	// against its family with now, the history this gate read, and the holder
+	// line measures the holder's age from that same instant.
+	// [LAW:one-source-of-truth]
+	judgedAt := ap.Store.StampInstant(lane.Newest())
+	standing := lane.Standing(checkouts.freshAt(judgedAt), checkouts.local)
 	relation := relationOf(standing, self)
 	// Recorded before the gate, so a refused takeover's event still says whose
 	// lane it met.
@@ -201,7 +197,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	takeover := ""
 	if relation == laneHeldForeign {
 		// relationOf answers laneHeldForeign for a Held standing and nothing else.
-		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, now)
+		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, judgedAt)
 		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, crossingOf(action.Name()), take); err != nil {
 			return nil, holdReading{}, "", err
 		}
@@ -210,20 +206,20 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 }
 
 // landable runs the issue's own refusal of action on the state the gate read —
-// Issue.PlanPhase for a phase move, claims.PlanStatus for a status action, the
-// same plans both engines run inside Apply — and reports whether the
-// transition records anything when taken by self at now.
-func landable(prior ticketState, action model.Action, self model.Attribution, now time.Time) (records bool, err error) {
+// Issue.PlanPhase for a phase move, claims.JudgeStatus for a status action, the
+// same judgments both engines run inside Apply — and reports whether the
+// transition records anything when taken by self. Neither needs an instant.
+func landable(prior ticketState, action model.Action, self model.Attribution) (records bool, err error) {
 	switch action := action.(type) {
 	case model.SetPhase:
 		move, err := prior.issue.PlanPhase(prior.events, action.Phase)
 		return move.Changed(), err
 	case model.StatusAction:
-		plan, err := claims.PlanStatus(prior.issue, prior.events, action, self, now)
+		verdict, err := claims.JudgeStatus(prior.issue, prior.events, action, self)
 		if err != nil {
 			return false, err
 		}
-		return plan.Records(), nil
+		return verdict.Records(), nil
 	}
 	// withHoldGate wraps only start, phase and done, so anything else is a
 	// wiring error, not a caller's mistake. [LAW:no-silent-failure]
@@ -232,9 +228,9 @@ func landable(prior ticketState, action model.Action, self model.Attribution, no
 
 // heldByLine names who holds a ticket the caller is about to act on: the
 // checkout — its path and branch when this machine can address it — and how
-// recently it last acted in the lane.
-func heldByLine(issueID model.ID, held claims.Held, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	return fmt.Sprintf("%s is held by %s (active %s ago)", issueID, checkoutAddress(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)))
+// recently it last acted in the lane, as of the instant the hold was judged at.
+func heldByLine(issueID model.ID, held claims.Held, addresses map[model.Attribution]workspace.Checkout, judgedAt time.Time) string {
+	return fmt.Sprintf("%s is held by %s (active %s)", issueID, checkoutAddress(held.By, addresses), activityAge(held.LastActivity, judgedAt))
 }
 
 // authorizeStart is what `lit start` owes once the hold gate has passed: the

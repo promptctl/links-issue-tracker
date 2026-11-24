@@ -61,7 +61,9 @@ func aLaneFamilyReadsWhatTheBacklogReads(t *testing.T, ctx context.Context, st s
 	if err != nil {
 		t.Fatalf("NewLane(%s) error = %v", waiting.ID, err)
 	}
-	standing := lane.Standing(claims.Freshness{Now: time.Now(), Window: time.Hour}, claims.LocalCheckouts{})
+	// Judged at the store's instant over the history the family read, as the
+	// hold gate judges it, so the reading needs no clock of its own.
+	standing := lane.Standing(claims.Freshness{Now: st.StampInstant(lane.Newest()), Window: time.Hour}, claims.LocalCheckouts{})
 	if held, ok := standing.(claims.Held); !ok || held.By.Stream() != "checkout-a" {
 		t.Errorf("the standing of %s's lane = %+v, want it held by checkout-a on its `done` against the closed %s", waiting.ID, standing, finished.ID)
 	}

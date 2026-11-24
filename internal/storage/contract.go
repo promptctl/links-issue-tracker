@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -117,6 +118,10 @@ type IssueWriter interface {
 	// actual mutations — and an illegal transition is refused rather than
 	// silently ignored. [LAW:dataflow-not-control-flow]
 	// [LAW:no-ambient-temporal-coupling]
+	//
+	// A write takes one instant, the one it stamps its event with, and a status
+	// transition is taken at it: a close's closed_at is its updated_at and its
+	// event's created_at. [LAW:one-source-of-truth]
 	Apply(ctx context.Context, id model.ID, plan ChangePlan) (Applied, error)
 
 	// Purge permanently removes an issue: its row, comments, labels, history,
@@ -335,11 +340,13 @@ type Store interface {
 	StrandedWritesReporter
 	ScratchDeleteReporter
 
-	// Clock is the clock this engine stamps its writes with. A caller that
-	// judges an instant against what the store recorded reads it here, so a
-	// run has one clock and Clock.Now stays its one UTC normalization.
-	// [LAW:one-source-of-truth]
-	Clock() Clock
+	// StampInstant is the instant this store would stamp a write with now, when
+	// the history the write is planned against reaches newest: StampTally's
+	// rule over this store's clock, in UTC, and counted in StampCorrections
+	// like every other reading. A run that judges claims reads one such
+	// instant, over the history its judgment read, and renders every age from
+	// it, so no age it prints comes from a second clock. [LAW:one-source-of-truth]
+	StampInstant(newest time.Time) time.Time
 
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing

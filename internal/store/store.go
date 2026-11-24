@@ -1944,16 +1944,16 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// own history — never the assignee alone. The taker is s.attribution
 	// because it is exactly what recordEvent will stamp on the event this plan
 	// is deciding whether to write. Whether it is owed at all is
-	// claims.StatusPlan's to say, where the memory engine and the hold gate
+	// claims.StatusVerdict's to say, where the memory engine and the hold gate
 	// read it too. [LAW:one-source-of-truth]
-	plan, err := claims.PlanStatus(issue, history, action, s.attribution, at)
+	verdict, err := claims.JudgeStatus(issue, history, action, s.attribution)
 	if err != nil {
 		return transitionWrite{}, err
 	}
-	if !plan.Records() {
+	if !verdict.Records() {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
-	updated := plan.Updated
+	updated := verdict.At(at)
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	// The close outcome traveled through the state machine into the closed leaf,
@@ -1986,10 +1986,9 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if !stringPointersEqual(priorRedirect, postRedirect) {
 		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
 	}
-	if plan.Prior.Assignee != plan.Post.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: plan.Prior.Assignee.Raw(), To: plan.Post.Assignee.Raw()})
+	if verdict.Prior.Assignee != verdict.Post.Assignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: verdict.Prior.Assignee.Raw(), To: verdict.Post.Assignee.Raw()})
 	}
-	updated.UpdatedAt = at
 	// updated already carries the leaf the write will persist — the outcome
 	// traveled through the machine, so there is no post-hoc rehydration to
 	// re-attach a resolution. [LAW:one-source-of-truth]
@@ -1999,7 +1998,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 		actor:         actor,
 		changes:       changes,
 		post:          updated,
-		claimHandover: plan.Handover(),
+		claimHandover: verdict.Handover(),
 	}, nil
 }
 
@@ -2014,16 +2013,16 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 // a reopen clears the whole close payload atomically — a stale redirect on a
 // live issue is unwritable, not guarded against. [LAW:one-source-of-truth]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
+	// Validation and the write both read post, so the resolution and redirect
+	// target validated are the ones written. [LAW:one-source-of-truth]
+	post := w.post
 	// [LAW:single-enforcer] The redirect target is validated through the one
 	// validation site, reading existence+retention of the canonical on this tx.
 	// A non-redirecting transition carries no target, so this is a no-op there.
-	if err := validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
+	if err := validateRedirectTarget(ctx, tx, post.ID, post.ResolutionValue(), post.RedirectTargetValue()); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
-	// Every column is read off post, the issue validation just read, so what
-	// is validated and what is written cannot drift. [LAW:one-source-of-truth]
-	post := w.post
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
 		post.StatusValue(), post.AssigneeValue(), post.UpdatedAt.Format(time.RFC3339Nano), nullableTime(post.ClosedAtValue()),
 		nullableResolution(post.ResolutionValue()), nullableStringPtr(post.RedirectTargetValue()), post.ID); err != nil {
@@ -2569,8 +2568,11 @@ func (s *Store) laneFamilyIDs(ctx context.Context, issueID model.ID) ([]model.ID
 	return append(ids, issueID), nil
 }
 
-// Clock is the clock this store stamps every write with.
-func (s *Store) Clock() storage.Clock { return s.clock }
+// StampInstant is the instant a write planned against history reaching newest
+// would be stamped with now.
+func (s *Store) StampInstant(newest time.Time) time.Time {
+	return s.stamps.Stamp(s.clock, newest)
+}
 
 // StampCorrections is the account of every stamp this store handed out that
 // history held back from its clock.

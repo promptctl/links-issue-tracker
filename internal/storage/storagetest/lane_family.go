@@ -33,7 +33,10 @@ func RequireLaneFamiliesMatchTheBacklog(t testing.TB, ctx context.Context, st st
 	if err != nil {
 		t.Fatalf("NewEvidence error = %v", err)
 	}
-	fresh := claims.Freshness{Now: time.Now(), Window: time.Hour}
+	// One instant judges the backlog and every family, the store's over the
+	// whole history, as a claim-reading run judges at it: each family's history
+	// is part of the backlog's, so no family reads activity ahead of it.
+	fresh := claims.Freshness{Now: st.StampInstant(evidence.Newest()), Window: time.Hour}
 	var local claims.LocalCheckouts
 	standings := claims.Derive(evidence, fresh, local)
 

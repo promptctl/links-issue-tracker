@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -33,52 +34,69 @@ type claimContext struct {
 	evidence  claims.Evidence
 	self      model.Attribution
 	addresses map[model.Attribution]workspace.Checkout
+	// judgedAt is the instant standings were judged at. Every age a claim line
+	// renders is measured from it, so a line never reports a verdict from a
+	// second clock. [LAW:one-source-of-truth]
+	judgedAt time.Time
 }
 
 // gatherClaimContext is the one place `next` and `backlog` each read claim
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
-func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App) (claimContext, error) {
+//
+// The run judges every lane at one instant: the one the store would stamp a
+// write with now over the history the evidence read, so no holder's recorded
+// activity is ahead of it.
+func gatherClaimContext(ctx context.Context, env environ.Env, stderr io.Writer, ap *app.App) (claimContext, error) {
 	evidence, err := readEvidence(ctx, ap)
 	if err != nil {
 		return claimContext{}, err
 	}
-	checkouts, err := gatherCheckouts(env, stdout, ap, ap.Store.Clock().Now())
+	checkouts, err := gatherCheckouts(ctx, env, stderr, ap)
 	if err != nil {
 		return claimContext{}, err
 	}
-	standings := claims.Derive(evidence, checkouts.fresh, checkouts.local)
-	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: checkouts.addresses}, nil
+	judgedAt := ap.Store.StampInstant(evidence.Newest())
+	standings := claims.Derive(evidence, checkouts.freshAt(judgedAt), checkouts.local)
+	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: checkouts.addresses, judgedAt: judgedAt}, nil
 }
 
-// checkoutFacts is what a derivation reads besides the evidence, and what a
-// claim line needs to name a holder this machine can address: the clock against
-// the configured window, and this machine's own checkouts.
+// checkoutFacts is what a derivation reads besides the evidence and the
+// instant it judges at, and what a claim line needs to name a holder this
+// machine can address: the configured freshness window, and this machine's own
+// checkouts.
 type checkoutFacts struct {
-	fresh     claims.Freshness
+	window    time.Duration
 	local     claims.LocalCheckouts
 	addresses map[model.Attribution]workspace.Checkout
 }
 
+// freshAt is the freshness these facts judge by, at the instant at.
+func (c checkoutFacts) freshAt(at time.Time) claims.Freshness {
+	return claims.Freshness{Now: at, Window: c.window}
+}
+
 // gatherCheckouts reads those facts, the half of a claim's reading that a read
-// of one lane and a read of the backlog share, judging freshness as of now.
-func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App, now time.Time) (checkoutFacts, error) {
+// of one lane and a read of the backlog share.
+func gatherCheckouts(ctx context.Context, env environ.Env, stderr io.Writer, ap *app.App) (checkoutFacts, error) {
 	cfg, err := config.Load(env, ap.Workspace.Project)
 	if err != nil {
 		return checkoutFacts{}, err
 	}
 
-	// [LAW:no-silent-failure] This machine cannot prove which of its own
-	// worktrees are still alive. Fall back to the zero LocalCheckouts,
-	// which voids nothing and lets freshness alone govern — but say so,
-	// every time, because the fallback silently changes which lanes route
-	// around this checkout otherwise, and it means no address ever resolves
-	// this run.
+	// This machine cannot always prove which of its own worktrees are still
+	// alive. Then the zero LocalCheckouts stands, which voids nothing and lets
+	// freshness alone govern: the listing only refines an advisory reading, so
+	// the degraded reading is still the right answer. It changes which lanes
+	// route around this checkout and resolves no address, so it is said on
+	// stderr every time and recorded on the command's event either way.
+	// [LAW:no-silent-failure] [LAW:nothing-unseen]
 	var local claims.LocalCheckouts
 	var addresses map[model.Attribution]workspace.Checkout
 	checkouts, err := workspace.LiveCheckouts(env, ap.Workspace)
+	telemetry.Set(ctx, "claims.local_checkouts_enumerated", err == nil)
 	if err != nil {
-		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
+		if _, printErr := fmt.Fprintf(stderr, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
 			return checkoutFacts{}, printErr
 		}
 	} else {
@@ -86,8 +104,7 @@ func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App, now time.Ti
 		addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)
 	}
 
-	fresh := claims.Freshness{Now: now, Window: cfg.Claims.FreshnessWindow}
-	return checkoutFacts{fresh: fresh, local: local, addresses: addresses}, nil
+	return checkoutFacts{window: cfg.Claims.FreshnessWindow, local: local, addresses: addresses}, nil
 }
 
 // readEvidence reads the claim evidence out of the store: every issue, the

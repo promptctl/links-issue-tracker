@@ -28,10 +28,8 @@ import "time"
 type Clock func() time.Time
 
 // Now reads the clock and normalizes the instant to UTC, which is the form
-// every timestamp in the contract carries.
-//
-// Engines call this rather than the function itself, so the normalization has
-// one home instead of one per stamp. [LAW:single-enforcer]
+// every timestamp in the contract carries. An instant a write is stamped with
+// is read through StampTally.Stamp instead, which normalizes its own result.
 func (c Clock) Now() time.Time { return c().UTC() }
 
 // SystemClock is the real clock, and the one every engine a person opens is
