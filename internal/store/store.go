@@ -597,7 +597,7 @@ func (s *Store) Close() error {
 // to Open (see OpenForRead).
 //
 // A write engine that opened holds LOCK, so it records itself as its holder
-// (recordLockHolder, retired by closeEngine before the engine lets go). A read
+// (lockHold.taken publishes it the instant Dolt takes LOCK, and closeEngine retires it before the engine lets go). A read
 // engine does not: it never holds LOCK, and a record naming a reader would send
 // an operator after the wrong pid. The one branch is the open contract's own
 // discriminator. [LAW:dataflow-not-control-flow]
@@ -642,9 +642,10 @@ func openEngine(ctx context.Context, env environ.Env, stderr io.Writer, doltRoot
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// The engine took LOCK through Dolt's own loader, so the record is
-	// published here rather than by acquireStoreLock.
-	return db, hold, hold.record(ctx), nil
+	// The engine took LOCK through Dolt's own loader, so its hold published
+	// the record the instant Dolt took it (lockHold.taken), not
+	// acquireStoreLock.
+	return db, hold, hold.retire, nil
 }
 
 // openHeldPool opens a pool on database at doltRootDir, inside phase, and
@@ -736,7 +737,7 @@ func (s *Store) reconnect(ctx context.Context) error {
 	if err := wrapEngineOpenContention(pingErr, s.doltRootDir); err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
-	s.releaseEngineRecord = hold.record(ctx)
+	s.releaseEngineRecord = hold.retire
 	return s.resumeCheckedOut(ctx)
 }
 

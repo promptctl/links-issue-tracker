@@ -49,7 +49,7 @@ func suiteHolder() holderStatement { return heldUnder(suiteenv.Deadlines()) }
 // fixedPatience is a contender's patience that ignores what its holders
 // state: the plain allowance a test whose subject is the wait's clock hands.
 func fixedPatience(allowance time.Duration) lockPatience {
-	return func(holderStatement, bool) time.Duration { return allowance }
+	return func(holderStatement, bool) (time.Duration, bool) { return allowance, false }
 }
 
 // storageDirOf names the lit storage dir for a test lock — the directory the
@@ -820,7 +820,7 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 	dir := lockHolderDir(storageDir, lockPath)
 	lockErr := errors.New("lock release result")
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	release := recordLockHolder(context.Background(), notices, storageDir, lockPath, privatePath, recordPath, func() error { return lockErr })
+	release := recordLockHolder(notices, "", func(LockRecord) {}, storageDir, lockPath, privatePath, recordPath, func() error { return lockErr })
 
 	// The swept name becomes a non-empty directory the release cannot remove,
 	// as on Windows it cannot remove a name a concurrent sweep's probe holds
@@ -1434,7 +1434,7 @@ func TestAWaiterWaitsOutAHolderForTheAllowanceTheHolderStates(t *testing.T) {
 	})
 
 	release, err := acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true,
-		heldUnder(waiterRun), judgedByHolder(deadline.Shipped().HolderWait()))
+		heldUnder(waiterRun), judgedByCoResidentHolder())
 	if err != nil {
 		t.Fatalf("a waiter under short deadlines behind a healthy holder under long ones failed %s in: %v", clock.elapsed(), err)
 	}
@@ -1475,7 +1475,7 @@ func TestAWaiterRefusesAHolderAtTheAllowanceTheHolderStates(t *testing.T) {
 
 	clock := newStepClock(t, noTick)
 	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true,
-		heldUnder(waiterRun), judgedByHolder(deadline.Shipped().HolderWait()))
+		heldUnder(waiterRun), judgedByCoResidentHolder())
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -1662,5 +1662,93 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 	}
 	if got := clock.elapsed(); got != wait {
 		t.Fatalf("contender gave up %s in against a %s wait; the sweep of a dead holder's record restarted its clock", got, wait)
+	}
+}
+
+// An engine's hold of LOCK speaks for itself from the instant Dolt takes it,
+// inside the open: a hold under long deadlines whose open has not returned
+// after the shipped allowance, and longer, is waited out by its terms, and
+// the waiter takes LOCK the poll after Dolt lets it go. Dolt's word that LOCK
+// is taken (lockHold.taken) is driven here as Dolt drives it, and the open
+// stays inside itself until a step of the waiter's own clock lets LOCK go,
+// so the interleaving is the test's, not the machine's.
+func TestAWaiterWaitsOutAHoldStillInsideItsOpen(t *testing.T) {
+	t.Parallel()
+	holderRun := suiteenv.WithHold(time.Minute)
+	shipped := deadline.Shipped().HolderWait()
+	letGo := 3 * shipped.Truncate(deadline.LockPollInterval)
+	if letGo <= shipped || letGo >= holderRun.HolderWait() {
+		t.Fatalf("the open lets LOCK go at %s, which must outlast the shipped allowance %s and fit the holder's %s", letGo, shipped, holderRun.HolderWait())
+	}
+	reports := &heldReports{}
+	ctx := WithLockObserver(context.Background(), reports.observer())
+	hold := newLockHold(context.Background(), testStderr(), holderRun, filepath.Join(t.TempDir(), "dolt"), engineWrite, &longPhase{})
+	if err := os.MkdirAll(filepath.Dir(hold.lockPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// What Dolt's open does on taking LOCK: the file lock, then its word.
+	doltLock, acquired, err := filelock.Acquire(context.Background(), hold.lockPath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take LOCK as Dolt's open does: acquired=%v err=%v", acquired, err)
+	}
+	hold.taken()
+	clock := newStepClock(t, func(at time.Duration) {
+		if at != letGo {
+			return
+		}
+		// The open fails here and lets LOCK go inside itself, as Dolt does:
+		// the file lock, then its word, which ends the hold.
+		if err := doltLock(); err != nil {
+			t.Fatalf("let LOCK go at %s: %v", at, err)
+		}
+		hold.end()
+	})
+
+	release, err := acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, hold.storageDir, hold.lockPath, true, suiteHolder(), judgedByCoResidentHolder())
+	if err != nil {
+		t.Fatalf("a waiter behind a hold still inside its open failed %s in: %v", clock.elapsed(), err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release the waiter: %v", err)
+	}
+	if got := clock.elapsed(); got != letGo {
+		t.Fatalf("the waiter took LOCK %s in, want %s: the first attempt after the open let it go", got, letGo)
+	}
+	reports.mu.Lock()
+	defer reports.mu.Unlock()
+	want := LockWait{Lock: filepath.Base(hold.lockPath), Waited: letGo - deadline.LockPollInterval, StandStill: holderRun.HolderWait(), Stated: true, Outcome: LockWaitAcquired}
+	if len(reports.waits) != 1 || reports.waits[0] != want {
+		t.Fatalf("lock waits reported = %+v, want exactly %+v", reports.waits, want)
+	}
+}
+
+// A contender that refuses at once is judged by no statement, so it reports
+// none, though the holder it refused stated terms.
+func TestARefusingContenderReportsNoStatement(t *testing.T) {
+	t.Parallel()
+	var waits []LockWait
+	ctx := WithLockObserver(context.Background(), LockObserver{
+		Waited:   func(w LockWait) { waits = append(waits, w) },
+		Held:     func(LockHold) {},
+		Recorded: func(LockRecord) {},
+	})
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	holder, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
+	if err != nil {
+		t.Fatalf("holder acquireStoreLock() error = %v", err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), newStepClock(t, noTick), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("refusing acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
+	}
+	want := LockWait{Lock: filepath.Base(lockPath), Outcome: LockWaitStoodStill}
+	if len(waits) != 1 || waits[0] != want {
+		t.Fatalf("lock waits reported = %+v, want exactly %+v: no allowance, and no statement behind it", waits, want)
 	}
 }

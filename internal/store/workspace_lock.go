@@ -86,7 +86,7 @@ func workspaceStorageDir(databasePath string) string {
 // lit snapshots restore — a rename — does not paper-cut every reader, and
 // surfaces a "workspace busy" error naming the rotator that outlasts it.
 func acquireWorkspaceShared(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, stderr, d, doltRootDir, false, judgedByHolder(deadline.Shipped().HolderWait()))
+	release, err := acquireWorkspaceLock(ctx, stderr, d, doltRootDir, false, judgedByCoResidentHolder())
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Wrap the sentinel so errors.Is(err, ErrWorkspaceBusy) detects
 		// contention while the operator sees which holders to suspect.
@@ -256,7 +256,7 @@ func MirrorBeaconLockPath(databasePath string) string {
 // dying to that collision, and it is the package's one wait rather than a
 // figure of its own. [LAW:one-source-of-truth]
 func HoldMirrorBeacon(ctx context.Context, stderr io.Writer, d deadline.Deadlines, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, heldUnder(d), judgedByHolder(deadline.Shipped().HolderWait()))
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, heldUnder(d), judgedByCoResidentHolder())
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Only a probe's instantaneous exclusive hold can legitimately contend,
 		// so outlasting the whole budget means something anomalous is squatting
@@ -486,7 +486,7 @@ func acquireStoreLockOn(ctx context.Context, stderr io.Writer, notices noticeSch
 	}
 	dir := lockHolderDir(storageDir, lockPath)
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	recorded := recordLockHolder(ctx, stderr, storageDir, lockPath, privatePath, recordPath, release)
+	recorded := recordLockHolder(stderr, holderCommand(ctx), lockObserverFrom(ctx).Recorded, storageDir, lockPath, privatePath, recordPath, release)
 	// The arrival is announced whether or not the record could be minted: it
 	// is a fact about the acquisition, which has happened either way, and the
 	// drawn name is unique whether or not a record ever carries it.
@@ -567,7 +567,7 @@ func LockDoltJournalExclusive(ctx context.Context, stderr io.Writer, d deadline.
 	// connector waits with holdWait on this lock's own holder directory, so
 	// an engine and a copy contending for LOCK judge it by one statement.
 	// [LAW:one-source-of-truth]
-	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true, heldUnder(d), judgedByHolder(deadline.Shipped().HolderWait()))
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true, heldUnder(d), judgedByCoResidentHolder())
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees

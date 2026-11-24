@@ -115,13 +115,12 @@ func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 
 // The holder record a waiter's account prints carries the name the hold
 // announced and heartbeats under, so one acquisition is one name wherever it
-// is read.
+// is read, and it stands from the instant Dolt took LOCK.
 func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
-	release := hold.record(context.Background())
 	t.Cleanup(func() {
-		if err := release(); err != nil {
-			t.Errorf("release record: %v", err)
+		if err := hold.retire(); err != nil {
+			t.Errorf("retire record: %v", err)
 		}
 	})
 	entries, err := os.ReadDir(lockHolderDir(hold.storageDir, hold.lockPath))

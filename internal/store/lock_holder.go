@@ -229,16 +229,21 @@ type lockHolderRecord struct {
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
-func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
+//
+// command is what the record says the holder is running (holderCommand), and
+// recorded the observer the LockRecord goes to: values, so an acquisition
+// that takes its lock inside a callback with no context (an engine's hold of
+// LOCK, recorded the instant Dolt takes it) records the same way.
+func recordLockHolder(stderr io.Writer, command string, recorded func(LockRecord), storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
 	retired, sweepErr := retireDeadLockHolders(storageDir, lockPath)
-	releaseRecord, publishErr := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
+	releaseRecord, publishErr := publishLockHolder(command, storageDir, lockPath, privatePath, recordPath)
 	if sweepErr != nil {
 		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, sweepErr)
 	}
 	if publishErr != nil {
 		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, publishErr)
 	}
-	lockObserverFrom(ctx).Recorded(LockRecord{Lock: filepath.Base(lockPath), SweepRetired: retired, SweepErr: sweepErr, PublishErr: publishErr})
+	recorded(LockRecord{Lock: filepath.Base(lockPath), SweepRetired: retired, SweepErr: sweepErr, PublishErr: publishErr})
 	if publishErr != nil {
 		return lockRelease
 	}
@@ -255,14 +260,14 @@ func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPat
 
 // publishLockHolder publishes this process's claim on lockPath: what this
 // process would want said about it, handed to the protocol that says it.
-func publishLockHolder(ctx context.Context, storageDir, lockPath, privatePath, recordPath string) (func() error, error) {
+func publishLockHolder(command, storageDir, lockPath, privatePath, recordPath string) (func() error, error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("ensure holder dir: %w", err)
 	}
 	payload, err := json.Marshal(lockHolderRecord{
 		PID:     os.Getpid(),
-		Command: holderCommand(ctx),
+		Command: command,
 		Since:   time.Now(),
 	})
 	if err != nil {
@@ -386,27 +391,40 @@ func (s holderStatement) describe() string {
 }
 
 // lockPatience is how long a contender lets the holders in front of it stand
-// still, given what the latest arrival states (ok is false when no holder
-// stated terms). A refusing contender ignores the statement; every waiting
-// one is judged by it (judgedByHolder).
-type lockPatience func(stated holderStatement, ok bool) time.Duration
+// still, given what the standing holders state (ok is false when none stated
+// terms), and whether that statement is what decided it (fromStatement): the
+// one place that decides the allowance also says what decided it, so a
+// report cannot claim a statement the patience ignored.
+// [LAW:one-source-of-truth] A refusing contender ignores the statement;
+// every waiting one is judged by it (judgedByHolder).
+type lockPatience func(stated holderStatement, ok bool) (allowance time.Duration, fromStatement bool)
 
 // refuseHeld is the patience of a contender that refuses on contention: a
-// single attempt.
-func refuseHeld(holderStatement, bool) time.Duration { return 0 }
+// single attempt, decided by no statement.
+func refuseHeld(holderStatement, bool) (time.Duration, bool) { return 0, false }
 
 // judgedByHolder is the patience of a contender that waits: the allowance the
 // holders in front state, or unstated when none states one (a foreign dolt, a
-// raw flock, a lit older than the terms). unstated is the shipped allowance of
-// the lock's holders, the one an older lit holds by, never the contender's
-// own run's: a contender's figures say nothing about another run's hold.
+// raw flock, a lit older than the terms).
 func judgedByHolder(unstated time.Duration) lockPatience {
-	return func(stated holderStatement, ok bool) time.Duration {
+	return func(stated holderStatement, ok bool) (time.Duration, bool) {
 		if ok {
-			return stated.standStill
+			return stated.standStill, true
 		}
-		return unstated
+		return unstated, false
 	}
+}
+
+// judgedByCoResidentHolder is the patience of a contender that waits on a
+// co-resident holder of the store (the workspace lock, Dolt's LOCK, the
+// mirror beacon): judged by the holder's statement, and an unstated holder
+// by the shipped co-resident allowance, the one an older lit holds by, never
+// the contender's own run's, since a contender's figures say nothing about
+// another run's hold. [LAW:one-source-of-truth] the one place that fallback
+// is named, so every contender for one lock gives an unstated holder up at
+// the same instant.
+func judgedByCoResidentHolder() lockPatience {
+	return judgedByHolder(deadline.Shipped().HolderWait())
 }
 
 // lockArrival is one reading of a lock's latest arrival: the record name that
@@ -857,11 +875,13 @@ type holdWait struct {
 	now        func() time.Time
 	// statements is every holder statement this wait has read, by the
 	// record of the holder that made it; stated is the longest of those whose
-	// record stood at the last readable listing, and statedOK whether there
-	// was one.
+	// record stood at the last listing, and statedOK whether there was one.
+	// A listing that failed shows no standing record, so no statement stands
+	// on it, and listErr keeps the latest such failure for the report.
 	statements map[string]holderStatement
 	stated     holderStatement
 	statedOK   bool
+	listErr    error
 	// known is every holder name this wait has seen; nil until its first
 	// readable reading, which is the baseline every later one is judged
 	// against, so a reading that failed at Reset cannot make a long-standing
@@ -903,7 +923,7 @@ func (w *holdWait) Reset() {
 	w.started = w.now()
 	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(w.notices.grace)
 	w.heldAt, w.progress, w.stoodStill = time.Time{}, 0, false
-	w.statements, w.stated, w.statedOK = map[string]holderStatement{}, holderStatement{}, false
+	w.statements, w.stated, w.statedOK, w.listErr = map[string]holderStatement{}, holderStatement{}, false, nil
 	w.arrived()
 }
 
@@ -921,7 +941,7 @@ func (w *holdWait) NextBackOff() time.Duration {
 	if w.arrived() {
 		w.since = now
 	}
-	if now.Sub(w.since) >= w.patience(w.stated, w.statedOK) {
+	if allowance, _ := w.patience(w.stated, w.statedOK); now.Sub(w.since) >= allowance {
 		w.stoodStill = true
 		return backoff.Stop
 	}
@@ -936,17 +956,26 @@ func (w *holdWait) NextBackOff() time.Duration {
 // arrived takes one reading of the holder names and reports whether any is
 // new to this wait, remembering every name it sees and the terms its holders
 // state. The first readable reading is the baseline and reports nothing.
+//
+// The statements in force are recomputed from each listing alone: a record
+// stands from before its holder announces (every acquisition publishes its
+// record first) until its holder lets go, so the listing is the one answer to
+// "does this holder still hold the lock". A listing that failed answers that
+// no holder is known to stand, so the wait falls back to the allowance for an
+// unstated holder rather than keep the terms of one that may have gone.
+// [LAW:one-source-of-truth]
 func (w *holdWait) arrived() bool {
-	records, listed, latest, readable := w.holderNames()
+	records, listErr, latest, readable := w.holderNames()
+	if listErr != nil {
+		w.listErr = listErr
+	}
 	if latest.stated {
 		w.statements[recordOfArrival(latest.name)] = latest.states
 	}
-	if listed {
-		w.stated, w.statedOK = holderStatement{}, false
-		for _, record := range records {
-			if states, ok := w.statements[record]; ok && (!w.statedOK || states.standStill > w.stated.standStill) {
-				w.stated, w.statedOK = states, true
-			}
+	w.stated, w.statedOK = holderStatement{}, false
+	for _, record := range records {
+		if states, ok := w.statements[record]; ok && (!w.statedOK || states.standStill > w.stated.standStill) {
+			w.stated, w.statedOK = states, true
 		}
 	}
 	if !readable {
@@ -994,25 +1023,27 @@ func (w *holdWait) report(ctx context.Context, acquireErr error) (LockWait, bool
 	case ctx.Err() != nil:
 		outcome = LockWaitCancelled
 	}
+	allowance, fromStatement := w.patience(w.stated, w.statedOK)
 	return LockWait{
 		Lock:         filepath.Base(w.lockPath),
 		Waited:       w.heldAt.Sub(w.started),
 		ProgressSeen: w.progress,
-		StandStill:   w.patience(w.stated, w.statedOK),
-		Stated:       w.statedOK,
+		StandStill:   allowance,
+		Stated:       fromStatement,
+		ListErr:      w.listErr,
 		Outcome:      outcome,
 	}, true
 }
 
 // holderNames is what the lock shows of its holders at one instant: its
-// standing records (listed false when they could not be listed) and its
-// latest arrival. It is unreadable only when both are; either failure alone
-// surfaces in the holder account (readLockHolders, describeArrival), which
-// every notice and every refusal renders.
-func (w *holdWait) holderNames() (records []string, listed bool, latest lockArrival, readable bool) {
-	records, listErr := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
+// standing records (none, and listErr why, when they could not be listed) and
+// its latest arrival. It is unreadable only when both are; either failure
+// alone surfaces in the holder account (readLockHolders, describeArrival),
+// which every notice and every refusal renders.
+func (w *holdWait) holderNames() (records []string, listErr error, latest lockArrival, readable bool) {
+	records, listErr = holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
 	latest, arrivalErr := latestArrival(w.storageDir, w.lockPath)
-	return records, listErr == nil, latest, listErr == nil || arrivalErr == nil
+	return records, listErr, latest, listErr == nil || arrivalErr == nil
 }
 
 // holderRecordNames lists the record names under a lock's holder directory —

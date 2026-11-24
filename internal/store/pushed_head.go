@@ -364,5 +364,5 @@ func openChunkStoreForRefWrite(ctx context.Context, root string, hold *lockHold)
 		hold.end()
 		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
-	return ddb, hold.record(ctx), nil
+	return ddb, hold.retire, nil
 }

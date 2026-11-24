@@ -215,6 +215,7 @@ func lockWaitValue(w store.LockWait) map[string]any {
 		"lock.wait.progress_seen":      w.ProgressSeen,
 		"lock.wait.stand_still_ms":     w.StandStill.Milliseconds(),
 		"lock.wait.stand_still_stated": w.Stated,
+		"lock.wait.list_error":         telemetry.ErrorText(w.ListErr),
 		"lock.wait.outcome":            string(w.Outcome),
 	}
 }

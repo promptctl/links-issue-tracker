@@ -5,7 +5,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -74,15 +73,18 @@ const (
 // acquisition and each heartbeat of a working routine holder is one), how
 // long it let its holders stand still at its last poll and whether a holder
 // stated that allowance (Stated false is the shipped allowance an unstated
-// holder is judged by, or a contender that refuses at once), and how it
-// ended. An acquisition that found its lock free waited for nothing and
-// reports nothing.
+// holder is judged by, or a contender that refuses at once), the latest
+// failure to list the lock's holder records (nil when every listing
+// succeeded; a failed listing shows no holder standing, so it is judged as
+// unstated), and how it ended. An acquisition that found its lock free waited
+// for nothing and reports nothing.
 type LockWait struct {
 	Lock         string
 	Waited       time.Duration
 	ProgressSeen int
 	StandStill   time.Duration
 	Stated       bool
+	ListErr      error
 	Outcome      LockWaitOutcome
 }
 
@@ -197,9 +199,14 @@ type lockHold struct {
 	// states is what the hold says of itself on every arrival it writes:
 	// its heartbeat when it is routine, and its run's allowance.
 	states holderStatement
-	now    func() time.Time
-	held   func(LockHold)
-	waited func(LockWait)
+	// command and recorded are the account its holder record gives and the
+	// observer that record is reported to, read off the opener's context
+	// when the hold is built: Dolt's word that LOCK is taken carries none.
+	command  string
+	recorded func(LockRecord)
+	now      func() time.Time
+	held     func(LockHold)
+	waited   func(LockWait)
 
 	mu        sync.Mutex
 	state     holdState
@@ -219,6 +226,9 @@ type lockHold struct {
 	failures   int
 	stop       chan struct{}
 	stopped    chan struct{}
+	// releaseRecord retires the holder record taken published; nil before
+	// it and once retired, so the record retires exactly once.
+	releaseRecord func() error
 }
 
 // newLockHold builds the hold for one engine open of the store at doltRootDir,
@@ -242,9 +252,11 @@ func newLockHold(ctx context.Context, stderr io.Writer, d deadline.Deadlines, do
 		// same holder by the same statement and read the same progress. One
 		// per open: backoff state is per-open, and the connector Resets it
 		// before each. [LAW:one-source-of-truth]
-		wait:      newHoldWait(stderr, operatorNotices(), storageDir, lockPath, judgedByHolder(deadline.Shipped().HolderWait()), time.Now),
+		wait:      newHoldWait(stderr, operatorNotices(), storageDir, lockPath, judgedByCoResidentHolder(), time.Now),
 		heartbeat: holdHeartbeatInterval(d),
 		states:    lockHoldStatement(d, access),
+		command:   holderCommand(ctx),
+		recorded:  observer.Recorded,
 		now:       time.Now,
 		held:      observer.Held,
 		waited:    observer.Waited,
@@ -265,17 +277,19 @@ func lockHoldStatement(d deadline.Deadlines, access engineAccess) holderStatemen
 // name is the hold's record name: its arrival, and the stem of its heartbeats.
 func (h *lockHold) name() string { return filepath.Base(h.recordPath) }
 
-// record publishes this process as LOCK's holder under the hold's own name,
-// once the open that took LOCK has returned, and returns the release that
-// retires the record. It wraps a no-op lock release: the hold itself ends
-// when the engine closes. A read engine's hold takes no LOCK, so it records
-// nothing and its release is a no-op. [LAW:single-enforcer] the one place
-// that decides whether an open is recorded.
-func (h *lockHold) record(ctx context.Context) func() error {
-	if !h.access.holdsLock() {
-		return func() error { return nil }
+// retire retires the holder record taken published, once: the release the
+// store runs before its engine lets LOCK go (closeEngine), and end runs for
+// an open that let LOCK go without one. A hold that never took LOCK (a read
+// engine's, or an open that failed before Dolt took it) has none to retire.
+func (h *lockHold) retire() error {
+	h.mu.Lock()
+	release := h.releaseRecord
+	h.releaseRecord = nil
+	h.mu.Unlock()
+	if release == nil {
+		return nil
 	}
-	return recordLockHolder(ctx, h.stderr, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
+	return release()
 }
 
 // under is ctx carrying this hold as Dolt's journal lock observer: the
@@ -287,11 +301,18 @@ func (h *lockHold) under(ctx context.Context) context.Context {
 	return nbs.WithJournalLockObserver(ctx, nbs.JournalLockObserver{Taken: h.taken, Released: h.end})
 }
 
-// taken is Dolt's word that LOCK is held. The hold announces its arrival at
-// this instant (not after the open returns, which under load is seconds
-// later) and starts its heartbeat. The announce runs inside Dolt's open, so
-// it lands before Dolt can let LOCK go: an arrival written after the release
-// could overwrite the next holder's. [LAW:no-ambient-temporal-coupling]
+// taken is Dolt's word that LOCK is held. The hold publishes its holder
+// record and then announces its arrival at this instant (not after the open
+// returns, which under load is seconds later) and starts its heartbeat. Both
+// run inside Dolt's open, so they land before Dolt can let LOCK go: an
+// arrival written after the release could overwrite the next holder's.
+// [LAW:no-ambient-temporal-coupling]
+//
+// The record first, as every acquisition orders them (acquireStoreLock): a
+// waiter takes a holder's terms only while its record stands, so the record
+// stands from before the terms are announced until the hold lets go, the one
+// answer to "does this holder still hold the lock" for the hold's whole life,
+// its open included. [LAW:one-source-of-truth]
 //
 // A hold has one life: every context it is installed on opens exactly one
 // journaled store, which takes LOCK once and lets it go at the engine's
@@ -314,10 +335,12 @@ func (h *lockHold) taken() {
 	h.stop, h.stopped = make(chan struct{}), make(chan struct{})
 	stop, stopped := h.stop, h.stopped
 	h.mu.Unlock()
-	// The holder directory may not exist yet on a store's first open: the
-	// holder record makes it, but only after the open returns. A failure
-	// here surfaces as the announce's own failure just below.
-	_ = os.MkdirAll(lockHolderDir(h.storageDir, h.lockPath), 0o755)
+	// The lock release it wraps is a no-op: the hold itself ends when Dolt
+	// lets LOCK go, at the engine's close.
+	release := recordLockHolder(h.stderr, h.command, h.recorded, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
+	h.mu.Lock()
+	h.releaseRecord = release
+	h.mu.Unlock()
 	h.announce(h.name())
 	go h.beat(stop, stopped)
 }
@@ -450,6 +473,13 @@ func (h *lockHold) end() {
 	if !wasHeld {
 		return
 	}
+	// An open that let LOCK go inside itself (it failed after Dolt took it)
+	// ran no store close, so its record retires here, the instant after Dolt
+	// let go; a store's close retired it already, before. The release says
+	// its own failure to retire the record (recordLockHolder) and leaves the
+	// record to the next acquisition's sweep; what it returns is the no-op
+	// lock release's nil, since the lock is Dolt's and already let go.
+	_ = h.retire()
 	// Counted after the ticker stopped, so a write it had begun is in them.
 	h.mu.Lock()
 	report.Heartbeats, report.HeartbeatFailures = h.heartbeats, h.failures
