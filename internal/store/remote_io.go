@@ -46,15 +46,10 @@ import (
 // watches it, and can interrupt it.
 // [LAW:no-ambient-temporal-coupling] the hold's owner and bound are stated
 // here, at the budget that creates them.
-//
-// A package variable (the delays stay const) so tests whose premise makes
-// exhaustion CERTAIN can shrink the budget instead of sleeping through the
-// production one — the same convention HolderWait serves.
-var remoteIORetryMaxAttempts = 4
-
 const (
-	remoteIORetryBaseDelay = 1 * time.Second
-	remoteIORetryMaxDelay  = 4 * time.Second
+	remoteIORetryMaxAttempts = 4
+	remoteIORetryBaseDelay   = 1 * time.Second
+	remoteIORetryMaxDelay    = 4 * time.Second
 )
 
 // RemoteUnreachableError is the terminal outcome of remote I/O whose transport

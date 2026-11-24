@@ -21,11 +21,6 @@ import (
 // it does not depend on the remote, the network, or dolt finishing "eventually".
 const adoptRemoteTimeout = 120 * time.Second
 
-// adoptRemoteDeadline is when the adopt is abandoned. A var solely so a test
-// can fire the deadline itself, at a point it chooses in the adopt's work, and
-// so reach the deadline path in a known order; production never reassigns it.
-var adoptRemoteDeadline = func() <-chan time.Time { return time.After(adoptRemoteTimeout) }
-
 // initSyncState classifies what init's remote-adopt step did. It is the single
 // discriminant the renderer switches on, so a label that contradicts the outcome
 // is unrepresentable; the loose strings never appear at a callsite.
@@ -86,12 +81,18 @@ type initSyncOutcome struct {
 // hard-stops on initSyncFailed before creating any store, rather than
 // guessing "empty" on a result it could not actually confirm.
 // [LAW:no-silent-failure]
-// adoptRemoteTicketsBlockingFn is the adopt body, indirected through a var so a
-// test can substitute a controllable stand-in and exercise the hard-stop
-// without a real (slow, leak-prone) fetch. Production never reassigns it.
-var adoptRemoteTicketsBlockingFn = adoptRemoteTicketsBlocking
-
 func adoptRemoteTicketsOnInit(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) initSyncOutcome {
+	return adoptUnderHardStop(ctx, stderr, env, ws, adoptRemoteTicketsBlocking, time.After(adoptRemoteTimeout))
+}
+
+// adoptBody is an adopt's work: adoptRemoteTicketsBlocking, or a test's
+// controllable stand-in for it.
+type adoptBody func(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) initSyncOutcome
+
+// adoptUnderHardStop runs adopt and abandons it when deadline fires. Both are
+// values the caller hands, so a test reaches the deadline path with a stand-in
+// body and a deadline it fires itself, at a point it chooses.
+func adoptUnderHardStop(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, adopt adoptBody, deadline <-chan time.Time) initSyncOutcome {
 	// dolt's fetch does NOT honor context cancellation mid-operation (verified: an
 	// expired deadline does not unblock a slow fetch), so a context timeout alone
 	// cannot stop a lockup. The adopt therefore runs in a goroutine we hard-stop
@@ -109,11 +110,11 @@ func adoptRemoteTicketsOnInit(ctx context.Context, stderr io.Writer, env environ
 	lease := leaseStderr(stderr)
 	defer lease.revoke()
 	done := make(chan initSyncOutcome, 1)
-	go func() { done <- adoptRemoteTicketsBlockingFn(runCtx, lease, env, ws) }()
+	go func() { done <- adopt(runCtx, lease, env, ws) }()
 	select {
 	case outcome := <-done:
 		return outcome
-	case <-adoptRemoteDeadline():
+	case <-deadline:
 		return initSyncOutcome{
 			State: initSyncFailed,
 			Error: fmt.Sprintf(
