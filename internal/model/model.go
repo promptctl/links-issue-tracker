@@ -459,7 +459,8 @@ func (FrozenIssueError) RefusesCommand() {}
 
 var _ Refusal = FrozenIssueError{}
 
-// Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
+// Apply is root-only: it admits action on the root lifecycle primitive, whose
+// own Apply the transition's At dispatches to.
 // Multi-leaf composition (AllOf containing multiple actionable members)
 // is intentionally unsupported here; that requires a dedicated disambiguation
 // design before containers ever become actionable. Containers reject every

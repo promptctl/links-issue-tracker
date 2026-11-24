@@ -27,7 +27,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap)
+	cc, err := gatherClaimContext(underInvocation(h.ctx), runEnv(h.t), io.Discard, h.ap)
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}

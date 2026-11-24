@@ -48,8 +48,9 @@ func aStampPastHistoryIsTheNextInstantInUTC(t *testing.T, ctx context.Context, s
 	clk.Pin(laterInstant)
 	issue := startedTicket(t, ctx, st)
 
+	newest := newestEventAt(t, ctx, st, issue.ID)
 	clk.Pin(earlierInstant.In(time.FixedZone("UTC+9", 9*60*60)))
-	assertCloseStampedAt(t, ctx, st, issue.ID, laterInstant.Add(time.Nanosecond))
+	assertCloseStampedAt(t, ctx, st, issue.ID, newest.Add(time.Nanosecond))
 }
 
 // aStampPastAnImportedOffsetIsInUTC is the same branch over history that
@@ -76,8 +77,9 @@ func aStampPastAnImportedOffsetIsInUTC(t *testing.T, ctx context.Context, st sto
 		t.Fatalf("ReplaceFromExport error = %v", err)
 	}
 
+	newest := newestEventAt(t, ctx, st, issue.ID)
 	clk.Pin(earlierInstant)
-	assertCloseStampedAt(t, ctx, st, issue.ID, laterInstant.Add(time.Nanosecond))
+	assertCloseStampedAt(t, ctx, st, issue.ID, newest.Add(time.Nanosecond))
 }
 
 // startedTicket files a ticket under an epic and starts it, all at the clock's
@@ -90,6 +92,20 @@ func startedTicket(t *testing.T, ctx context.Context, st storage.Store) model.Is
 		t.Fatalf("Apply start error = %v", err)
 	}
 	return issue
+}
+
+// newestEventAt is the newest instant in id's history, which must have one.
+func newestEventAt(t *testing.T, ctx context.Context, st storage.Store, id model.ID) time.Time {
+	t.Helper()
+	events, err := st.ListEvents(ctx, id)
+	if err != nil {
+		t.Fatalf("ListEvents error = %v", err)
+	}
+	newest := model.NewestInstant(events)
+	if newest.IsZero() {
+		t.Fatalf("ListEvents(%s) is empty; want the start's history", id)
+	}
+	return newest
 }
 
 // assertCloseStampedAt closes id and holds the stored close to want, in UTC:

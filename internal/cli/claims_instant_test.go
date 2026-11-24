@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage/memory"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -18,6 +20,11 @@ import (
 // wall time, so any claim judged against wall time instead of the store's
 // instant reads as long expired.
 var storeEpoch = time.Date(2001, 3, 4, 5, 6, 7, 0, time.UTC)
+
+// halfHourLater is how far past storeEpoch a test reads a start made at it as
+// 30 minutes old. The start is stamped a few nanoseconds past the epoch,
+// after the creates' events at it, so exactly 30 minutes would read as 29.
+const halfHourLater = 30*time.Minute + time.Second
 
 // pinnedStoreHarness is a hold harness over a memory store whose clock reads
 // only what the test sets.
@@ -44,9 +51,9 @@ func pinnedStoreHarness(t *testing.T) (readyTestHarness, *time.Time) {
 func TestAClaimLineIsJudgedAndAgedAtTheStoresInstant(t *testing.T) {
 	h, now := pinnedStoreHarness(t)
 	epic, ticket := h.heldTicket(foreignStream, "session-a")
-	*now = storeEpoch.Add(30 * time.Minute)
+	*now = storeEpoch.Add(halfHourLater)
 
-	cc, err := gatherClaimContext(h.ctx, runEnv(t), io.Discard, h.ap)
+	cc, err := gatherClaimContext(underInvocation(h.ctx), runEnv(t), io.Discard, h.ap)
 	if err != nil {
 		t.Fatalf("gatherClaimContext() error = %v", err)
 	}
@@ -67,7 +74,7 @@ func TestAClaimLineIsJudgedAndAgedAtTheStoresInstant(t *testing.T) {
 func TestTheHoldGateJudgesAndAgesAtTheStoresInstant(t *testing.T) {
 	h, now := pinnedStoreHarness(t)
 	_, ticket := h.heldTicket(foreignStream, "session-a")
-	*now = storeEpoch.Add(30 * time.Minute)
+	*now = storeEpoch.Add(halfHourLater)
 
 	_, err := h.runTransitionAs(phaseSpec, ticket.ID, "session-b", "--to", string(model.PhaseReview))
 	holder := nameCheckout(model.NewAttribution(foreignStream, h.ap.Workspace.WorkspaceID))
@@ -82,7 +89,7 @@ func TestAClaimIsJudgedNoEarlierThanTheHistoryItRead(t *testing.T) {
 	epic, ticket := h.heldTicket(foreignStream, "session-a")
 	*now = storeEpoch.Add(-time.Hour)
 
-	cc, err := gatherClaimContext(h.ctx, runEnv(t), io.Discard, h.ap)
+	cc, err := gatherClaimContext(underInvocation(h.ctx), runEnv(t), io.Discard, h.ap)
 	if err != nil {
 		t.Fatalf("gatherClaimContext() error = %v", err)
 	}
@@ -92,5 +99,31 @@ func TestAClaimIsJudgedNoEarlierThanTheHistoryItRead(t *testing.T) {
 	line, ok := formatClaimLine(cc, model.LaneOf(ticket, &epic))
 	if !ok || !strings.Contains(line, "under a minute ago") {
 		t.Fatalf("claim line = (%q, %v), want the holder active under a minute ago", line, ok)
+	}
+}
+
+// A claim reading on a machine whose checkouts cannot be listed says so on
+// stderr and records it on the command's event, and still reads the claim on
+// freshness alone. The harness's checkout is not a git repository, so the
+// listing fails.
+func TestAClaimReadingThatCannotListCheckoutsSaysSoAndRecordsIt(t *testing.T) {
+	h, now := pinnedStoreHarness(t)
+	epic, ticket := h.heldTicket(foreignStream, "session-a")
+	*now = storeEpoch.Add(halfHourLater)
+
+	recorder := telemetry.Begin(telemetry.Event{})
+	var stderr bytes.Buffer
+	cc, err := gatherClaimContext(telemetry.With(h.ctx, recorder), runEnv(t), &stderr, h.ap)
+	if err != nil {
+		t.Fatalf("gatherClaimContext() error = %v", err)
+	}
+	if want := "warning: could not enumerate local checkouts"; !strings.HasPrefix(stderr.String(), want) {
+		t.Fatalf("stderr = %q, want it to open with %q", stderr.String(), want)
+	}
+	if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["claims.local_checkouts_enumerated"]; got != false {
+		t.Fatalf("claims.local_checkouts_enumerated = %v, want false", got)
+	}
+	if _, ok := formatClaimLine(cc, model.LaneOf(ticket, &epic)); !ok {
+		t.Fatalf("formatClaimLine rendered no line; want the claim freshness alone still holds")
 	}
 }
