@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/litbuild"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
 )
 
 // refusedWorkers is the launcher every invocation a test builds starts with
@@ -113,16 +113,16 @@ func workerRun(t testing.TB, stderr io.Writer) Invocation {
 }
 
 // An invocation built without a worker launcher, or with an environment that
-// carries no deadlines, is refused, where the same invocation given both runs.
-func TestRunRefusesAnInvocationGivenNoWorkersOrDeadlines(t *testing.T) {
+// carries no run facts, is refused, where the same invocation given both runs.
+func TestRunRefusesAnInvocationGivenNoWorkersOrRunFacts(t *testing.T) {
 	t.Parallel()
 	inv := dirInvocation(t, t.TempDir(), io.Discard, io.Discard, []string{"version"})
 	if err := Run(context.Background(), inv); err != nil {
-		t.Fatalf("lit version with workers and deadlines: %v", err)
+		t.Fatalf("lit version with workers and run facts: %v", err)
 	}
 	for name, drop := range map[string]func(*Invocation){
 		"worker launcher": func(inv *Invocation) { inv.Workers = nil },
-		"deadlines":       func(inv *Invocation) { inv.Env = inv.Env.WithDeadlines(deadline.Deadlines{}) },
+		"run facts":       func(inv *Invocation) { inv.Env = inv.Env.WithFacts(runfacts.Facts{}) },
 	} {
 		given := inv
 		drop(&given)

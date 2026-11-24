@@ -14,6 +14,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // The plan is only a plan if lit carries it out: every generation step must
@@ -111,8 +113,19 @@ func runLitIn(t *testing.T, dir string, env []string, budget time.Duration, args
 	// that did fails the test rather than start a lit nobody measured.
 	// [LAW:no-silent-failure]
 	noWorkers := cli.RefuseWorkers("the plan's lit runs with automatic sync disabled, so it starts no worker", func(err error) { t.Error(err) })
+	// The run facts a lit built from this tree runs with, composed as cmd/lit
+	// composes them: the build stamp's ceiling and policy, the shipped
+	// deadlines.
+	released, err := version.ReadReleasedSchemaCeiling()
+	if err != nil {
+		t.Fatalf("read the released-schema stamp: %v", err)
+	}
+	facts, err := runfacts.Of(deadline.Shipped(), released, version.RaisePolicyOf(version.Origin))
+	if err != nil {
+		t.Fatalf("compose the run's facts: %v", err)
+	}
 	inv := cli.Invocation{
-		Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env).WithDeadlines(deadline.Shipped()),
+		Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env).WithFacts(facts),
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
 		Workers: noWorkers,
 	}

@@ -101,7 +101,7 @@ func runEnv(t testing.TB) environ.Env {
 		scope := strings.Join(parts[:i+1], "/")
 		set = append(set, runEnvs[scope]...)
 		if d, ok := runDeadlines[scope]; ok {
-			env = env.WithDeadlines(d)
+			env = withFactParts(env, func(p *suiteenv.FactParts) { p.Deadlines = d })
 		}
 	}
 	return env.With(set...)
@@ -111,6 +111,14 @@ func runEnv(t testing.TB) environ.Env {
 // suiteenv.Of's. A test that sets entries of its own reads runEnv instead.
 func testEnv() environ.Env {
 	return suiteenv.Of(os.Environ())
+}
+
+// withFactParts is env with its run facts built from the suite's parts as
+// change leaves them, for a test whose subject is one fact.
+func withFactParts(env environ.Env, change func(*suiteenv.FactParts)) environ.Env {
+	parts := suiteenv.Parts()
+	change(&parts)
+	return env.WithFacts(parts.Facts())
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

@@ -3,14 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
-	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -33,15 +32,37 @@ type workerHandoff struct {
 	SyncRemote string `json:"sync_remote"`
 	// Project is the launcher's project config layer's content.
 	Project []byte `json:"project"`
-	// Deadlines, ReleasedSchema and RaisePolicy are the launcher's run's, off
-	// its Env, which the worker runs under in place of its own process's: a
-	// run's facts are the run's whole tree of processes. In production they
-	// equal the worker's own, since the launcher and the worker are one
-	// binary; a test's run hands its own. Deadlines reads back only as
-	// deadline.Of builds them. [LAW:one-source-of-truth]
-	Deadlines      deadline.Deadlines    `json:"deadlines"`
-	ReleasedSchema version.SchemaCeiling `json:"released_schema"`
-	RaisePolicy    version.RaisePolicy   `json:"raise_policy"`
+	// Facts are the launcher's run's facts, off its Env, which the worker runs
+	// under in place of its own process's: a run's facts are the run's whole
+	// tree of processes. In production they equal the worker's own, since the
+	// launcher and the worker are one binary; a test's run hands its own. They
+	// read back only through runfacts.Parse (decodeHandoff).
+	// [LAW:one-source-of-truth]
+	Facts runfacts.Facts `json:"facts"`
+}
+
+// decodeHandoff reads the handoff a launcher wrote. Its facts are read by
+// runfacts.Parse alone, which refuses a handoff that carries none and any fact
+// it leaves out, so a handoff that decodes is a run's whole.
+// [LAW:parse-dont-validate] [LAW:single-enforcer]
+func decodeHandoff(r io.Reader) (workerHandoff, error) {
+	// The outer Facts shadows the handoff's own, so the decoder hands Parse
+	// the facts' bytes — none at all when the key is missing — and builds
+	// nothing itself.
+	var wire struct {
+		workerHandoff
+		Facts json.RawMessage `json:"facts"`
+	}
+	if err := json.NewDecoder(r).Decode(&wire); err != nil {
+		return workerHandoff{}, err
+	}
+	facts, err := runfacts.Parse(wire.Facts)
+	if err != nil {
+		return workerHandoff{}, err
+	}
+	handoff := wire.workerHandoff
+	handoff.Facts = facts
+	return handoff, nil
 }
 
 // handoffOf is the handoff a command spawning a worker from ws, in env, gives
@@ -64,11 +85,9 @@ func handoffOf(ctx context.Context, ws workspace.Info, env environ.Env) (workerH
 		return workerHandoff{}, fmt.Errorf("read the project config for the worker: %w", err)
 	}
 	handoff := workerHandoff{
-		CheckoutRoot:   ws.Remotes.Root().String(),
-		Project:        project,
-		Deadlines:      env.Deadlines(),
-		ReleasedSchema: env.ReleasedSchema(),
-		RaisePolicy:    env.RaisePolicy(),
+		CheckoutRoot: ws.Remotes.Root().String(),
+		Project:      project,
+		Facts:        env.Facts(),
 	}
 	if found {
 		handoff.SyncRemote = chosen.Name()
@@ -92,7 +111,20 @@ type workerWorkspace interface {
 	// handed it when built, and as its own process's when the build failed,
 	// since nothing was handed.
 	runOf(inv Invocation) Invocation
+	// ranUnder is the run facts the worker runs under, given its own
+	// process's (own), and where they came from: runFactsHanded or
+	// runFactsOwn.
+	ranUnder(own runfacts.Facts) (runfacts.Facts, string)
 }
+
+// Where a worker's run facts came from, as its event records them.
+const (
+	// runFactsHanded: the spawner's, read off the handoff.
+	runFactsHanded = "handed"
+	// runFactsOwn: the worker process's own, since its handoff could not be
+	// read.
+	runFactsOwn = "own"
+)
 
 // builtWorker is a workspace built from the handoff, and the worker process's
 // environment under the run facts the handoff carried.
@@ -105,6 +137,10 @@ func (b builtWorker) info() workspace.Info { return b.ws }
 
 func (b builtWorker) runOf(inv Invocation) Invocation { return inv.withEnv(b.env) }
 
+func (b builtWorker) ranUnder(runfacts.Facts) (runfacts.Facts, string) {
+	return b.env.Facts(), runFactsHanded
+}
+
 // failedWorker is a build that failed, and why.
 type failedWorker struct {
 	ws  workspace.Info
@@ -115,13 +151,20 @@ func (f failedWorker) info() workspace.Info { return f.ws }
 
 func (f failedWorker) runOf(inv Invocation) Invocation { return inv }
 
+func (f failedWorker) ranUnder(own runfacts.Facts) (runfacts.Facts, string) {
+	return own, runFactsOwn
+}
+
 // buildWorkerWorkspace reads the handoff from stdin and builds the workspace
 // for the store at loc, in the worker process's env.
 func buildWorkerWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
 	built := handedWorkerWorkspace(env, loc, stdin)
-	// Every worker's event says which project layer it ran with, a failed
-	// build's included. [LAW:nothing-unseen]
+	// Every worker's event says which project layer it ran with and the run
+	// facts it ran under, a failed build's included. [LAW:nothing-unseen]
 	reportConfigLayers(ctx, stderr, env, built.info().Project)
+	facts, source := built.ranUnder(env.Facts())
+	telemetry.Set(ctx, "run_facts", facts)
+	telemetry.Set(ctx, "run_facts.source", source)
 	return built
 }
 
@@ -136,25 +179,13 @@ func handedWorkerWorkspace(env environ.Env, loc workspace.Location, stdin io.Rea
 }
 
 // handedWorkspace is the workspace the handoff on stdin builds, and env under
-// the run facts it carries. A handoff whose deadlines are present with a
-// figure missing or not positive does not decode (deadline.Deadlines.
-// UnmarshalJSON); one with no deadlines at all decodes to the zero value,
-// which no run can read, and is refused here. One that carries no
-// released-schema ceiling is refused too: every ceiling names its bound, so a
-// missing one is no ceiling at all, not a ceiling of 0.
-// [LAW:parse-dont-validate]
+// the run facts it carries.
 func handedWorkspace(env environ.Env, loc workspace.Location, stdin io.Reader) (workspace.Info, environ.Env, error) {
-	var handoff workerHandoff
-	if err := json.NewDecoder(stdin).Decode(&handoff); err != nil {
+	handoff, err := decodeHandoff(stdin)
+	if err != nil {
 		return workspace.Info{}, environ.Env{}, fmt.Errorf("read the launcher's handoff: %w", err)
 	}
-	if handoff.Deadlines.IsZero() {
-		return workspace.Info{}, environ.Env{}, errors.New("read the launcher's handoff: it carries no deadlines")
-	}
-	if handoff.ReleasedSchema.Bound == "" {
-		return workspace.Info{}, environ.Env{}, errors.New("read the launcher's handoff: it carries no released-schema ceiling")
-	}
-	handedEnv := env.WithDeadlines(handoff.Deadlines).WithReleasedSchema(handoff.ReleasedSchema).WithRaisePolicy(handoff.RaisePolicy)
+	handedEnv := env.WithFacts(handoff.Facts)
 	root, err := workspace.HandedCheckoutRoot(handoff.CheckoutRoot)
 	if err != nil {
 		return workspace.Info{}, environ.Env{}, err

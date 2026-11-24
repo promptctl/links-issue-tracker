@@ -44,7 +44,7 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 	snapshotsBefore := snapshotCount(t, doltRoot)
 
-	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, envWithCeiling(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
@@ -63,7 +63,7 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 	}
 
 	// At a ceiling that reaches the tree's schema, the same workspace migrates.
-	migrated, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max)), testStderr(), doltRoot, "test-workspace-id")
+	migrated, err := Open(ctx, envWithCeiling(ceilingAt(max)), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() with released schema %d = %v, want it to migrate", max, err)
 	}
@@ -78,7 +78,7 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 func TestCreatingAStoreIsNotBoundedByTheReleasedSchema(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(0)), testStderr(), filepath.Join(t.TempDir(), "dolt"), "ws")
+	st, err := Open(ctx, envWithCeiling(ceilingAt(0)), testStderr(), filepath.Join(t.TempDir(), "dolt"), "ws")
 	if err != nil {
 		t.Fatalf("Open() of a fresh store with released schema 0 = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAPushOfAStoreAboveTheReleasedSchemaSendsNothing(t *testing.T) {
 		t.Fatalf("Close(producer) = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), producer, "ws")
+	sync, err := OpenSync(ctx, envWithCeiling(ceilingAt(max-1)), testStderr(), producer, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestTheUnreleasedRefusalRunsBeforeDriftRepair(t *testing.T) {
 	}
 	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 
-	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, envWithCeiling(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
@@ -190,7 +190,7 @@ func TestAnUnreleasedRaiseOfAPreVersionedWorkspaceNamesItsShape(t *testing.T) {
 		t.Fatalf("Close(first) = %v", err)
 	}
 
-	_, err = Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
+	_, err = Open(ctx, envWithCeiling(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
@@ -212,7 +212,7 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 	max := registryMax(t)
 	st, _ := openWorkspaceForDowngrade(t)
 	mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id = ?`, max-1)
-	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 2))
+	st.env = envWithCeiling(ceilingAt(max - 2))
 
 	err := st.liftWorkingSetToRegistry(ctx, version.UnboundedSchemaCeiling())
 	var refused *SchemaCeilingError
@@ -256,7 +256,7 @@ func TestTheReconcileLiftRefusesToRaisePastTheReleasedSchema(t *testing.T) {
 	if _, err := st.Downgrade(ctx, max-1); err != nil {
 		t.Fatalf("Downgrade(%d) = %v", max-1, err)
 	}
-	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 1))
+	st.env = envWithCeiling(ceilingAt(max - 1))
 
 	err := st.liftWorkingSetToRegistry(ctx, version.UnboundedSchemaCeiling())
 	var refused *SchemaCeilingError
@@ -288,7 +288,7 @@ func TestADriftRepairAboveTheCeilingIsRefusedBeforeItWrites(t *testing.T) {
 	}
 	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 
-	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(1)), testStderr(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, envWithCeiling(ceilingAt(1)), testStderr(), doltRoot, "test-workspace-id")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() of a drifted workspace with released schema 1 = %v, want an SchemaCeilingError", err)

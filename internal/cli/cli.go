@@ -71,16 +71,17 @@ func dispatch(ctx context.Context, inv Invocation) error {
 	// An invocation built without an environment is refused as one, as Path
 	// refuses one built without a working directory, rather than run in the
 	// empty environment its zero Env would read as. So is one built without a
-	// worker launcher, or with an environment carrying no deadlines: no figure
-	// stands in for them, so none is one the run did not choose.
-	// [LAW:no-silent-failure]
+	// worker launcher, or with an environment carrying no run facts: no
+	// value stands in for them, so none is one the run did not choose.
+	// [LAW:no-silent-failure] [LAW:single-enforcer] the one check a run's
+	// facts meet; runfacts.Of built every set that passes it.
 	switch {
 	case inv.Env.IsZero():
 		return errors.New("the invocation was given no environment")
 	case inv.Workers == nil:
 		return errors.New("the invocation was given no worker launcher")
-	case inv.Env.Deadlines().IsZero():
-		return errors.New("the invocation was given no deadlines")
+	case inv.Env.Facts().IsZero():
+		return errors.New("the invocation was given no run facts")
 	}
 	stdout := inv.Stdout
 	normalizedArgs, err := parseGlobalArgs(inv.Args)

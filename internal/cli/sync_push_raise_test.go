@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -18,7 +19,7 @@ func runSourceBuildInDir(t *testing.T, dir string, args ...string) (string, erro
 	t.Helper()
 	var out bytes.Buffer
 	inv := dirInvocation(t, dir, &out, &out, args)
-	inv.Env = runEnv(t).WithRaisePolicy(version.RaisePolicy{})
+	inv.Env = withFactParts(runEnv(t), func(p *suiteenv.FactParts) { p.RaisePolicy = version.RaisePolicy{} })
 	return out.String(), Run(context.Background(), inv)
 }
 

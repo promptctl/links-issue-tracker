@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -40,28 +41,15 @@ type Env struct {
 	// that hands one Env to several runs shares the count among them. Git is
 	// its only writer and GitSpawns its reader.
 	gitSpawns *atomic.Int64
-	// releasedSchema is the highest schema version a published release
-	// carries, as cmd/lit read it from its build stamp
-	// (version.ReadReleasedSchemaCeiling). It is no environment variable: a
-	// variable could be set to lift it. It rides here because Env is the one
-	// value cmd/lit builds per run and every store open is handed, so the
-	// ceiling is passed in at the composition root rather than read as a
-	// global below it. Of leaves it 0, which moves no existing workspace's
-	// schema: an Env nobody gave a ceiling fails closed.
-	releasedSchema version.SchemaCeiling
-	// raisePolicy is whether this binary may raise a remote's schema, as
-	// cmd/lit built it from its build stamp (version.RaisePolicyOf). It rides
-	// here for the reason releasedSchema does, and Of leaves it the zero
-	// policy, which raises no remote: an Env nobody gave a policy fails closed.
-	raisePolicy version.RaisePolicy
-	// deadlines are what the run's background sync work runs under, as
-	// cmd/lit handed them (deadline.Shipped) or a worker's spawner handed it.
-	// They ride here for the reason releasedSchema does: every store open,
-	// every lock it waits on and every worker the run spawns is handed this
-	// Env. Of leaves them the zero Deadlines, which no figure can be read
-	// from: an Env nobody gave deadlines fails where it is asked for one, and
-	// cli.Run refuses it before that.
-	deadlines deadline.Deadlines
+	// facts are the run's facts (runfacts.Facts), as cmd/lit built them from
+	// its build stamps or a worker's spawner handed them. None is an
+	// environment variable: a variable could be set to lift a ceiling. They
+	// ride here because Env is the one value a run is composed with and every
+	// store open, every lock wait and every worker the run spawns is handed,
+	// so they are passed in at the composition root rather than read as
+	// globals below it. Of leaves them the zero Facts, which no fact can be
+	// read from, and cli.Run refuses an invocation whose Env carries none.
+	facts runfacts.Facts
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -170,44 +158,28 @@ func (e Env) With(set ...string) Env {
 	return e
 }
 
-// WithReleasedSchema is the environment with its released-schema ceiling set
-// to ceiling: no existing workspace is migrated past it, and no commit above
-// it is pushed.
-func (e Env) WithReleasedSchema(ceiling version.SchemaCeiling) Env {
-	e.releasedSchema = ceiling
+// WithFacts is the environment with the run's facts set to facts.
+func (e Env) WithFacts(facts runfacts.Facts) Env {
+	e.facts = facts
 	return e
 }
 
-// ReleasedSchema is the released-schema ceiling WithReleasedSchema set; its
-// Max is 0 when none was.
-func (e Env) ReleasedSchema() version.SchemaCeiling {
-	return e.releasedSchema
+// Facts is the run's facts WithFacts set; the zero Facts when none were.
+func (e Env) Facts() runfacts.Facts {
+	return e.facts
 }
 
-// WithRaisePolicy is the environment with its raise policy set to policy: a
-// push that would raise a remote's schema lands only as the policy permits.
-func (e Env) WithRaisePolicy(policy version.RaisePolicy) Env {
-	e.raisePolicy = policy
-	return e
-}
+// Deadlines, ReleasedSchema and RaisePolicy read the run's facts off the one
+// value that carries them (Facts).
 
-// RaisePolicy is the raise policy WithRaisePolicy set; the zero policy, which
-// raises nothing, when none was.
-func (e Env) RaisePolicy() version.RaisePolicy {
-	return e.raisePolicy
-}
+// Deadlines is the deadlines the run's work runs under.
+func (e Env) Deadlines() deadline.Deadlines { return e.facts.Deadlines() }
 
-// WithDeadlines is the environment with the run's deadlines set to d.
-func (e Env) WithDeadlines(d deadline.Deadlines) Env {
-	e.deadlines = d
-	return e
-}
+// ReleasedSchema is the run's released-schema ceiling.
+func (e Env) ReleasedSchema() version.SchemaCeiling { return e.facts.ReleasedSchema() }
 
-// Deadlines is the run's deadlines WithDeadlines set; the zero Deadlines
-// when none were.
-func (e Env) Deadlines() deadline.Deadlines {
-	return e.deadlines
-}
+// RaisePolicy is whether the run may raise a remote's schema.
+func (e Env) RaisePolicy() version.RaisePolicy { return e.facts.RaisePolicy() }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is
 // never nil: os/exec and gitcmd read a nil list as "inherit the process",

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
@@ -29,7 +30,7 @@ func workerHandoffStdin(t testing.TB, dir string) string {
 func workerHandoffStdinUnder(t testing.TB, dir string, deadlines deadline.Deadlines) string {
 	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	handoff, err := handoffOf(underInvocation(context.Background()), ws, runEnv(t).WithDeadlines(deadlines))
+	handoff, err := handoffOf(underInvocation(context.Background()), ws, withFactParts(runEnv(t), func(p *suiteenv.FactParts) { p.Deadlines = deadlines }))
 	if err != nil {
 		t.Fatalf("handoffOf(%s): %v", dir, err)
 	}
@@ -90,21 +91,22 @@ func twoRemoteCheckout(t *testing.T) string {
 	return root
 }
 
-// A worker handed a handoff builds the workspace its launcher had, and a
-// worker that launches a worker hands on exactly what it was handed.
+// A worker handed a handoff builds the workspace its launcher had, runs under
+// the launcher's run facts and says so on its event, and a worker that
+// launches a worker hands on exactly what it was handed.
 func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	ws := workspacetest.Resolved(t, runEnv(t), root)
-	ctx := underInvocation(context.Background())
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
 	// The launcher's run carries facts the worker's own process does not, so
 	// the build can only have them from the handoff.
-	launcherDeadlines, err := deadline.Of(deadline.Figures{MirrorHold: time.Second, MirrorPush: 2 * time.Second, Receive: 3 * time.Second, PushProof: 4 * time.Second, Compaction: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	launcherCeiling := version.SchemaCeiling{Max: 7, Source: "the launcher's own", Bound: version.BoundReleased}
-	launcher := runEnv(t).WithDeadlines(launcherDeadlines).WithReleasedSchema(launcherCeiling).WithRaisePolicy(version.RaisePolicy{Release: false})
+	launcher := withFactParts(runEnv(t), func(p *suiteenv.FactParts) {
+		p.Deadlines = launcherDeadlines(t)
+		p.ReleasedSchema = version.SchemaCeiling{Max: 7, Source: "the launcher's own", Bound: version.BoundReleased}
+		p.RaisePolicy = version.RaisePolicy{Release: false}
+	})
 	handed, err := handoffOf(ctx, ws, launcher)
 	if err != nil {
 		t.Fatal(err)
@@ -123,9 +125,13 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if built.ws.WorkspaceID != ws.WorkspaceID || built.ws.Project.Source() != "handed" {
 		t.Fatalf("built workspace id %q source %q; want %q handed", built.ws.WorkspaceID, built.ws.Project.Source(), ws.WorkspaceID)
 	}
-	if built.env.Deadlines() != launcherDeadlines || built.env.ReleasedSchema() != launcherCeiling || built.env.RaisePolicy() != (version.RaisePolicy{Release: false}) {
-		t.Fatalf("the worker runs under deadlines %+v, ceiling %+v, policy %+v; want the launcher's %+v, %+v, a non-release's",
-			built.env.Deadlines().Figures(), built.env.ReleasedSchema(), built.env.RaisePolicy(), launcherDeadlines.Figures(), launcherCeiling)
+	if built.env.Facts() != launcher.Facts() {
+		t.Fatalf("the worker runs under deadlines %+v, ceiling %+v, policy %+v; want the launcher's %+v, %+v, %+v",
+			built.env.Deadlines().Figures(), built.env.ReleasedSchema(), built.env.RaisePolicy(), launcher.Deadlines().Figures(), launcher.ReleasedSchema(), launcher.RaisePolicy())
+	}
+	ev := recorder.Finish(invocationEnd(time.Now(), nil, nil))
+	if ev.Facts["run_facts"] != launcher.Facts() || ev.Facts["run_facts.source"] != runFactsHanded {
+		t.Fatalf("the worker's event records run facts %+v from %v; want the launcher's, handed", ev.Facts["run_facts"], ev.Facts["run_facts.source"])
 	}
 	reHanded, err := handoffOf(ctx, built.ws, built.env)
 	if err != nil {
@@ -136,16 +142,26 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	}
 }
 
+// launcherDeadlines are deadlines no suite run carries, every figure its own,
+// so a worker can only run under them by being handed them.
+func launcherDeadlines(t testing.TB) deadline.Deadlines {
+	t.Helper()
+	d, err := deadline.Of(deadline.Figures{MirrorHold: time.Second, MirrorPush: 2 * time.Second, Receive: 3 * time.Second, PushProof: 4 * time.Second, Compaction: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 // A handoff that does not carry every run fact the worker runs under is no
-// handoff: a deadline missing or not positive, or no released-schema ceiling,
-// fails the build, naming what is missing, and the failed build has no run
-// facts to read.
+// handoff: no facts at all, a fact or a field of one missing, or a deadline
+// that is not positive fails the build, naming what is missing. The failed
+// build runs under its own process's facts, and its event says so.
 func TestAHandoffWithoutItsRunFactsIsRefused(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	ws := workspacetest.Resolved(t, runEnv(t), root)
-	ctx := underInvocation(context.Background())
-	handed, err := handoffOf(ctx, ws, runEnv(t))
+	handed, err := handoffOf(underInvocation(context.Background()), ws, runEnv(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,44 +169,60 @@ func TestAHandoffWithoutItsRunFactsIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		t.Fatal(err)
-	}
-	var figures map[string]json.RawMessage
-	if err := json.Unmarshal(fields["deadlines"], &figures); err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
 		name string
-		edit func(fields, figures map[string]json.RawMessage)
+		path []string
+		set  json.RawMessage // nil deletes the key at path
 		want string
 	}{
-		{"a deadline of zero", func(_, figures map[string]json.RawMessage) { figures["receive"] = json.RawMessage("0") }, "the receive deadline must be positive"},
-		{"a deadline missing", func(_, figures map[string]json.RawMessage) { delete(figures, "push_proof") }, "the push proof deadline must be positive"},
-		{"no deadlines", func(fields, _ map[string]json.RawMessage) { delete(fields, "deadlines") }, "carries no deadlines"},
-		{"no released-schema ceiling", func(fields, _ map[string]json.RawMessage) { delete(fields, "released_schema") }, "carries no released-schema ceiling"},
+		{"no run facts", []string{"facts"}, nil, "carries no run facts"},
+		{"no deadlines", []string{"facts", "deadlines"}, nil, "carry no deadlines"},
+		{"a deadline of zero", []string{"facts", "deadlines", "receive"}, json.RawMessage("0"), "the receive deadline must be positive"},
+		{"a deadline missing", []string{"facts", "deadlines", "push_proof"}, nil, "the push proof deadline must be positive"},
+		{"no released-schema ceiling", []string{"facts", "released_schema"}, nil, "carry no released_schema"},
+		{"a ceiling with no maximum", []string{"facts", "released_schema", "max"}, nil, "carry no released_schema.max"},
+		{"a ceiling of another bound", []string{"facts", "released_schema", "bound"}, json.RawMessage(`"hold"`), `must be the "released" bound`},
+		{"no raise policy", []string{"facts", "raise_policy"}, nil, "carry no raise_policy"},
+		{"a raise policy that says nothing", []string{"facts", "raise_policy", "release"}, nil, "carry no raise_policy.release"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			editedFields, editedFigures := maps.Clone(fields), maps.Clone(figures)
-			tc.edit(editedFields, editedFigures)
-			if _, ok := editedFields["deadlines"]; ok {
-				encoded, err := json.Marshal(editedFigures)
-				if err != nil {
-					t.Fatal(err)
-				}
-				editedFields["deadlines"] = encoded
-			}
-			edited, err := json.Marshal(editedFields)
-			if err != nil {
-				t.Fatal(err)
-			}
+			edited := editJSON(t, payload, tc.path, tc.set)
+			recorder := telemetry.Begin(telemetry.Event{})
+			ctx := telemetry.With(context.Background(), recorder)
 			failed, ok := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), ws.Location, strings.NewReader(string(edited))).(failedWorker)
 			if !ok || !strings.Contains(failed.err.Error(), tc.want) {
 				t.Fatalf("buildWorkerWorkspace(%s) = %+v; want a failed build naming %q", edited, failed, tc.want)
 			}
+			ev := recorder.Finish(invocationEnd(time.Now(), nil, nil))
+			if ev.Facts["run_facts"] != runEnv(t).Facts() || ev.Facts["run_facts.source"] != runFactsOwn {
+				t.Fatalf("the failed build's event records run facts %+v from %v; want its own process's, own", ev.Facts["run_facts"], ev.Facts["run_facts.source"])
+			}
 		})
 	}
+}
+
+// editJSON is doc with the value at path set to set, or the key deleted when
+// set is nil.
+func editJSON(t *testing.T, doc []byte, path []string, set json.RawMessage) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &fields); err != nil {
+		t.Fatalf("decode %s: %v", doc, err)
+	}
+	if len(path) == 1 {
+		if set == nil {
+			delete(fields, path[0])
+		} else {
+			fields[path[0]] = set
+		}
+	} else {
+		fields[path[0]] = editJSON(t, fields[path[0]], path[1:], set)
+	}
+	edited, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return edited
 }
 
 // What a spawn starts is decided from values alone: the worker runs in its
@@ -198,7 +230,7 @@ func TestAHandoffWithoutItsRunFactsIsRefused(t *testing.T) {
 // in the environment it was given, reading the handoff's own encoding.
 func TestTheWorkerSpecIsTheSpawnsDecision(t *testing.T) {
 	t.Parallel()
-	handoff := workerHandoff{CheckoutRoot: "/checkout", SyncRemote: "origin", Project: []byte("[sync]\n"), Deadlines: deadline.Shipped(), ReleasedSchema: version.SchemaCeiling{Max: 3, Source: "s", Bound: version.BoundReleased}}
+	handoff := workerHandoff{CheckoutRoot: "/checkout", SyncRemote: "origin", Project: []byte("[sync]\n"), Facts: runEnv(t).Facts()}
 	from, err := parseSpawner("4242")
 	if err != nil {
 		t.Fatal(err)
@@ -214,8 +246,8 @@ func TestTheWorkerSpecIsTheSpawnsDecision(t *testing.T) {
 	if v, _ := spec.env.Lookup("WORKER_ONLY"); v != "1" {
 		t.Fatalf("spec env %v; want the environment it was given", spec.env.List())
 	}
-	var decoded workerHandoff
-	if err := json.Unmarshal(spec.handoff, &decoded); err != nil || !reflect.DeepEqual(decoded, handoff) {
+	decoded, err := decodeHandoff(strings.NewReader(string(spec.handoff)))
+	if err != nil || !reflect.DeepEqual(decoded, handoff) {
 		t.Fatalf("spec handoff decodes to %+v, %v; want %+v", decoded, err, handoff)
 	}
 	if spec.holds != nil || spec.log != nil {

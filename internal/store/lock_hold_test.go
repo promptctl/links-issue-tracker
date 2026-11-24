@@ -335,7 +335,7 @@ func contend(t *testing.T, env environ.Env, open func(context.Context, string) (
 
 // envWithHold is the suite's environment under suiteenv.WithHold.
 func envWithHold(hold time.Duration) environ.Env {
-	return testEnv().WithDeadlines(suiteenv.WithHold(hold))
+	return envWithDeadlines(suiteenv.WithHold(hold))
 }
 
 // The ticket's bar: a routine holder whose engine work outlasts the wait many

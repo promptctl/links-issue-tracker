@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -62,21 +63,45 @@ func WithHold(hold time.Duration) deadline.Deadlines {
 	return d
 }
 
-// Of is entries as an environ.Env whose released-schema ceiling is this tree's
-// own highest migration, so a suite exercises every migration the tree
-// carries, whose raise policy is a release's, so a suite's stores raise as a
-// released lit's would, and whose deadlines are the suite's (Deadlines). Every
-// field a suite's Env needs is added here, once.
-// The config path overrides are left out, so no test runs under a config file
-// the developer's shell points at; a test of an override sets it itself.
-func Of(entries []string) environ.Env {
+// FactParts are a suite run's facts as the three values runfacts.Of builds
+// them from, for a test that hands its runs one of its own: it changes the
+// part its subject is and builds the whole (Facts).
+type FactParts struct {
+	Deadlines      deadline.Deadlines
+	ReleasedSchema version.SchemaCeiling
+	RaisePolicy    version.RaisePolicy
+}
+
+// Parts is the suite's run facts: a released-schema ceiling at this tree's own
+// highest migration, so a suite exercises every migration the tree carries; a
+// release's raise policy, so a suite's stores raise as a released lit's would;
+// and the suite's deadlines (Deadlines).
+func Parts() FactParts {
 	max, err := maxVersion()
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(entries).
-		Without(config.PathEnvVars()...).
-		WithReleasedSchema(version.SchemaCeiling{Max: max, Bound: version.BoundReleased, Source: "the test suite runs every migration this tree carries"}).
-		WithRaisePolicy(version.RaisePolicy{Release: true}).
-		WithDeadlines(Deadlines())
+	return FactParts{
+		Deadlines:      Deadlines(),
+		ReleasedSchema: version.SchemaCeiling{Max: max, Bound: version.BoundReleased, Source: "the test suite runs every migration this tree carries"},
+		RaisePolicy:    version.RaisePolicy{Release: true},
+	}
+}
+
+// Facts is p built into a run's facts. Parts that runfacts.Of refuses panic,
+// as Deadlines does: they are the test's own constants.
+func (p FactParts) Facts() runfacts.Facts {
+	facts, err := runfacts.Of(p.Deadlines, p.ReleasedSchema, p.RaisePolicy)
+	if err != nil {
+		panic("build a suite run's facts: " + err.Error())
+	}
+	return facts
+}
+
+// Of is entries as an environ.Env carrying the suite's run facts (Parts).
+// Every field a suite's Env needs is added here, once. The config path
+// overrides are left out, so no test runs under a config file the developer's
+// shell points at; a test of an override sets it itself.
+func Of(entries []string) environ.Env {
+	return environ.Of(entries).Without(config.PathEnvVars()...).WithFacts(Parts().Facts())
 }

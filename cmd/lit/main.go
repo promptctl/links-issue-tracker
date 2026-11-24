@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
+	"github.com/promptctl/links-issue-tracker/internal/runfacts"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -45,16 +46,20 @@ func main() {
 
 // processInvocation is the run this process is: everything the run would
 // otherwise read from the process, read here, once. [LAW:effects-at-boundaries]
-// The released-schema ceiling and the raise policy are read from this
-// binary's build stamp here and nowhere below, and the deadlines are the
-// shipped ones: all three ride the run's Env to every store open, and the run
-// hands them to each worker it spawns. The workers are started as this
+// The run's facts are built here, once: the released-schema ceiling and the
+// raise policy from this binary's build stamp, read nowhere below, and the
+// shipped deadlines. They ride the run's Env whole to every store open, and
+// the run hands them to each worker it spawns. The workers are started as this
 // binary, so a process that cannot name its own executable fails here, before
 // the run, rather than at its first spawn.
 func processInvocation() (cli.Invocation, error) {
 	released, err := version.ReadReleasedSchemaCeiling()
 	if err != nil {
 		return cli.Invocation{}, err
+	}
+	facts, err := runfacts.Of(deadline.Shipped(), released, version.RaisePolicyOf(version.Origin))
+	if err != nil {
+		return cli.Invocation{}, fmt.Errorf("compose the run's facts: %w", err)
 	}
 	program, err := os.Executable()
 	if err != nil {
@@ -63,7 +68,7 @@ func processInvocation() (cli.Invocation, error) {
 	return cli.Invocation{
 		Dir:     cli.WorkingDirOf(os.Getwd()),
 		Args:    os.Args[1:],
-		Env:     environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)).WithDeadlines(deadline.Shipped()),
+		Env:     environ.Of(os.Environ()).WithFacts(facts),
 		Stdin:   os.Stdin,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,

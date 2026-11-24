@@ -149,7 +149,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 	olderHead := seedOlderSchemaRemote(t, ctx, producer, remoteURL)
 	adoptAndMigrate(t, ctx, consumer, remoteURL)
 
-	st, err := OpenSync(ctx, testEnv().WithRaisePolicy(sourceBuild), testStderr(), consumer, "ws")
+	st, err := OpenSync(ctx, envWithPolicy(sourceBuild), testStderr(), consumer, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) = %v", err)
 	}
@@ -173,7 +173,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 		t.Fatalf("remote head after the refused push = %s, want %s untouched", got, olderHead)
 	}
 
-	st.env = testEnv().WithRaisePolicy(releaseBuild)
+	st.env = envWithPolicy(releaseBuild)
 	if _, err := st.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush from a release = %v", err)
 	}
@@ -194,7 +194,7 @@ func TestASourceBuildRefusesToPushWithNoRemoteHead(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 	origin := remoteName(t, "origin")
 
-	st, err := OpenSync(ctx, testEnv().WithRaisePolicy(sourceBuild), testStderr(), root, "ws")
+	st, err := OpenSync(ctx, envWithPolicy(sourceBuild), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync = %v", err)
 	}
@@ -227,7 +227,7 @@ func TestASourceBuildPushesAtTheRemotesSchema(t *testing.T) {
 	epic := seedReconcileRemote(t, ctx, producer, remoteURL)
 	adoptRemote(t, ctx, consumer, remoteURL)
 	createAndPush := func() {
-		st, err := Open(ctx, testEnv().WithRaisePolicy(sourceBuild), testStderr(), consumer, "ws")
+		st, err := Open(ctx, envWithPolicy(sourceBuild), testStderr(), consumer, "ws")
 		if err != nil {
 			t.Fatalf("Open(consumer) = %v", err)
 		}
@@ -240,7 +240,7 @@ func TestASourceBuildPushesAtTheRemotesSchema(t *testing.T) {
 	}
 	createAndPush()
 
-	st, err := OpenSync(ctx, testEnv().WithRaisePolicy(sourceBuild), testStderr(), consumer, "ws")
+	st, err := OpenSync(ctx, envWithPolicy(sourceBuild), testStderr(), consumer, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) = %v", err)
 	}
@@ -267,7 +267,7 @@ func TestALeasedPushFromASourceBuildNeverRaisesARemote(t *testing.T) {
 	olderHead := seedOlderSchemaRemote(t, ctx, producer, remoteURL)
 	adoptAndMigrate(t, ctx, consumer, remoteURL)
 
-	st, err := OpenSync(ctx, testEnv().WithRaisePolicy(sourceBuild), testStderr(), consumer, "ws")
+	st, err := OpenSync(ctx, envWithPolicy(sourceBuild), testStderr(), consumer, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) = %v", err)
 	}
