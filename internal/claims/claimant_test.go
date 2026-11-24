@@ -6,6 +6,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 // fieldUpdate is the verb a plain field edit records: none at all. Named so the
@@ -315,6 +316,31 @@ func TestPlanStatusStartEstablishesAnUnheldClaimant(t *testing.T) {
 	}
 	if !plan.Records() {
 		t.Error("a first start recorded nothing: it is a real claim that owes a write")
+	}
+}
+
+// TestPlanStatusWriteHandsOverOnlyAWriteItOwes: the handover comes out of the
+// same decision as the write. A start by another checkout owes a write and
+// hands the claim from the holder to it; a done on a ticket already closed
+// owes none, so there is no write to stamp and no handover to report.
+func TestPlanStatusWriteHandsOverOnlyAWriteItOwes(t *testing.T) {
+	at := stamp.Next(now, time.Time{})
+	issue, events := heldTicket(t)
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+
+	write, owed := planStatus(t, issue, events, model.Start{Assignee: "bob"}, streamB).Write(at)
+	if !owed {
+		t.Fatal("a start by another checkout owes no write: the claim moved and nothing records it")
+	}
+	want := claims.Handover{From: heldByA, To: claims.Claimant{Established: true, Assignee: "bob", Checkout: streamB}}
+	if write.Handover == nil || *write.Handover != want {
+		t.Errorf("Write(start by %s).Handover = %+v, want %+v", streamB.Stream(), write.Handover, want)
+	}
+
+	closed := leaf(t, "T", "", model.StateClosed)
+	closed.Assignee = "ada"
+	if write, owed := planStatus(t, closed, events, model.Done{}, streamB).Write(at); owed {
+		t.Errorf("Write(done on closed) = %+v, owed; want no write and no handover", write)
 	}
 }
 

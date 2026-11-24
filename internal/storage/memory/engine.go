@@ -416,7 +416,7 @@ type eventSpec struct {
 // work mutation carries its checkout's attribution pair" is a property of this
 // write path and not an obligation on every call site that could be forgotten
 // at one of them. [LAW:single-enforcer]
-func (e *Engine) recordEvent(issueID model.ID, spec eventSpec, now time.Time) {
+func (e *Engine) recordEvent(issueID model.ID, spec eventSpec, at stamp.Instant) {
 	actor := storage.Actor(spec.actor)
 	e.events[issueID] = append(e.events[issueID], model.IssueEvent{
 		ID:          model.ID("evt-" + uuid.NewString()),
@@ -424,7 +424,7 @@ func (e *Engine) recordEvent(issueID model.ID, spec eventSpec, now time.Time) {
 		Action:      strings.TrimSpace(spec.action),
 		Reason:      model.Text(strings.TrimSpace(spec.reason)),
 		Actor:       model.Text(actor),
-		CreatedAt:   now,
+		CreatedAt:   at.Time(),
 		Attribution: e.attribution,
 		Changes:     spec.changes,
 	})
@@ -433,9 +433,9 @@ func (e *Engine) recordEvent(issueID model.ID, spec eventSpec, now time.Time) {
 // recordEvents writes every event a mutation owed, in the order it owed them.
 // A mutation that moved nothing owes none, which is how a pure no-op leaves
 // the history untouched without anybody testing for it.
-func (e *Engine) recordEvents(issueID model.ID, specs []eventSpec, now time.Time) {
+func (e *Engine) recordEvents(issueID model.ID, specs []eventSpec, at stamp.Instant) {
 	for _, spec := range specs {
-		e.recordEvent(issueID, spec, now)
+		e.recordEvent(issueID, spec, at)
 	}
 }
 

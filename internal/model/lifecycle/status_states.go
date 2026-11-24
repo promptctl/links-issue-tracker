@@ -24,8 +24,14 @@ import (
 // [LAW:one-type-per-behavior] One contract identifies "this lifecycle is an
 // own-able leaf status" so the projection boundary discriminates on it instead
 // of enumerating concrete variants.
+//
+// [LAW:types-are-the-program] Sealed by the unexported isStatusPrimitive, as
+// StatusAction and Outcome are: Apply returns its receiver for a same-state
+// call, so an outside type with these methods would pass through it untouched
+// and skip NewStatus's pairing rules.
 type StatusPrimitive interface {
 	Lifecycle
+	isStatusPrimitive()
 	// ClosedAt is the close timestamp, present only on the closed state and nil
 	// on every other. The projection seam reads it without knowing the variant.
 	ClosedAt() *time.Time
@@ -44,6 +50,7 @@ type StatusPrimitive interface {
 
 type openState struct{}
 
+func (openState) isStatusPrimitive() {}
 func (openState) State() State       { return Open }
 func (openState) Progress() Progress { return Progress{Open: 1, Total: 1} }
 func (openState) ClosedAt() *time.Time {
@@ -58,6 +65,7 @@ func (openState) RedirectTarget() *string {
 
 type inProgressState struct{}
 
+func (inProgressState) isStatusPrimitive() {}
 func (inProgressState) State() State       { return InProgress }
 func (inProgressState) Progress() Progress { return Progress{InProgress: 1, Total: 1} }
 func (inProgressState) ClosedAt() *time.Time {
@@ -90,6 +98,7 @@ type closedState struct {
 	redirectTarget *string
 }
 
+func (closedState) isStatusPrimitive() {}
 func (closedState) State() State       { return Closed }
 func (closedState) Progress() Progress { return Progress{Closed: 1, Total: 1} }
 func (c closedState) ClosedAt() *time.Time {
@@ -153,7 +162,7 @@ func Apply(current StatusPrimitive, action StatusAction, at stamp.Instant) Statu
 // re-close keeps the close time and outcome it already records and a caller
 // asks here, with no instant, whether a transition moves anything.
 // [LAW:one-source-of-truth] the one owner of the same-state rule.
-func Moves(current Lifecycle, action StatusAction) bool {
+func Moves(current StatusPrimitive, action StatusAction) bool {
 	return current.State() != action.Target()
 }
 

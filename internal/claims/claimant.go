@@ -2,6 +2,7 @@ package claims
 
 import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 // Claimant is who the record names as holding one ticket: the assignee written
@@ -66,13 +67,8 @@ type Handover struct {
 // HandoverTo is the handover a write moving the claimant from c to next
 // records, and nil when it records none: nobody had taken the ticket, so there
 // was no claim to pass on, or the holder — the checkout — did not change. A new
-// assignee in the same checkout is a write and no handover.
-//
-// It reads the same pair StatusPlan.Records compares, and is the narrower of
-// the two questions: a handover moves the checkout, so the pair differs and
-// the write is owed, while a write need not hand anything over. A caller is
-// therefore never told of a handover for a write that was not made.
-// [LAW:one-source-of-truth] the pair is the one record both questions read.
+// assignee in the same checkout is a write and no handover. A status
+// transition asks it only of a write StatusPlan.Write has decided is owed.
 func (c Claimant) HandoverTo(next Claimant) *Handover {
 	if !c.Held() || next.Checkout == c.Checkout {
 		return nil
@@ -100,10 +96,9 @@ func (h Handover) Live(lane Standing) bool {
 // [LAW:one-source-of-truth]
 //
 // The plan holds no instant, so the gate asks it what a transition records
-// without one; only a write, through the change's Updated, builds the stamped
-// post-state.
+// without one; only a write, through Write, builds the stamped post-state.
 type StatusPlan struct {
-	model.StatusChange
+	change      model.StatusChange
 	Prior, Post Claimant
 }
 
@@ -125,10 +120,10 @@ func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.Statu
 	}
 	prior := ClaimantOf(issue, events)
 	post := prior
-	if assignee, takes := change.Taking(); takes {
-		post = Claimant{Established: true, Assignee: assignee, Checkout: taker}
+	if take, takes := change.Taking(); takes {
+		post = Claimant{Established: true, Assignee: take.Assignee, Checkout: taker}
 	}
-	return StatusPlan{StatusChange: change, Prior: prior, Post: post}, nil
+	return StatusPlan{change: change, Prior: prior, Post: post}, nil
 }
 
 // Records reports that the transition writes: it moves the status, the
@@ -136,11 +131,28 @@ func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.Statu
 // already hold is the documented no-op — history records mutations that
 // happened, not calls that were made. A same-state start that moves the
 // claimant records who took the ticket. So does a start that takes back a
-// lane a sibling's start moved away (model.Start.Reclaim), even though this
+// lane a sibling's start moved away (model.Take.Reclaim), even though this
 // ticket's own claimant has not changed.
 func (p StatusPlan) Records() bool {
-	return p.Changed() || p.Post != p.Prior || p.Reclaims()
+	return p.change.Changed() || p.Post != p.Prior || p.change.Reclaims()
 }
 
-// Handover is the claim passing hands this transition records, nil for none.
-func (p StatusPlan) Handover() *Handover { return p.Prior.HandoverTo(p.Post) }
+// StatusWrite is what a recorded status transition writes: the stamped issue,
+// the change rows that record it, and the claim it hands over, nil for none.
+type StatusWrite struct {
+	Issue    model.Issue
+	Changes  []model.FieldChange
+	Handover *Handover
+}
+
+// Write is the write the transition owes at at, the write's stamp, and false
+// when Records says it owes none. The handover comes out of the same decision,
+// so a caller is never told of a handover for a write that was not made.
+// [LAW:one-source-of-truth]
+func (p StatusPlan) Write(at stamp.Instant) (StatusWrite, bool) {
+	if !p.Records() {
+		return StatusWrite{}, false
+	}
+	issue, changes := p.change.Write(at)
+	return StatusWrite{Issue: issue, Changes: changes, Handover: p.Prior.HandoverTo(p.Post)}, true
+}

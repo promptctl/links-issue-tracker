@@ -13,13 +13,15 @@ import (
 // its own history, so the write's stamp steps past that history rather than
 // taking the clock's reading. The close time, the row's updated_at and the
 // close event's created_at are one instant all the same, the stamp, and each
-// reads back in UTC, the contract's one form.
+// reads back in UTC, the contract's one form. The clock reads in a zone that
+// is not UTC, so the form is the engine's doing and not the clock's.
 func aCloseRecordsTheInstantItsWriteIsStamped(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	clk.Pin(laterInstant)
+	offset := time.FixedZone("UTC-5", -5*60*60)
+	clk.Pin(laterInstant.In(offset))
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
-	clk.Pin(earlierInstant)
+	clk.Pin(earlierInstant.In(offset))
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply done error = %v", err)
 	}

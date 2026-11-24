@@ -478,7 +478,7 @@ var _ Refusal = FrozenIssueError{}
 // [LAW:effects-at-boundaries] Planning takes no instant: whether the action is
 // refused and whether it moves the status are decided before anyone knows when
 // the write lands, so a caller that only asks — the CLI's hold gate — has no
-// instant to invent. Only StatusChange.Updated, the write's step, is handed one.
+// instant to invent. Only StatusChange.Write, the write's step, is handed one.
 func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
@@ -516,100 +516,119 @@ func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
 		return StatusChange{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
 	}
+	leaf, ok := root.(lifecycle.StatusPrimitive)
+	if !ok {
+		return StatusChange{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
+	}
 	// A start assigns the issue to whoever starts it, so the start is refused
 	// here, the check `lit start` runs before its takeover gate and both
-	// engines run before writing. The change carries the start with its
-	// assignee in canonical form, so nothing downstream normalizes it again.
+	// engines run before writing. The start is read once, into the Take the
+	// change carries, so the assignee is parsed here and nothing downstream
+	// asks the action whether it takes the ticket, or normalizes who for.
 	// [LAW:single-enforcer] [LAW:parse-dont-validate]
+	change := StatusChange{issue: i, leaf: leaf, action: action}
 	if start, ok := action.(lifecycle.Start); ok {
 		assignee, err := NormalizeAssignee(start.Assignee)
 		if err != nil {
 			return StatusChange{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
 		}
-		start.Assignee = assignee
-		action = start
+		change.take = &Take{Assignee: Text(assignee), Reclaim: start.Reclaim}
 	}
-	if _, ok := root.(lifecycle.StatusPrimitive); !ok {
-		return StatusChange{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
-	}
-	return StatusChange{issue: i, action: action}, nil
+	return change, nil
 }
 
 // StatusChange is a status action the issue has accepted, not yet stamped:
 // the refusals are behind it, so what remains cannot fail. Only PlanStatus
-// builds one, and the issue it holds is the one copy of the leaf the action
-// moves.
+// builds one, and it holds what PlanStatus proved — the leaf the action moves
+// and, for a start, the parsed Take — so nothing reads them off the issue or
+// the action again. [LAW:parse-dont-validate]
 type StatusChange struct {
 	issue  Issue
+	leaf   lifecycle.StatusPrimitive
 	action lifecycle.StatusAction
+	take   *Take
 }
 
-// leaf is the leaf status PlanStatus proved the issue's root to be. A
-// StatusChange built anywhere else holds none, and that is a programmer error
-// said here rather than a nil dereference somewhere inside the machine.
-// [LAW:no-silent-failure]
-func (c StatusChange) leaf() lifecycle.StatusPrimitive {
-	leaf, ok := c.issue.lifecycle.(lifecycle.StatusPrimitive)
-	if !ok {
-		panic("model: a StatusChange is built only by Issue.PlanStatus")
-	}
-	return leaf
+// Take is a start's taking of the ticket: the assignee it takes the ticket
+// for, in canonical form, and whether it takes back a lane a sibling's start
+// moved away (lifecycle.Start.Reclaim).
+type Take struct {
+	Assignee Text
+	Reclaim  bool
 }
 
 // Changed reports whether the action moves the status.
-func (c StatusChange) Changed() bool { return lifecycle.Moves(c.leaf(), c.action) }
+func (c StatusChange) Changed() bool { return lifecycle.Moves(c.leaf, c.action) }
 
-// Taking reports whether the change takes the ticket, which only a start does,
-// and the canonical assignee it takes it for.
-func (c StatusChange) Taking() (Text, bool) {
-	start, ok := c.action.(lifecycle.Start)
-	return Text(start.Assignee), ok
+// Taking is the change's Take, which only a start has.
+func (c StatusChange) Taking() (Take, bool) {
+	if c.take == nil {
+		return Take{}, false
+	}
+	return *c.take, true
 }
 
 // Reclaims reports that the change is a start taking back a lane a sibling's
-// start moved away (lifecycle.Start.Reclaim).
-func (c StatusChange) Reclaims() bool {
-	start, ok := c.action.(lifecycle.Start)
-	return ok && start.Reclaim
-}
+// start moved away.
+func (c StatusChange) Reclaims() bool { return c.take != nil && c.take.Reclaim }
 
-// Updated is the issue after the change, written at at: the status the action
-// leads to, the assignee a start takes the ticket for, and at as both the
-// row's updated_at and a close's close time, so every instant the write
-// records is one value. [LAW:one-source-of-truth]
-func (c StatusChange) Updated(at stamp.Instant) Issue {
-	issue := c.issue
-	issue.replaceLifecycle(lifecycle.Apply(c.leaf(), c.action, at))
-	if assignee, takes := c.Taking(); takes {
-		issue.Assignee = assignee
+// Write is what the change writes at at, the write's stamp: the issue after
+// it — the status the action leads to, the assignee a start takes the ticket
+// for, at as the row's updated_at and a close's close time — and the change
+// rows that record it, one per status-axis field it moves: the whole close
+// payload, so a reopen's clearing of it is as legible in history as the close
+// that set it, and the assignee a start moves. The rows are read off the one
+// post-state, so they cannot name an instant the row does not hold, and both
+// engines record these rows, so the history format has one home.
+// [LAW:one-source-of-truth]
+func (c StatusChange) Write(at stamp.Instant) (Issue, []FieldChange) {
+	before, after := c.issue, c.issue
+	after.replaceLifecycle(lifecycle.Apply(c.leaf, c.action, at))
+	if c.take != nil {
+		after.Assignee = c.take.Assignee
 	}
-	issue.UpdatedAt = at.Time()
-	return issue
+	after = after.Stamped(at)
+	var rows changeRows
+	rows.add("status", before.StatusValue(), after.StatusValue())
+	rows.add("closed_at", formatChangeTime(before.ClosedAtValue()), formatChangeTime(after.ClosedAtValue()))
+	rows.add("resolution", formatChangeString((*string)(before.ResolutionValue())), formatChangeString((*string)(after.ResolutionValue())))
+	rows.add("redirect_target", formatChangeString(before.RedirectTargetValue()), formatChangeString(after.RedirectTargetValue()))
+	rows.add("assignee", before.Assignee.Raw(), after.Assignee.Raw())
+	return after, rows
 }
 
-// FieldChanges are the change rows the write records: one per status-axis
-// field Updated moves — the whole close payload, so a reopen's clearing of it
-// is as legible in history as the close that set it — and the assignee a
-// start moves. Both engines record these rows, so the history format has one
-// home. [LAW:one-source-of-truth]
-func (c StatusChange) FieldChanges(at stamp.Instant) []FieldChange {
-	before, after := c.issue, c.Updated(at)
-	var changes []FieldChange
-	add := func(field, from, to string) {
-		if from != to {
-			changes = append(changes, FieldChange{Field: field, From: from, To: to})
-		}
+// Stamped is the issue as a write stamped at at records it: at is its
+// updated_at. Every write that moves an issue's row sets updated_at here.
+// [LAW:single-enforcer]
+func (i Issue) Stamped(at stamp.Instant) Issue {
+	i.UpdatedAt = at.Time()
+	return i
+}
+
+// RetentionChanges are the change rows a retention move records, against the
+// timestamp pair the axis projects to, so the history format is the same
+// encoding an export carries and the same spelling every change row uses.
+// [LAW:one-source-of-truth]
+func RetentionChanges(before, after Retention) []FieldChange {
+	priorArchived, priorDeleted := RetentionTimestamps(before)
+	nextArchived, nextDeleted := RetentionTimestamps(after)
+	var rows changeRows
+	rows.add("archived_at", formatChangeTime(priorArchived), formatChangeTime(nextArchived))
+	rows.add("deleted_at", formatChangeTime(priorDeleted), formatChangeTime(nextDeleted))
+	return rows
+}
+
+// changeRows is a write's change rows, one per field whose spelling moved.
+type changeRows []FieldChange
+
+func (r *changeRows) add(field, from, to string) {
+	if from != to {
+		*r = append(*r, FieldChange{Field: field, From: from, To: to})
 	}
-	add("status", before.StatusValue(), after.StatusValue())
-	add("closed_at", formatChangeTime(before.ClosedAtValue()), formatChangeTime(after.ClosedAtValue()))
-	add("resolution", formatChangeString((*string)(before.ResolutionValue())), formatChangeString((*string)(after.ResolutionValue())))
-	add("redirect_target", formatChangeString(before.RedirectTargetValue()), formatChangeString(after.RedirectTargetValue()))
-	add("assignee", before.Assignee.Raw(), after.Assignee.Raw())
-	return changes
 }
 
-// formatChangeTime is an optional instant as a change row spells it: absent
-// as the empty string, present as RFC3339Nano.
+// formatChangeTime is an optional instant as every change row spells it:
+// absent as the empty string, present as RFC3339Nano.
 func formatChangeTime(value *time.Time) string {
 	if value == nil {
 		return ""

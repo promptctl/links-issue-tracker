@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"slices"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -16,7 +16,7 @@ import (
 // added the label and when. A write rewrites only the rows of the names it
 // adds or removes, so it never re-authors a label it did not touch, and two
 // writers adding different labels write disjoint rows.
-func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID model.ID, before, after []string, author string, at time.Time) error {
+func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID model.ID, before, after []string, author string, at stamp.Instant) error {
 	for _, name := range before {
 		if slices.Contains(after, name) {
 			continue
@@ -30,7 +30,7 @@ func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID model.ID, before, af
 		if slices.Contains(before, name) {
 			continue
 		}
-		if err := insertLabelTx(ctx, tx, model.Label{IssueID: issueID, Name: name, CreatedAt: at, CreatedBy: model.Text(storage.Actor(author))}); err != nil {
+		if err := insertLabelTx(ctx, tx, model.Label{IssueID: issueID, Name: name, CreatedAt: at.Time(), CreatedBy: model.Text(storage.Actor(author))}); err != nil {
 			return err
 		}
 	}

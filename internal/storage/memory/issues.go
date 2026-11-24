@@ -7,10 +7,10 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -83,9 +83,9 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
 	}
-	now := e.stamp(model.FiledUnder([]model.ID{parentID}, e.relations)).Time()
+	at := e.stamp(model.FiledUnder([]model.ID{parentID}, e.relations))
 	actor := storage.Actor(in.Actor)
-	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), actor, now, parentID)
+	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), actor, at, parentID)
 	if err != nil {
 		return model.Issue{}, err
 	}
@@ -102,8 +102,8 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		lane:        lane,
 		priority:    in.Priority,
 		followsUp:   followsUp,
-		createdAt:   now,
-		updatedAt:   now,
+		createdAt:   at.Time(),
+		updatedAt:   at.Time(),
 		status:      model.StatusView{Value: model.StateOpen},
 		retention:   model.Live{},
 	}
@@ -117,10 +117,10 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		return model.Issue{}, err
 	}
 	e.issues[id] = rec
-	e.setLabels(id, labels, now, actor)
+	e.setLabels(id, labels, at, actor)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{
-			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: model.Text(actor),
+			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: at.Time(), CreatedBy: model.Text(actor),
 		})
 	}
 	// The create event records the initial status as one field-change row. A
@@ -134,7 +134,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if rec.followsUp != "" {
 		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp.Raw()})
 	}
-	e.recordEvent(id, eventSpec{action: model.ActionCreated, reason: "issue created", actor: actor, changes: changes}, now)
+	e.recordEvent(id, eventSpec{action: model.ActionCreated, reason: "issue created", actor: actor, changes: changes}, at)
 
 	return e.hydrate(rec, e.positions())
 }
@@ -217,13 +217,13 @@ func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 // the minting rule itself is one function in issueid, reached the same way
 // from both, so this engine and the Dolt store cannot drift apart on what an
 // id is. [LAW:one-type-per-behavior]
-func (e *Engine) mintID(prefix, topic, title, description, creator string, createdAt time.Time, parentID model.ID) (model.ID, error) {
+func (e *Engine) mintID(prefix, topic, title, description, creator string, createdAt stamp.Instant, parentID model.ID) (model.ID, error) {
 	content := issueid.Content{
 		Topic:       topic,
 		Title:       title,
 		Description: description,
 		Creator:     creator,
-		CreatedAt:   createdAt,
+		CreatedAt:   createdAt.Time(),
 	}
 	namespace, population := e.idSpace(prefix, topic, parentID)
 	// A purged id is taken for good: other tickets' text, follow-ups and

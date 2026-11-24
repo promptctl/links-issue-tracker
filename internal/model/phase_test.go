@@ -155,8 +155,8 @@ func TestPlanPhase(t *testing.T) {
 // saw: the clock's reading when it is past all of it, and otherwise the
 // instant just past the newest event, whichever order the history arrives in.
 // Each case runs with its clock and history in UTC and again in a fixed
-// offset, and the stamp is in UTC either way: history read back from a store
-// can carry an offset, and a stamp is stored as text that sorts by spelling.
+// offset, and the stamp is in UTC either way, the one form a recorded instant
+// takes, whatever zone the clock or the history it follows reads in.
 func TestStampNext(t *testing.T) {
 	history := []IssueEvent{startEvent("e3", 3), startEvent("e1", 1), startEvent("e2", 2)}
 	for _, c := range []struct {

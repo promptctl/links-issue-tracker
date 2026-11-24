@@ -27,17 +27,13 @@ import "time"
 // that need them. [LAW:types-are-the-program]
 type Clock func() time.Time
 
-// Now reads the clock and normalizes the instant to UTC, which is the form
-// every timestamp in the contract carries.
-//
-// Engines call this rather than the function itself, so a clock reading's
-// normalization has one home instead of one per reading. A write's stamp is
-// normalized by the stamp rule (stamp.Next), since it can follow history
-// rather than the clock. [LAW:single-enforcer]
-func (c Clock) Now() time.Time { return c().UTC() }
+// Now is the clock's reading.
+func (c Clock) Now() time.Time { return c() }
 
 // SystemClock is the real clock, and the one every engine a person opens is
-// built with. It is a function rather than a package-level Clock value so that
-// nothing can reassign what "the real clock" means for the whole process.
+// built with: the machine's time, read in UTC, so an instant an engine records
+// straight off the real clock is in the contract's one form. It is a function
+// rather than a package-level Clock value so that nothing can reassign what
+// "the real clock" means for the whole process.
 // [LAW:no-shared-mutable-globals]
-func SystemClock() time.Time { return time.Now() }
+func SystemClock() time.Time { return time.Now().UTC() }

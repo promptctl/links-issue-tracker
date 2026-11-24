@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -87,7 +87,7 @@ func (e *Engine) commentsWhere(keep func(model.Comment) bool) []model.Comment {
 // loses its row. It is the one label write, shared by the create path and the
 // field patch, so the stored rows can only ever be the canonical form, and a
 // write never re-authors a label it did not add. [LAW:single-enforcer]
-func (e *Engine) setLabels(issueID model.ID, names []string, now time.Time, createdBy string) {
+func (e *Engine) setLabels(issueID model.ID, names []string, at stamp.Instant, createdBy string) {
 	author := storage.Actor(createdBy)
 	held := e.labels[issueID]
 	rows := make([]model.Label, 0, len(names))
@@ -97,7 +97,7 @@ func (e *Engine) setLabels(issueID model.ID, names []string, now time.Time, crea
 			rows = append(rows, held[index])
 			continue
 		}
-		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: now, CreatedBy: model.Text(author)})
+		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: at.Time(), CreatedBy: model.Text(author)})
 	}
 	e.labels[issueID] = rows
 }

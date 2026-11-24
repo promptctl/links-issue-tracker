@@ -101,8 +101,8 @@ func TestPlanStatusTargetStateOnLeafProducesTargetState(t *testing.T) {
 				if got, want := change.Changed(), from != action.Target(); got != want {
 					t.Fatalf("PlanStatus(%s on %s).Changed() = %v, want %v", action.Name(), from, got, want)
 				}
-				if next := change.Updated(handed()); next.State() != action.Target() {
-					t.Fatalf("PlanStatus(%s on %s).Updated().State() = %q, want %q", action.Name(), from, next.State(), action.Target())
+				if next, _ := change.Write(handed()); next.State() != action.Target() {
+					t.Fatalf("PlanStatus(%s on %s).Write().State() = %q, want %q", action.Name(), from, next.State(), action.Target())
 				}
 			})
 		}
@@ -138,7 +138,7 @@ func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanStatus(close duplicate) error = %v", err)
 	}
-	closed := closing.Updated(handed())
+	closed, _ := closing.Write(handed())
 	got := closed.ResolutionValue()
 	if got == nil || *got != ResolutionDuplicate {
 		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
@@ -151,7 +151,8 @@ func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanStatus(done) error = %v", err)
 	}
-	if got := finishing.Updated(handed()).ResolutionValue(); got != nil {
+	finished, _ := finishing.Write(handed())
+	if got := finished.ResolutionValue(); got != nil {
 		t.Fatalf("ResolutionValue() after done = %v, want nil — done records no resolution", got)
 	}
 }
@@ -159,13 +160,13 @@ func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 // A written transition records one instant: the stamp it is handed is the
 // row's updated_at and a close's close time, and the change rows the write
 // records spell that same instant.
-func TestUpdatedRecordsTheStampOnce(t *testing.T) {
+func TestWriteRecordsTheStampOnce(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task", UpdatedAt: phaseClock.Add(-time.Hour)}, StateInProgress)
 	change, err := leaf.PlanStatus(Done{})
 	if err != nil {
 		t.Fatalf("PlanStatus(done) error = %v", err)
 	}
-	closed := change.Updated(handed())
+	closed, changes := change.Write(handed())
 	if !closed.UpdatedAt.Equal(phaseClock) {
 		t.Errorf("UpdatedAt after done = %v, want the stamp %v", closed.UpdatedAt, phaseClock)
 	}
@@ -176,31 +177,32 @@ func TestUpdatedRecordsTheStampOnce(t *testing.T) {
 		{Field: "status", From: "in_progress", To: "closed"},
 		{Field: "closed_at", From: "", To: phaseClock.Format(time.RFC3339Nano)},
 	}
-	if got := change.FieldChanges(handed()); !slices.Equal(got, want) {
-		t.Errorf("FieldChanges(done) = %+v, want %+v", got, want)
+	if !slices.Equal(changes, want) {
+		t.Errorf("Write(done) change rows = %+v, want %+v", changes, want)
 	}
 }
 
 // A start takes the ticket for the assignee in canonical form, so the row and
 // its change rows carry the name a filter selects, not the padding it came in.
-func TestUpdatedStartTakesTheTicketForTheCanonicalAssignee(t *testing.T) {
+func TestWriteStartTakesTheTicketForTheCanonicalAssignee(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 	change, err := leaf.PlanStatus(Start{Assignee: "  bob  "})
 	if err != nil {
 		t.Fatalf("PlanStatus(start) error = %v", err)
 	}
-	if assignee, takes := change.Taking(); !takes || assignee != "bob" {
-		t.Errorf("Taking() = %q, %v; want bob, true", assignee, takes)
+	if take, takes := change.Taking(); !takes || take.Assignee != "bob" {
+		t.Errorf("Taking() = %+v, %v; want bob, true", take, takes)
 	}
-	if got := change.Updated(handed()).Assignee; got != "bob" {
-		t.Errorf("Assignee after start = %q, want bob", got)
+	started, changes := change.Write(handed())
+	if started.Assignee != "bob" {
+		t.Errorf("Assignee after start = %q, want bob", started.Assignee)
 	}
 	want := []FieldChange{
 		{Field: "status", From: "open", To: "in_progress"},
 		{Field: "assignee", From: "", To: "bob"},
 	}
-	if got := change.FieldChanges(handed()); !slices.Equal(got, want) {
-		t.Errorf("FieldChanges(start) = %+v, want %+v", got, want)
+	if !slices.Equal(changes, want) {
+		t.Errorf("Write(start) change rows = %+v, want %+v", changes, want)
 	}
 }
 

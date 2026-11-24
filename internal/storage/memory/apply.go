@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -66,7 +65,6 @@ func (e *Engine) apply(id model.ID, plan storage.ChangePlan) (storage.Change, st
 	// recorded on every event the change produces.
 	actor := storage.Actor(c.Actor)
 	at := e.stamp(model.LaneFamily(rec.id, e.relations))
-	now := at.Time()
 
 	// The field write baselines on the POST-action issue, so a start's new
 	// assignee is what the patch diffs against rather than a second assignee
@@ -75,15 +73,15 @@ func (e *Engine) apply(id model.ID, plan storage.ChangePlan) (storage.Change, st
 	if err != nil {
 		return storage.Change{}, storage.Applied{}, err
 	}
-	patch, err := planFields(afterAction, c.Fields, actor, now)
+	patch, err := planFields(afterAction, c.Fields, actor, at)
 	if err != nil {
 		return storage.Change{}, storage.Applied{}, err
 	}
 
 	e.writeIssue(rec, patch.issue)
-	e.setLabels(rec.id, model.RawTexts(patch.issue.Labels), now, patch.actor)
-	e.recordEvents(rec.id, actionEvents, now)
-	e.recordEvents(rec.id, patch.events, now)
+	e.setLabels(rec.id, model.RawTexts(patch.issue.Labels), at, patch.actor)
+	e.recordEvents(rec.id, actionEvents, at)
+	e.recordEvents(rec.id, patch.events, at)
 	issue, err := e.hydrate(rec, e.positions())
 	if err != nil {
 		return storage.Change{}, storage.Applied{}, err
@@ -104,10 +102,10 @@ func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action
 	case model.StatusAction:
 		return e.planStatus(current, actor, reason, a, at)
 	case model.RetentionAction:
-		post, events, err := planRetention(current, actor, reason, a, at.Time())
+		post, events, err := planRetention(current, actor, reason, a, at)
 		return post, events, nil, err
 	case model.SetPhase:
-		post, events, err := e.planPhase(current, actor, reason, a, at.Time())
+		post, events, err := e.planPhase(current, actor, reason, a, at)
 		return post, events, nil, err
 	default:
 		// [LAW:no-silent-failure] The sealed sum has no fourth axis; only an
@@ -119,7 +117,7 @@ func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action
 // planPhase moves an in-progress ticket's phase through Issue.PlanPhase, the
 // rule both engines share; the move's whole record is its event, and the row
 // moves only updated_at. [LAW:single-enforcer]
-func (e *Engine) planPhase(current model.Issue, actor, reason string, action model.SetPhase, now time.Time) (model.Issue, []eventSpec, error) {
+func (e *Engine) planPhase(current model.Issue, actor, reason string, action model.SetPhase, at stamp.Instant) (model.Issue, []eventSpec, error) {
 	move, err := current.PlanPhase(e.eventsFor(current.ID), action.Phase)
 	if err != nil {
 		return model.Issue{}, nil, err
@@ -127,9 +125,7 @@ func (e *Engine) planPhase(current model.Issue, actor, reason string, action mod
 	if !move.Changed() {
 		return current, nil, nil
 	}
-	updated := current
-	updated.UpdatedAt = now
-	return updated, []eventSpec{{
+	return current.Stamped(at), []eventSpec{{
 		action:  string(action.Name()),
 		reason:  reason,
 		actor:   actor,
@@ -157,19 +153,19 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	if err != nil {
 		return model.Issue{}, nil, nil, err
 	}
-	if !plan.Records() {
+	write, records := plan.Write(at)
+	if !records {
 		return current, nil, nil, nil
 	}
-	updated := plan.Updated(at)
-	if err := storage.ValidateRedirectTarget(updated, e.retentionOf); err != nil {
+	if err := storage.ValidateRedirectTarget(write.Issue, e.retentionOf); err != nil {
 		return model.Issue{}, nil, nil, err
 	}
-	return updated, []eventSpec{{
+	return write.Issue, []eventSpec{{
 		action:  string(action.Name()),
 		reason:  reason,
 		actor:   actor,
-		changes: plan.FieldChanges(at),
-	}}, plan.Handover(), nil
+		changes: write.Changes,
+	}}, write.Handover, nil
 }
 
 // planRetention moves the retention axis. The legal moves and every rejection
@@ -177,19 +173,18 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 // and the change rows. There is no same-state success cell — re-archiving an
 // archived issue is a rejection, not a quiet no-op — so every planned
 // retention move owes a write. [LAW:single-enforcer]
-func planRetention(current model.Issue, actor, reason string, action model.RetentionAction, now time.Time) (model.Issue, []eventSpec, error) {
-	next, err := model.Retain(current.Retention(), action, now)
+func planRetention(current model.Issue, actor, reason string, action model.RetentionAction, at stamp.Instant) (model.Issue, []eventSpec, error) {
+	next, err := model.Retain(current.Retention(), action, at)
 	if err != nil {
 		return model.Issue{}, nil, err
 	}
-	post := current
+	post := current.Stamped(at)
 	post.SetRetention(next)
-	post.UpdatedAt = now
 	return post, []eventSpec{{
 		action:  string(action.Name()),
 		reason:  reason,
 		actor:   actor,
-		changes: retentionChanges(current.Retention(), next),
+		changes: model.RetentionChanges(current.Retention(), next),
 	}}, nil
 }
 
@@ -222,7 +217,7 @@ type fieldPatch struct {
 // engine free to decide that for itself is an engine free to disagree, and the
 // differential oracle would read the disagreement as divergence instead of as
 // the duplicated logic it is. [LAW:one-source-of-truth]
-func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string, now time.Time) (fieldPatch, error) {
+func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string, at stamp.Instant) (fieldPatch, error) {
 	issue, changes, err := storage.ApplyIssueFields(baseline, in)
 	if err != nil {
 		return fieldPatch{}, err
@@ -233,25 +228,9 @@ func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string,
 	if len(changes) == 0 {
 		return patch, nil
 	}
-	patch.issue.UpdatedAt = now
+	patch.issue = patch.issue.Stamped(at)
 	patch.events = []eventSpec{{reason: in.Reason, actor: actor, changes: changes}}
 	return patch, nil
-}
-
-// retentionChanges reports the retention axis's change rows against the
-// timestamp pair the axis projects to, so the history format is the same
-// encoding an export carries.
-func retentionChanges(before, after model.Retention) []model.FieldChange {
-	priorArchived, priorDeleted := model.RetentionTimestamps(before)
-	nextArchived, nextDeleted := model.RetentionTimestamps(after)
-	var changes []model.FieldChange
-	if !timesEqual(priorArchived, nextArchived) {
-		changes = append(changes, model.TimestampChange(model.ArchivedAtField, priorArchived, nextArchived))
-	}
-	if !timesEqual(priorDeleted, nextDeleted) {
-		changes = append(changes, model.TimestampChange(model.DeletedAtField, priorDeleted, nextDeleted))
-	}
-	return changes
 }
 
 // writeIssue lands a planned issue back on its record. It is the one place a

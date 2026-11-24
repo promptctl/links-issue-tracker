@@ -816,7 +816,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if hook := s.planReadsHookForTest; hook != nil {
 			hook()
 		}
-		now := s.stamps.Stamp(s.clock, filed).Time()
+		at := s.stamps.Stamp(s.clock, filed)
 		issue = model.Issue{
 			Title:       model.Text(title),
 			Description: strings.TrimSpace(in.Description),
@@ -829,9 +829,8 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			Labels:      model.Texts(labels),
 			Assignee:    model.Text(assignee),
 			FollowsUp:   in.FollowsUp.Trim(),
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
+			CreatedAt:   at.Time(),
+		}.Stamped(at)
 		issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
 		if err != nil {
 			return err
@@ -901,7 +900,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 					return err
 				}
 			}
-			if err := writeLabelsTx(ctx, tx, issue.ID, nil, model.RawTexts(issue.Labels), createdBy, now); err != nil {
+			if err := writeLabelsTx(ctx, tx, issue.ID, nil, model.RawTexts(issue.Labels), createdBy, at); err != nil {
 				return err
 			}
 			// CreateIssue's "created" event records the initial status as a single
@@ -916,7 +915,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			if issue.FollowsUp != "" {
 				createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp.Raw()})
 			}
-			if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
+			if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, at, createChanges); err != nil {
 				return err
 			}
 			if err := smoothRanksIfNeededTx(ctx, tx, issue.Rank); err != nil {
@@ -1594,7 +1593,7 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 // (status, closed_at, archived_at, deleted_at) belong to the transition and
 // retention writes, so each column has one writer and a field write restates
 // no lifecycle column. [LAW:one-source-of-truth]
-func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at time.Time) error {
+func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at stamp.Instant) error {
 	// [LAW:effects-at-boundaries] The instant arrives with the write, not in
 	// planFieldUpdate — so the plan stays a pure function of its inputs.
 	issue, event := s.stampEdit(w.issue, at, w.reason, w.actor, w.changes)
@@ -1741,7 +1740,7 @@ func (s *Store) apply(ctx context.Context, id model.ID, plan storage.ChangePlan)
 					}
 				}
 				if hasFields {
-					if err := s.applyFieldsTx(ctx, tx, fw, at.Time()); err != nil {
+					if err := s.applyFieldsTx(ctx, tx, fw, at); err != nil {
 						return err
 					}
 				}
@@ -1854,13 +1853,13 @@ func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEven
 		}
 		return w, nil
 	case model.RetentionAction:
-		w, err := planRetentionTransition(issue, actor, reason, a, at.Time())
+		w, err := planRetentionTransition(issue, actor, reason, a, at)
 		if err != nil {
 			return nil, err
 		}
 		return w, nil
 	case model.SetPhase:
-		w, err := s.planPhaseMove(issue, history, at.Time(), actor, reason, a)
+		w, err := s.planPhaseMove(issue, history, at, actor, reason, a)
 		if err != nil {
 			return nil, err
 		}
@@ -1899,7 +1898,7 @@ func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 // Issue.PlanPhase, the rule both engines share. [LAW:single-enforcer] A move
 // mints its event here, so the post-move issue a following field write
 // baselines on carries the event's instant, as the memory engine's does.
-func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at time.Time, actor, reason string, action model.SetPhase) (phaseWrite, error) {
+func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at stamp.Instant, actor, reason string, action model.SetPhase) (phaseWrite, error) {
 	move, err := issue.PlanPhase(history, action.Phase)
 	if err != nil {
 		return phaseWrite{}, err
@@ -1908,16 +1907,14 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 		return phaseWrite{move: move, post: issue}, nil
 	}
 	event := s.newEvent(issue.ID, string(model.ActionPhase), reason, actor, at, move.FieldChanges())
-	post := issue
-	post.UpdatedAt = event.CreatedAt
-	return phaseWrite{move: move, event: event, post: post}, nil
+	return phaseWrite{move: move, event: event, post: issue.Stamped(at)}, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
 // against a tx. planStatusTransition is the compute half: claims.PlanStatus
-// runs Issue.PlanStatus's refusals and decides whether the write is owed, and
-// the plan's Updated and FieldChanges build the post-transition issue and its
-// change rows from the write's stamp, which is handed in; it reads and writes
+// runs Issue.PlanStatus's refusals, and the plan's Write decides whether the
+// write is owed and builds the post-transition issue, its change rows, and
+// the handover from the write's stamp, which is handed in; it reads and writes
 // nothing itself. applyTransitionTx is the write half: the redirect-target
 // validation, which reads a foreign row on the write's tx, then the single
 // UPDATE plus the event. The plan also carries `post` — the
@@ -1925,6 +1922,7 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 // field write. A noop plan records that the target state and claimant already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
+	at            stamp.Instant
 	action        model.ActionName
 	reason        string
 	actor         string
@@ -1952,16 +1950,18 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if err != nil {
 		return transitionWrite{}, err
 	}
-	if !plan.Records() {
+	write, records := plan.Write(at)
+	if !records {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
 	return transitionWrite{
+		at:            at,
 		action:        action.Name(),
 		reason:        reason,
 		actor:         actor,
-		changes:       plan.FieldChanges(at),
-		post:          plan.Updated(at),
-		claimHandover: plan.Handover(),
+		changes:       write.Changes,
+		post:          write.Issue,
+		claimHandover: write.Handover,
 	}, nil
 }
 
@@ -1988,22 +1988,12 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 	}); err != nil {
 		return err
 	}
-	var closedAt, resolution, redirectTarget any
-	if value := post.ClosedAtValue(); value != nil {
-		closedAt = model.StampText(*value)
-	}
-	if value := post.ResolutionValue(); value != nil {
-		resolution = string(*value)
-	}
-	if value := post.RedirectTargetValue(); value != nil {
-		redirectTarget = *value
-	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
-		post.StatusValue(), post.AssigneeValue().Raw(), model.StampText(post.UpdatedAt), closedAt, resolution, redirectTarget, post.ID); err != nil {
+		post.StatusValue(), post.AssigneeValue().Raw(), model.StampText(post.UpdatedAt), nullableTime(post.ClosedAtValue()), nullableResolution(post.ResolutionValue()), nullableStringPtr(post.RedirectTargetValue()), post.ID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
-	return s.recordEvent(ctx, tx, post.ID, string(w.action), w.reason, w.actor, post.UpdatedAt, w.changes)
+	return s.recordEvent(ctx, tx, post.ID, string(w.action), w.reason, w.actor, w.at, w.changes)
 }
 
 // retentionWrite is a fully-planned retention transition, the retention-axis
@@ -2014,7 +2004,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 // write half: one UPDATE plus the event.
 type retentionWrite struct {
 	issueID model.ID
-	now     time.Time
+	at      stamp.Instant
 	// nextArchived/nextDeleted are the pair Retain produced, as the
 	// retentionColumns projection the columns store.
 	nextArchived any
@@ -2034,7 +2024,8 @@ func (w retentionWrite) handover() *claims.Handover { return nil }
 // planned retention transition owes a write.
 func (w retentionWrite) isNoop() bool { return false }
 
-// planRetentionTransition plans a retention action against issue as of now. The
+// planRetentionTransition plans a retention action against issue at at, the
+// write's stamp. The
 // whole retention state machine — legal moves, rejection reasons, the
 // delete-on-archived stamp drop — is the pure Retain transition table; this
 // plan projects the result into column values.
@@ -2043,27 +2034,18 @@ func (w retentionWrite) isNoop() bool { return false }
 // [LAW:effects-at-boundaries] The instant arrives as an argument because this
 // is the compute half: it decides nothing about when, so it reads no clock and
 // stays testable with no store at all.
-func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, now time.Time) (retentionWrite, error) {
-	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
-	next, err := model.Retain(issue.Retention(), action, now)
+func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, at stamp.Instant) (retentionWrite, error) {
+	next, err := model.Retain(issue.Retention(), action, at)
 	if err != nil {
 		return retentionWrite{}, err
 	}
-	post := issue
+	post := issue.Stamped(at)
 	post.SetRetention(next)
-	post.UpdatedAt = now
-	nextArchivedAt, nextDeletedAt := model.RetentionTimestamps(next)
 	nextArchived, nextDeleted := retentionColumns(post)
-	var changes []model.FieldChange
-	if !timesEqual(priorArchivedAt, nextArchivedAt) {
-		changes = append(changes, model.TimestampChange(model.ArchivedAtField, priorArchivedAt, nextArchivedAt))
-	}
-	if !timesEqual(priorDeletedAt, nextDeletedAt) {
-		changes = append(changes, model.TimestampChange(model.DeletedAtField, priorDeletedAt, nextDeletedAt))
-	}
+	changes := model.RetentionChanges(issue.Retention(), next)
 	return retentionWrite{
 		issueID:      issue.ID,
-		now:          now,
+		at:           at,
 		nextArchived: nextArchived,
 		nextDeleted:  nextDeleted,
 		action:       action.Name(),
@@ -2079,10 +2061,10 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 // retention write restates no status column. [LAW:one-source-of-truth]
 func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-		model.StampText(w.now), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
+		model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
 		return fmt.Errorf("update issue retention: %w", err)
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
+	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.at, w.changes)
 }
 
 // currentRetentionTx reads the live retention state of issueID inside tx, for
@@ -2282,14 +2264,14 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 // here — the row-at-a-time recordEvent, and a reconcile's settled export,
 // whose events reach the same tables through applyExportDelta — so two
 // writers of history cannot stamp an event two ways. [LAW:single-enforcer]
-func (s *Store) newEvent(issueID model.ID, action, reason, actor string, at time.Time, changes []model.FieldChange) model.IssueEvent {
+func (s *Store) newEvent(issueID model.ID, action, reason, actor string, at stamp.Instant, changes []model.FieldChange) model.IssueEvent {
 	event := model.IssueEvent{
 		ID:        model.ID("evt-" + uuid.NewString()),
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    model.Text(strings.TrimSpace(reason)),
 		Actor:     model.Text(storage.Actor(actor)),
-		CreatedAt: at,
+		CreatedAt: at.Time(),
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
 		// call site. Unattributed stores stamp nothing, which is how a store
@@ -2303,7 +2285,7 @@ func (s *Store) newEvent(issueID model.ID, action, reason, actor string, at time
 // recordEvent writes a mutation's history: the event newEvent mints for it,
 // through insertEventTx, the one writer of issue_events rows. [LAW:single-enforcer]
 // Every mutation site computes its field-change diff and routes through here.
-func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID model.ID, action, reason, actor string, at time.Time, changes []model.FieldChange) error {
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID model.ID, action, reason, actor string, at stamp.Instant, changes []model.FieldChange) error {
 	return insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, at, changes))
 }
 
@@ -2311,10 +2293,8 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID model.ID, a
 // the issue's updated_at at that event's instant. A field edit and a resolved
 // reconcile's merged text are both edits, so both take their stamp here and
 // cannot disagree about when one happened. [LAW:single-enforcer]
-func (s *Store) stampEdit(issue model.Issue, at time.Time, reason, actor string, changes []model.FieldChange) (model.Issue, model.IssueEvent) {
-	event := s.newEvent(issue.ID, "", reason, actor, at, changes)
-	issue.UpdatedAt = event.CreatedAt
-	return issue, event
+func (s *Store) stampEdit(issue model.Issue, at stamp.Instant, reason, actor string, changes []model.FieldChange) (model.Issue, model.IssueEvent) {
+	return issue.Stamped(at), s.newEvent(issue.ID, "", reason, actor, at, changes)
 }
 
 func (s *Store) listComments(ctx context.Context, issueID model.ID) ([]model.Comment, error) {
@@ -3112,18 +3092,6 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
-}
-
-// timesEqual compares two *time.Time pointers by value (both nil is equal,
-// nil vs non-nil is not, two non-nil compared with .Equal).
-func timesEqual(a, b *time.Time) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.Equal(*b)
 }
 
 // nullableStringPtr stores a nil optional string as SQL NULL, the pointer

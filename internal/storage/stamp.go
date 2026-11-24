@@ -30,7 +30,7 @@ func (t *StampTally) Stamp(clock Clock, newest time.Time) stamp.Instant {
 	at := stamp.Next(now, newest)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.corrected = t.corrected.after(at.Time().Sub(now))
+	t.corrected = t.corrected.after(at.Ahead(now))
 	return at
 }
 

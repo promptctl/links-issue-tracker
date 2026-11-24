@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 func TestRetentionFromTimestamps(t *testing.T) {
@@ -96,7 +98,7 @@ func TestRetainTransitionTable(t *testing.T) {
 	covered := map[string]bool{}
 	for _, tc := range cases {
 		covered[fmt.Sprintf("%T/%T", tc.cur, tc.action)] = true
-		got, err := Retain(tc.cur, tc.action, at)
+		got, err := Retain(tc.cur, tc.action, stamp.Next(at, time.Time{}))
 		if tc.wantErr != "" {
 			if err == nil || err.Error() != tc.wantErr {
 				t.Fatalf("Retain(%#v, %T) error = %v, want %q", tc.cur, tc.action, err, tc.wantErr)
@@ -135,7 +137,7 @@ func TestRetainArchiveDeleteRestoreLandsLive(t *testing.T) {
 	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
 	var cur Retention = Live{}
 	for _, action := range []RetentionAction{Archive{}, Delete{}, Restore{}} {
-		next, err := Retain(cur, action, at)
+		next, err := Retain(cur, action, stamp.Next(at, time.Time{}))
 		if err != nil {
 			t.Fatalf("Retain(%#v, %T) error = %v", cur, action, err)
 		}
@@ -152,7 +154,7 @@ func TestRetainRefusesImpostors(t *testing.T) {
 			t.Fatalf("Retain((*Deleted)(nil), archive) did not panic")
 		}
 	}()
-	_, _ = Retain((*Deleted)(nil), Archive{}, time.Now())
+	_, _ = Retain((*Deleted)(nil), Archive{}, stamp.Next(time.Now(), time.Time{}))
 }
 
 // A typed-nil pointer variant satisfies RetentionAction without being one of
@@ -164,7 +166,7 @@ func TestRetainRefusesImpostorActions(t *testing.T) {
 			t.Fatalf("Retain(Live, (*Archive)(nil)) did not panic")
 		}
 	}()
-	_, _ = Retain(Live{}, (*Archive)(nil), time.Now())
+	_, _ = Retain(Live{}, (*Archive)(nil), stamp.Next(time.Now(), time.Time{}))
 }
 
 func TestFrozen(t *testing.T) {
@@ -194,7 +196,7 @@ func TestThawIsTheActionRetainTakesToLive(t *testing.T) {
 	for _, r := range []Retention{Archived{At: at}, Deleted{At: at}} {
 		var toLive []RetentionAction
 		for _, action := range []RetentionAction{Archive{}, Unarchive{}, Delete{}, Restore{}} {
-			if next, err := Retain(r, action, at); err == nil && next == (Live{}) {
+			if next, err := Retain(r, action, stamp.Next(at, time.Time{})); err == nil && next == (Live{}) {
 				toLive = append(toLive, action)
 			}
 		}
