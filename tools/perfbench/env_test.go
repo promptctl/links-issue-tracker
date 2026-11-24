@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,18 +37,6 @@ func TestHermeticEnvStripsExactlyWhatMovesLit(t *testing.T) {
 		if n := count(got, key); n != 1 {
 			t.Errorf("%s appears %d times, want exactly once: with two, which one lit reads is exec's business, not this tool's", key, n)
 		}
-	}
-}
-
-// The module root is where ./cmd/lit lives, and `go env GOMOD` finds it from
-// any directory inside the module — this test's own cwd is tools/perfbench.
-func TestModuleRootHoldsTheLitModule(t *testing.T) {
-	root, err := moduleRoot()
-	if err != nil {
-		t.Fatalf("moduleRoot error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "cmd", "lit", "main.go")); err != nil {
-		t.Errorf("moduleRoot = %q, which holds no cmd/lit/main.go: %v", root, err)
 	}
 }
 

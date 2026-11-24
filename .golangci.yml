@@ -36,6 +36,16 @@ linters:
           deny:
             - pkg: "github.com/promptctl/links-issue-tracker/internal/suiteenv"
               desc: "suiteenv is the test suites' Env; production reads the stamped ceiling"
+        # Building lit from source is for the tests and tools that run a
+        # real lit; a lit never builds another.
+        litbuild-tests-and-tools-only:
+          list-mode: lax
+          files:
+            - "!$test"
+            - "!**/tools/**"
+          deny:
+            - pkg: "github.com/promptctl/links-issue-tracker/internal/litbuild"
+              desc: "litbuild builds lit for tests and tools; production code never builds lit"
         # [LAW:single-enforcer] lifecycle internals are enforced at the model package boundary instead of by caller convention.
         lifecycle-boundary:
           list-mode: lax
