@@ -106,7 +106,8 @@ unarchive, delete, restore`.
 - `Container` — `lifecycle.go`: `Lifecycle` + `Children() []Lifecycle`.
 - `StatusPrimitive` — `status_states.go`: `Lifecycle` +
   `ClosedAt() *time.Time`, `Resolution() *Resolution`, `RedirectTarget() *string`.
-  It is the one kind of lifecycle `Apply` takes; `AllOf` is deliberately not a
+  It is the one kind of lifecycle `Apply` and `Moves` take, sealed by the
+  unexported `isStatusPrimitive`; `AllOf` is deliberately not a
   `StatusPrimitive` (`status_states.go`).
 
 ### `Walk(l Lifecycle, visit func(Lifecycle) bool)` — `lifecycle.go`
@@ -236,10 +237,14 @@ The one transition for all three leaf variants.
   and close bookkeeping by `TestApplyClosedAtBookkeeping`.
 
 ### `stamp.Instant` and `stamp.Next(now, newest time.Time) Instant` — `internal/model/stamp/stamp.go`
-The instant a write is stamped at, built only by `Next`: `now` when it is past
+The instant a write is stamped at, built by `Next`: `now` when it is past
 `newest`, else `newest` plus one nanosecond, in UTC either way. `Time()` reads
-it. `Apply`, `StatusChange.Updated` and `StatusChange.FieldChanges` take one.
-Pinned by `TestStampNext` (`phase_test.go`), across zones.
+it where a write records it, and panics on an Instant `Next` did not build (the
+zero value). `Ahead(t)` is how far it is past `t`. Every writer of a write's
+instant takes one: `Apply`, `Retain`, `StatusChange.Write`, `Issue.Stamped`, and
+both engines' event, label, field, phase, retention and create writes.
+Pinned by `TestStampNext` (`phase_test.go`), across zones, and
+`TestTimeRefusesAnInstantNextDidNotBuild` (`stamp_test.go`).
 
 ### `closeResolution(action StatusAction) *Resolution` — `status_states.go`
 - If the action is a `Close`: `c.Outcome == nil` **panics** with
@@ -304,8 +309,8 @@ defined as Thaw's second result. Pinned by `TestThawIsTheActionRetainTakesToLive
 (`retention_test.go`), which derives the expected action from `Retain`'s table:
 for each frozen variant, the one retention action `Retain` takes to `Live`.
 
-### `Retain(cur Retention, action RetentionAction, at time.Time) (Retention, error)` — `retention.go`
-Pure (no clock, no store); caller supplies `at`. Complete transition table:
+### `Retain(cur Retention, action RetentionAction, at stamp.Instant) (Retention, error)` — `retention.go`
+Pure (no clock, no store); the write supplies its stamp `at`, which an archive or delete records as its time. Complete transition table:
 
 | current \ action | `Archive` | `Unarchive` | `Delete` | `Restore` |
 |---|---|---|---|---|
@@ -648,18 +653,25 @@ establish.
    composition is intentionally unsupported (`model.go`).
 
 `StatusChange` (`model.go`) — an accepted, unstamped action; only `PlanStatus`
-builds one, and a zero value panics on use.
+builds one. It holds what `PlanStatus` proved: the leaf `StatusPrimitive` and,
+for a start, the parsed `Take{Assignee Text, Reclaim bool}`.
 - `Changed()` — the action moves the status (`lifecycle.Moves`).
-- `Taking()` — a start's canonical assignee; `Reclaims()` — a start's `Reclaim`.
-- `Updated(at stamp.Instant) Issue` — `lifecycle.Apply` on the leaf, a start's
-  assignee, and `at` as `UpdatedAt`. Pinned by
+- `Taking() (Take, bool)` — a start's `Take`; `Reclaims()` — its `Reclaim`.
+- `Write(at stamp.Instant) (Issue, []FieldChange)` — the stamped post-state
+  (`lifecycle.Apply` on the leaf, a start's assignee, `Stamped(at)`) and the
+  change rows read off it: `status`, `closed_at`, `resolution`,
+  `redirect_target`, `assignee`, each when it moved. Pinned by
   `TestPlanStatusTargetStateOnLeafProducesTargetState`,
   `TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue`,
-  `TestUpdatedRecordsTheStampOnce` and
-  `TestUpdatedStartTakesTheTicketForTheCanonicalAssignee` (`model_test.go`).
-- `FieldChanges(at stamp.Instant) []FieldChange` — the change rows both engines
-  record: `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`,
-  each when it moved.
+  `TestWriteRecordsTheStampOnce` and
+  `TestWriteStartTakesTheTicketForTheCanonicalAssignee` (`model_test.go`).
+
+`(Issue).Stamped(at stamp.Instant) Issue` (`model.go`) — the issue with `at` as
+its `UpdatedAt`; every write that moves a row sets updated_at through it.
+
+`RetentionChanges(before, after Retention) []FieldChange` (`model.go`) — the
+`archived_at` / `deleted_at` rows a retention move records, spelled like every
+change row (RFC3339Nano, `""` when absent).
 
 ### Hydration
 - `HydrateStatus(issue Issue, view StatusView) (Issue, error)` — `model.go`:
