@@ -426,7 +426,7 @@ func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
 func TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sync := pushedSyncStore(t, ctx)
+	sync := pushedSyncStoreIn(t, ctx, isolatedMirrorEnv(t))
 	empty := t.TempDir()
 	gitInDir(t, empty, "init", "--bare", "remote.git")
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
@@ -465,7 +465,7 @@ func TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush(t *testing.T) {
 func TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sync := pushedSyncStore(t, ctx)
+	sync := pushedSyncStoreIn(t, ctx, isolatedMirrorEnv(t))
 	backupURL := GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))
 	if _, err := sync.db.ExecContext(ctx, "CALL DOLT_REMOTE('add', '--ref', 'refs/dolt/other', 'backup', ?)", backupURL); err != nil {
 		t.Fatalf("DOLT_REMOTE add --ref error = %v", err)
