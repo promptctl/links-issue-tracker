@@ -440,12 +440,34 @@ func lockWaitOn(reports *heldReports, lock string) *LockWait {
 	return found
 }
 
+// cancelAtNotice is an operator channel that cancels a context the first
+// time a wait on one lock reports itself there: a notice the wait prints only
+// from inside its wait (holdWait.NextBackOff), so the cancel lands while the
+// writer is known to be waiting on that lock, however slowly it got there.
+type cancelAtNotice struct {
+	mu     sync.Mutex
+	said   strings.Builder
+	notice string
+	cancel context.CancelFunc
+}
+
+func (w *cancelAtNotice) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.said.Write(p)
+	if strings.Contains(w.said.String(), w.notice) {
+		w.cancel()
+	}
+	return os.Stderr.Write(p)
+}
+
 // A writer whose context ends while it waits on a holder was cancelled, not
 // refused: Dolt's open hands back its lock error either way, and the wait
 // still says which it was.
 func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
-	// The suite's holder wait is far past the 500ms the writer's context
-	// lives, so the context, not the wait, ends it.
+	// The holder states the suite's allowance, far past the notice grace, so
+	// the context, cancelled at the writer's first notice of its LOCK wait,
+	// ends the wait, not the allowance.
 	t.Parallel()
 	doltRoot := migratedDoltDir(t)
 	holder, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -458,14 +480,16 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 		}
 	})
 	reports := &heldReports{}
-	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 500*time.Millisecond)
+	ctx, cancel := context.WithCancel(WithLockObserver(context.Background(), reports.observer()))
 	defer cancel()
-	if contender, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id"); err == nil {
+	stderr := &cancelAtNotice{notice: "still waiting for " + DoltJournalLockPath(doltRoot), cancel: cancel}
+	if contender, err := Open(ctx, testEnv(), stderr, doltRoot, "test-workspace-id"); err == nil {
 		_ = contender.Close()
 		t.Fatal("a writer opened beside a live holder")
 	}
 	if wait := lockWaitOn(reports, "LOCK"); wait == nil || wait.Outcome != LockWaitCancelled {
-		t.Fatalf("the cancelled writer's LOCK wait was reported as %+v, want cancelled", wait)
+		_, waits := reports.snapshot()
+		t.Fatalf("the cancelled writer's LOCK wait was reported as %+v, want cancelled; every wait reported: %+v", wait, waits)
 	}
 }
 

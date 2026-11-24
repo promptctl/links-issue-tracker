@@ -1205,7 +1205,9 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 	if got := clock.elapsed(); got != drained {
 		t.Fatalf("the contender acquired %s in, want %s: the first attempt after the last holder left", got, drained)
 	}
-	want := LockWait{Lock: filepath.Base(lockPath), Waited: lastArrival, ProgressSeen: steps, StandStill: wait, Stated: true, Outcome: LockWaitAcquired}
+	// A fixed patience ignores what the holders state, so no statement
+	// decided the allowance it reports.
+	want := LockWait{Lock: filepath.Base(lockPath), Waited: lastArrival, ProgressSeen: steps, StandStill: wait, Outcome: LockWaitAcquired}
 	if len(waits) != 1 || waits[0] != want {
 		t.Fatalf("lock waits reported = %+v, want exactly %+v", waits, want)
 	}
