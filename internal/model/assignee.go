@@ -14,7 +14,7 @@ import (
 // held where it prints, so a name with a ZWNJ or an emoji sequence stays
 // writable.
 // [LAW:single-enforcer] This is the one definition of a writable assignee;
-// create, the field update, start (Issue.Apply), and import all read it here,
+// create, the field update, start (Issue.PlanStatus), and import all read it here,
 // in both engines.
 func NormalizeAssignee(assignee string) (string, error) {
 	normalized := strings.TrimSpace(assignee)

@@ -158,7 +158,7 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	if !plan.Records() {
 		return current, nil, nil, nil
 	}
-	updated := plan.Updated
+	updated := plan.Updated(now)
 	if err := e.validateRedirectTarget(updated); err != nil {
 		return model.Issue{}, nil, nil, err
 	}

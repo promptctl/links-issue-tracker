@@ -1913,7 +1913,7 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 
 // transitionWrite is a fully-planned status transition, ready to execute
 // against a tx. planStatusTransition is the validate+compute half — it runs
-// Issue.Apply's guards, the assignee rule, and the change-row diff over the
+// Issue.PlanStatus's guards, the assignee rule, and the change-row diff over the
 // issue, the history and the instant Apply read for it, and reads and writes
 // nothing itself. applyTransitionTx is the write half: the redirect-target
 // validation, which reads a foreign row on the write's tx, then the single
@@ -1959,7 +1959,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if !plan.Records() {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
-	updated := plan.Updated
+	updated := plan.Updated(at)
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	now := at

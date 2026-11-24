@@ -441,7 +441,7 @@ func (e ContainerActionError) childClause() string {
 // It names the state the issue is in and the command that brings it back,
 // never the refused action: a sentence built around the action's verb would
 // have to fit every status verb, and `done` is not a bare infinitive.
-// [LAW:single-enforcer] Raised only by Issue.Apply, which both storage engines
+// [LAW:single-enforcer] Raised only by Issue.PlanStatus, which both storage engines
 // call, so there is one refusal and no per-engine copy of its wording.
 type FrozenIssueError struct {
 	ID        ID
@@ -459,7 +459,7 @@ func (FrozenIssueError) RefusesCommand() {}
 
 var _ Refusal = FrozenIssueError{}
 
-// Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
+// PlanStatus is root-only: it plans action against the root lifecycle primitive.
 // Multi-leaf composition (AllOf containing multiple actionable members)
 // is intentionally unsupported here; that requires a dedicated disambiguation
 // design before containers ever become actionable. Containers reject every
@@ -473,10 +473,15 @@ var _ Refusal = FrozenIssueError{}
 // invariants (unhydrated lifecycle, container, frozen retention, a start whose
 // assignee no filter could select) — the leaf itself cannot fail, since
 // StatusAction makes an unsupported action unrepresentable.
-func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
+//
+// [LAW:effects-at-boundaries] Planning takes no instant: whether the action is
+// refused and whether it moves the status are decided before anyone knows when
+// the write lands, so a caller that only asks — the CLI's hold gate — has no
+// instant to invent. Only StatusChange.At, the write's step, is handed one.
+func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
-		return Issue{}, err
+		return StatusChange{}, err
 	}
 	if _, ok := root.(lifecycle.Container); ok {
 		// Every status action on a container is refused, including one whose
@@ -495,7 +500,7 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 		// deliberately not softened to a fallback here: a fallback is the silent
 		// wrong answer, and it would trade a loud programmer error for a quiet
 		// one. [LAW:no-silent-failure]
-		return Issue{}, ContainerActionError{
+		return StatusChange{}, ContainerActionError{
 			ID:       i.ID,
 			Action:   action.Name(),
 			Target:   State(action.Target()),
@@ -507,22 +512,40 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	// caller the thaw makes the command legal, which is false for a container
 	// whatever its retention.
 	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
-		return Issue{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
+		return StatusChange{}, FrozenIssueError{ID: i.ID, Retention: i.Retention(), Thaw: thaw}
 	}
 	// A start assigns the issue to whoever starts it, so the start is refused
 	// here, the check `lit start` runs before its takeover gate and both
 	// engines run before writing. [LAW:single-enforcer]
 	if start, ok := action.(lifecycle.Start); ok {
 		if _, err := NormalizeAssignee(start.Assignee); err != nil {
-			return Issue{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
+			return StatusChange{}, fmt.Errorf("a start assigns the issue to whoever starts it: %w", err)
 		}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
-		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
+		return StatusChange{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
 	}
-	i.replaceLifecycle(actionable.Apply(action))
-	return i, nil
+	return StatusChange{issue: i, leaf: actionable, action: action}, nil
+}
+
+// StatusChange is a status action the issue has accepted, not yet stamped:
+// the refusals are behind it, so what remains cannot fail.
+type StatusChange struct {
+	issue  Issue
+	leaf   lifecycle.Actionable
+	action lifecycle.StatusAction
+}
+
+// Changed reports whether the action moves the status.
+func (c StatusChange) Changed() bool { return lifecycle.Moves(c.leaf, c.action) }
+
+// At is the issue after the action, stamped at the instant the write performing
+// it is stamped with: a close records at as its close time.
+func (c StatusChange) At(at time.Time) Issue {
+	issue := c.issue
+	issue.replaceLifecycle(c.leaf.Apply(c.action, at))
+	return issue
 }
 
 func (i Issue) StatusValue() string {

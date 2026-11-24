@@ -13,6 +13,7 @@ package lifecycle
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type State string
@@ -121,11 +122,13 @@ type Container interface {
 // Actionable marks lifecycle expressions a status action can be applied to.
 // Apply is total: StatusAction's Target names a real state, a same-state call
 // returns the receiver, so there is no error to return. The actor/reason of a
-// transition are event provenance owned by the store's write boundary — the
-// machine computes the next state and nothing else. [LAW:effects-at-boundaries]
+// transition are event provenance owned by the store's write boundary, and so
+// is its instant: at is the instant the write performing the transition is
+// stamped with, the close time a close records — the machine computes the next
+// state and reads no clock. [LAW:effects-at-boundaries]
 type Actionable interface {
 	Lifecycle
-	Apply(action StatusAction) Lifecycle
+	Apply(action StatusAction, at time.Time) Lifecycle
 }
 
 // Walk visits the lifecycle tree depth-first. Recursion is the substrate;

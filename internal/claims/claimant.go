@@ -2,6 +2,7 @@ package claims
 
 import (
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -115,28 +116,38 @@ func (h Handover) Live(lane Standing) bool {
 	return ok && held.By == h.From.Checkout
 }
 
-// StatusPlan is what a status action does to one ticket: the issue before and
-// after it, and the claimant on each side. Both storage engines and the CLI's
-// hold gate read it, so "does this transition record anything" has one owner.
-// [LAW:one-source-of-truth]
+// StatusPlan is what a status action does to one ticket: the issue before it,
+// the change it makes, and the claimant on each side. Both storage engines and
+// the CLI's hold gate read it, so "does this transition record anything" has
+// one owner. [LAW:one-source-of-truth]
+//
+// The plan holds no instant, so the gate asks it what a transition records
+// without one; only a write, through Updated, stamps the post-state.
 type StatusPlan struct {
-	Current, Updated model.Issue
-	Prior, Post      Claimant
-	reclaims         bool
+	Current     model.Issue
+	Prior, Post Claimant
+	change      model.StatusChange
+	reclaims    bool
 }
 
 // PlanStatus runs action against issue, whose own history is events, as
 // taken by taker — the checkout the event it would record will name.
 func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution) (StatusPlan, error) {
-	updated, err := issue.Apply(action)
+	change, err := issue.PlanStatus(action)
 	if err != nil {
 		return StatusPlan{}, err
 	}
 	prior := ClaimantOf(issue, events)
-	post := prior.After(action, taker)
-	updated.Assignee = post.Assignee
 	start, isStart := action.(model.Start)
-	return StatusPlan{Current: issue, Updated: updated, Prior: prior, Post: post, reclaims: isStart && start.Reclaim}, nil
+	return StatusPlan{Current: issue, Prior: prior, Post: prior.After(action, taker), change: change, reclaims: isStart && start.Reclaim}, nil
+}
+
+// Updated is the issue after the transition, stamped at, the instant the write
+// recording it is stamped with, and assigned to the claimant it installs.
+func (p StatusPlan) Updated(at time.Time) model.Issue {
+	updated := p.change.At(at)
+	updated.Assignee = p.Post.Assignee
+	return updated
 }
 
 // Records reports that the transition writes: it moves the status, the
@@ -147,7 +158,7 @@ func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.Statu
 // lane a sibling's start moved away (model.Start.Reclaim), even though this
 // ticket's own claimant has not changed.
 func (p StatusPlan) Records() bool {
-	return p.Updated.StatusValue() != p.Current.StatusValue() || p.Post != p.Prior || p.reclaims
+	return p.change.Changed() || p.Post != p.Prior || p.reclaims
 }
 
 // Handover is the claim passing hands this transition records, nil for none.

@@ -53,8 +53,8 @@ func (openState) Resolution() *Resolution {
 func (openState) RedirectTarget() *string {
 	return nil
 }
-func (o openState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(o, action)
+func (o openState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(o, action, at)
 }
 
 type inProgressState struct{}
@@ -70,8 +70,8 @@ func (inProgressState) Resolution() *Resolution {
 func (inProgressState) RedirectTarget() *string {
 	return nil
 }
-func (s inProgressState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(s, action)
+func (s inProgressState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(s, action, at)
 }
 
 type closedState struct {
@@ -105,8 +105,8 @@ func (c closedState) Resolution() *Resolution {
 func (c closedState) RedirectTarget() *string {
 	return cloneString(c.redirectTarget)
 }
-func (c closedState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(c, action)
+func (c closedState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(c, action, at)
 }
 
 // NewStatus builds the leaf variant for state, attaching closedAt, resolution,
@@ -136,28 +136,34 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 // the action names the desired terminal state and we return that state's
 // variant. A same-state call returns the receiver so the store recognizes it as
 // a no-op — including a re-close, which keeps the existing resolution rather
-// than silently rewriting it. Transitioning into closed stamps the close time
-// and attaches the action's outcome — resolution and redirect target both — so
+// than silently rewriting it. Transitioning into closed records at as the close
+// time and attaches the action's outcome — resolution and redirect target both — so
 // a close's payload travels through the machine instead of being re-attached
 // after it; every other target carries none of them, so a close time,
 // resolution, or redirect target can never linger on a non-closed state.
 // It cannot fail: Target is total over StatusAction.
 // [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
 // this function maintains no parallel table.
-func applyStatusAction(current Lifecycle, action StatusAction) Lifecycle {
-	target := action.Target()
-	if current.State() == target {
+func applyStatusAction(current Lifecycle, action StatusAction, at time.Time) Lifecycle {
+	if !Moves(current, action) {
 		return current
 	}
-	switch target {
+	switch action.Target() {
 	case Closed:
-		now := time.Now().UTC()
-		return closedState{closedAt: &now, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
+		return closedState{closedAt: &at, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
 	case InProgress:
 		return inProgressState{}
 	default:
 		return openState{}
 	}
+}
+
+// Moves reports whether action moves current off the state it is in. One that
+// does not is the same-state no-op Apply returns the receiver for, so a caller
+// asks here, with no instant, whether a transition moves anything.
+// [LAW:one-source-of-truth]
+func Moves(current Lifecycle, action StatusAction) bool {
+	return current.State() != action.Target()
 }
 
 // closeResolution projects the resolution a closing action records: Close

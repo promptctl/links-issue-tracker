@@ -30,23 +30,51 @@ func TestNewStatusClosedAtBelongsOnlyToClosed(t *testing.T) {
 	}
 }
 
+// handedAt is the instant this package's tests hand a transition, the one its
+// write would be stamped with.
+var handedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
 // TestApplyTargetStateMatrix exercises every (from, action) pair in the 3x4
-// matrix. Each cell asserts the post-state matches the action's target state —
+// matrix. Each cell asserts the post-state matches the action's target state
+// and carries the close time that cell must leave: none off closed, the
+// handed instant on a move into closed, and the receiver's own on a re-close —
 // same-state cells (start@InProgress, done@Closed, close@Closed, reopen@Open)
 // are no-ops that preserve the receiver. There are no rejection cells: every
 // cell here is a legal call, and Apply cannot fail by construction.
 func TestApplyTargetStateMatrix(t *testing.T) {
-	allActions := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
-	for _, from := range []State{Open, InProgress, Closed} {
-		for _, action := range allActions {
-			target := action.Target()
-			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
-				next := NewStatus(from, nil, nil, nil).Apply(action)
-				if got := next.State(); got != target {
-					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, got, target)
-				}
-			})
-		}
+	ownClosedAt := time.Unix(1_700_000_000, 0).UTC()
+	from := map[State]StatusPrimitive{
+		Open:       NewStatus(Open, nil, nil, nil),
+		InProgress: NewStatus(InProgress, nil, nil, nil),
+		Closed:     NewStatus(Closed, &ownClosedAt, nil, nil),
+	}
+	for _, tc := range []struct {
+		from     State
+		action   StatusAction
+		closedAt *time.Time
+	}{
+		{Open, Start{}, nil},
+		{Open, Done{}, &handedAt},
+		{Open, Close{Outcome: Wontfix{}}, &handedAt},
+		{Open, Reopen{}, nil},
+		{InProgress, Start{}, nil},
+		{InProgress, Done{}, &handedAt},
+		{InProgress, Close{Outcome: Wontfix{}}, &handedAt},
+		{InProgress, Reopen{}, nil},
+		{Closed, Start{}, nil},
+		{Closed, Done{}, &ownClosedAt},
+		{Closed, Close{Outcome: Wontfix{}}, &ownClosedAt},
+		{Closed, Reopen{}, nil},
+	} {
+		t.Run(string(tc.from)+"_"+string(tc.action.Name()), func(t *testing.T) {
+			next := from[tc.from].Apply(tc.action, handedAt).(StatusPrimitive)
+			if got, want := next.State(), tc.action.Target(); got != want {
+				t.Fatalf("Apply(%s on %s).State() = %q, want %q", tc.action.Name(), tc.from, got, want)
+			}
+			if got := next.ClosedAt(); !timePtrEqual(got, tc.closedAt) {
+				t.Fatalf("Apply(%s on %s).ClosedAt() = %v, want %v", tc.action.Name(), tc.from, got, tc.closedAt)
+			}
+		})
 	}
 }
 
@@ -74,7 +102,7 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 		{NewStatus(Closed, &closedAt, &duplicate, &target), Close{Outcome: Duplicate{Of: "links-other"}}},
 	}
 	for _, tc := range cases {
-		next := tc.from.Apply(tc.action)
+		next := tc.from.Apply(tc.action, handedAt)
 		if next.State() != tc.from.State() {
 			t.Fatalf("Apply(%s on %s) changed state to %q", tc.action.Name(), tc.from.State(), next.State())
 		}
@@ -91,28 +119,28 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 }
 
 // TestApplyClosedAtBookkeeping locks in the close-timestamp invariant under the
-// sum type: a transition into Closed stamps a timestamp; every transition out of
-// Closed lands on a variant that structurally cannot hold one, so the timestamp
-// is gone.
+// sum type: a transition into Closed records the instant it was handed; every
+// transition out of Closed lands on a variant that structurally cannot hold
+// one, so the timestamp is gone.
 func TestApplyClosedAtBookkeeping(t *testing.T) {
 	priorClosed := time.Unix(1_700_000_000, 0).UTC()
 
-	openToClosed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Wontfix{}})
-	if closedAt := openToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil {
-		t.Fatal("Apply(close on open).ClosedAt() = nil, want stamped")
+	openToClosed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Wontfix{}}, handedAt)
+	if closedAt := openToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(handedAt) {
+		t.Fatalf("Apply(close on open).ClosedAt() = %v, want the handed instant %v", closedAt, handedAt)
 	}
 
-	inProgressToClosed := NewStatus(InProgress, nil, nil, nil).Apply(Done{})
-	if closedAt := inProgressToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil {
-		t.Fatal("Apply(done on in_progress).ClosedAt() = nil, want stamped")
+	inProgressToClosed := NewStatus(InProgress, nil, nil, nil).Apply(Done{}, handedAt)
+	if closedAt := inProgressToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(handedAt) {
+		t.Fatalf("Apply(done on in_progress).ClosedAt() = %v, want the handed instant %v", closedAt, handedAt)
 	}
 
-	closedToOpen := NewStatus(Closed, &priorClosed, nil, nil).Apply(Reopen{})
+	closedToOpen := NewStatus(Closed, &priorClosed, nil, nil).Apply(Reopen{}, handedAt)
 	if closedAt := closedToOpen.(StatusPrimitive).ClosedAt(); closedAt != nil {
 		t.Fatalf("Apply(reopen on closed).ClosedAt() = %v, want nil", closedAt)
 	}
 
-	closedToInProgress := NewStatus(Closed, &priorClosed, nil, nil).Apply(Start{})
+	closedToInProgress := NewStatus(Closed, &priorClosed, nil, nil).Apply(Start{}, handedAt)
 	if closedAt := closedToInProgress.(StatusPrimitive).ClosedAt(); closedAt != nil {
 		t.Fatalf("Apply(start on closed).ClosedAt() = %v, want nil — in_progress carries no close time", closedAt)
 	}
@@ -123,7 +151,7 @@ func TestApplyClosedAtBookkeeping(t *testing.T) {
 // resolution, instead of being re-attached after the state machine. Done is
 // the neutral success close and records none.
 func TestApplyCloseCarriesOutcomeThroughMachine(t *testing.T) {
-	closed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	closed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "links-abc1"}}, handedAt)
 	got := closed.(StatusPrimitive).Resolution()
 	if got == nil || *got != ResolutionDuplicate {
 		t.Fatalf("Apply(close duplicate).Resolution() = %v, want %q", got, ResolutionDuplicate)
@@ -132,17 +160,17 @@ func TestApplyCloseCarriesOutcomeThroughMachine(t *testing.T) {
 		t.Fatalf("Apply(close duplicate).RedirectTarget() = %v, want links-abc1 — the outcome's target travels through the machine", target)
 	}
 
-	superseded := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Superseded{By: "links-new1"}})
+	superseded := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Superseded{By: "links-new1"}}, handedAt)
 	if target := superseded.(StatusPrimitive).RedirectTarget(); target == nil || *target != "links-new1" {
 		t.Fatalf("Apply(close superseded).RedirectTarget() = %v, want links-new1", target)
 	}
 
-	wontfix := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Wontfix{}})
+	wontfix := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Wontfix{}}, handedAt)
 	if target := wontfix.(StatusPrimitive).RedirectTarget(); target != nil {
 		t.Fatalf("Apply(close wontfix).RedirectTarget() = %v, want nil — terminal outcomes carry no target", target)
 	}
 
-	done := NewStatus(InProgress, nil, nil, nil).Apply(Done{})
+	done := NewStatus(InProgress, nil, nil, nil).Apply(Done{}, handedAt)
 	if got := done.(StatusPrimitive).Resolution(); got != nil {
 		t.Fatalf("Apply(done).Resolution() = %v, want nil — done records no resolution", got)
 	}
@@ -155,11 +183,11 @@ func TestApplyCloseCarriesOutcomeThroughMachine(t *testing.T) {
 // normalization: a redirecting close whose target is blank lands as absent
 // (nil), the one representation the store's validation floor keys on.
 func TestApplyCloseNormalizesBlankRedirectTarget(t *testing.T) {
-	closed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "   "}})
+	closed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "   "}}, handedAt)
 	if target := closed.(StatusPrimitive).RedirectTarget(); target != nil {
 		t.Fatalf("Apply(close duplicate of blank).RedirectTarget() = %v, want nil", target)
 	}
-	padded := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "  links-abc1  "}})
+	padded := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Duplicate{Of: "  links-abc1  "}}, handedAt)
 	if target := padded.(StatusPrimitive).RedirectTarget(); target == nil || *target != "links-abc1" {
 		t.Fatalf("Apply(close duplicate of padded).RedirectTarget() = %v, want trimmed links-abc1", target)
 	}
@@ -197,7 +225,7 @@ func TestApplyReopenClearsResolution(t *testing.T) {
 	if got := closed.RedirectTarget(); got == nil || *got != target {
 		t.Fatalf("precondition: closed RedirectTarget() = %v, want %q", got, target)
 	}
-	reopened := closed.Apply(Reopen{})
+	reopened := closed.Apply(Reopen{}, handedAt)
 	if got := reopened.(StatusPrimitive).Resolution(); got != nil {
 		t.Fatalf("Apply(reopen on closed).Resolution() = %v, want nil — open carries no resolution", got)
 	}
