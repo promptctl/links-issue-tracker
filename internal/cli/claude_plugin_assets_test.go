@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/litbuild"
 	"github.com/promptctl/links-issue-tracker/internal/testoracle"
 )
 
@@ -177,15 +178,13 @@ func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
 	}
 }
 
+// mustRepoRoot is the module's root, found by the module's one finder.
+// [LAW:one-source-of-truth]
 func mustRepoRoot(t *testing.T) string {
 	t.Helper()
-	cwd, err := os.Getwd()
+	root, err := litbuild.ModuleRoot()
 	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("repo root discovery failed: %v", err)
+		t.Fatalf("find the module root: %v", err)
 	}
 	return root
 }
