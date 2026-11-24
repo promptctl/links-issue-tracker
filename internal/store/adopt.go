@@ -238,7 +238,7 @@ func AdoptRemoteByClone(ctx context.Context, env environ.Env, stderr io.Writer, 
 	if err := os.MkdirAll(cleanRoot, 0o755); err != nil {
 		return fmt.Errorf("create dolt root dir: %w", err)
 	}
-	release, err := LockWorkspaceExclusive(ctx, stderr, cleanRoot)
+	release, err := LockWorkspaceExclusive(ctx, stderr, env.Deadlines(), cleanRoot)
 	if err != nil {
 		return err
 	}

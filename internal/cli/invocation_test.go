@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
-	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
@@ -28,35 +27,12 @@ func dirInvocation(t testing.TB, dir string, stdout, stderr io.Writer, args []st
 
 // runEnvs holds each test's own environment entries, keyed by test name, so a
 // test sets what its runs see without touching the process environment that
-// every parallel test shares. stateHomes is each test's own XDG_STATE_HOME,
-// and runDeadlines the deadlines a test hands its runs in place of the
-// suite's.
+// every parallel test shares. stateHomes is each test's own XDG_STATE_HOME.
 var (
-	runEnvsMu    sync.Mutex
-	runEnvs      = map[string][]string{}           // test name -> KEY=value entries
-	stateHomes   = map[string]string{}             // test name -> its events directory
-	runDeadlines = map[string]deadline.Deadlines{} // test name -> its runs' deadlines
+	runEnvsMu  sync.Mutex
+	runEnvs    = map[string][]string{} // test name -> KEY=value entries
+	stateHomes = map[string]string{}   // test name -> its events directory
 )
-
-// contend hands every run t and its subtests start the suite's deadlines with
-// the contention hold (suiteenv.ContentionHold), for a test whose subject is
-// a busy refusal: the refusal comes once the holders have stood still for
-// the holder wait those deadlines derive, about a second and a half, where
-// the suite's would wait out its stall bound first. It is undone when t ends.
-func contend(t testing.TB) {
-	t.Helper()
-	name := t.Name()
-	runEnvsMu.Lock()
-	defer runEnvsMu.Unlock()
-	if _, ok := runDeadlines[name]; !ok {
-		t.Cleanup(func() {
-			runEnvsMu.Lock()
-			defer runEnvsMu.Unlock()
-			delete(runDeadlines, name)
-		})
-	}
-	runDeadlines[name] = suiteenv.Contention()
-}
 
 // setRunEnv gives every run t and its subtests start the entry key=value,
 // where t.Setenv would have set it for the whole process. It is undone when t
@@ -77,9 +53,8 @@ func setRunEnv(t testing.TB, key, value string) {
 }
 
 // runEnv is testEnv with the entries t and each test enclosing it set, the
-// innermost setting of a key winning, and the deadlines the innermost of them
-// handed (contend). Under them all sits an XDG_STATE_HOME of t's own, so the
-// events one test's runs append are never another's.
+// innermost setting of a key winning. Under them all sits an XDG_STATE_HOME
+// of t's own, so the events one test's runs append are never another's.
 func runEnv(t testing.TB) environ.Env {
 	name := t.Name()
 	runEnvsMu.Lock()
@@ -95,16 +70,11 @@ func runEnv(t testing.TB) environ.Env {
 		})
 	}
 	set := []string{"XDG_STATE_HOME=" + state}
-	env := testEnv()
 	parts := strings.Split(name, "/")
 	for i := range parts {
-		scope := strings.Join(parts[:i+1], "/")
-		set = append(set, runEnvs[scope]...)
-		if d, ok := runDeadlines[scope]; ok {
-			env = withFactParts(env, func(p *suiteenv.FactParts) { p.Deadlines = d })
-		}
+		set = append(set, runEnvs[strings.Join(parts[:i+1], "/")]...)
 	}
-	return env.With(set...)
+	return testEnv().With(set...)
 }
 
 // testEnv is the test process's environment; the rest of the Env is

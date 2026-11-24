@@ -474,7 +474,6 @@ func TestRecheckMirrorPending(t *testing.T) {
 // healthy engine serialization.
 func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	t.Parallel()
-	contend(t)
 	ws := notifyTestWorkspace(t)
 	_, releaseAnswer := claimHeld(t, ws, time.Now())
 	// The claimant dies before its mirror comes up; its answering hold

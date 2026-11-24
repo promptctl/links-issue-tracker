@@ -42,18 +42,14 @@ func (w *syncWriter) String() string {
 	return w.buf.String()
 }
 
-// captureLockNotices is a buffer for the operator notices of one test, which
-// the test hands as the stderr of what it acquires, and shrinks the notice
-// schedule so a wait reports within it. Serial by construction: the schedule
-// is package state, so no caller may t.Parallel.
-func captureLockNotices(t *testing.T, grace, interval time.Duration) *syncWriter {
-	t.Helper()
-	prevGrace, prevInterval := lockWaitNoticeGrace, lockWaitNoticeInterval
-	lockWaitNoticeGrace, lockWaitNoticeInterval = grace, interval
-	t.Cleanup(func() {
-		lockWaitNoticeGrace, lockWaitNoticeInterval = prevGrace, prevInterval
-	})
-	return &syncWriter{}
+// suiteHolder is what a test's holder states: the suite's allowance, which no
+// test outlasts, so a contender that judges it by its statement waits it out.
+func suiteHolder() holderStatement { return heldUnder(suiteenv.Deadlines()) }
+
+// fixedPatience is a contender's patience that ignores what its holders
+// state: the plain allowance a test whose subject is the wait's clock hands.
+func fixedPatience(allowance time.Duration) lockPatience {
+	return func(holderStatement, bool) time.Duration { return allowance }
 }
 
 // storageDirOf names the lit storage dir for a test lock — the directory the
@@ -91,7 +87,7 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 
 	// The holder is a run, which names its command; the record carries that
 	// command rather than the process's arguments, which two runs share.
-	holder, err := acquireStoreLock(WithHolderCommand(ctx, "lit backlog"), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	holder, err := acquireStoreLock(WithHolderCommand(ctx, "lit backlog"), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -101,7 +97,7 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 		}
 	}()
 
-	_, err = acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	_, err = acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLock() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -134,7 +130,8 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 // The 13s poll is due a notice too and prints none: it is the refusal, and a
 // wait that has given up is not still waiting.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
-	notices := captureLockNotices(t, 3*time.Second, 2*time.Second)
+	t.Parallel()
+	notices, schedule := &syncWriter{}, noticeSchedule{grace: 3 * time.Second, interval: 2 * time.Second}
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
@@ -151,7 +148,7 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 		}
 		handOver(t, &holder, arriveShared(t, notices, lockPath, at), at)
 	})
-	if _, err := acquireStoreLockOn(ctx, notices, clock, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := acquireStoreLockOn(ctx, notices, schedule, clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(10*time.Second)); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
 
@@ -184,10 +181,11 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 // starts: the only thing standing between this acquisition and a printed line
 // is that nothing refused it. No clock decides the verdict.
 func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
-	notices := captureLockNotices(t, 0, 0)
+	t.Parallel()
+	notices := &syncWriter{}
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	release, err := acquireStoreLock(context.Background(), notices, storageDirOf(lockPath), lockPath, true, 0)
+	release, err := acquireStoreLockOn(context.Background(), notices, noticeSchedule{}, &wallClock{}, storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v", err)
 	}
@@ -207,7 +205,7 @@ func TestReleaseRetiresTheHolderRecord(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	release, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	release, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v", err)
 	}
@@ -298,7 +296,7 @@ func TestUnrecordedHolderIsReportedAsSuch(t *testing.T) {
 		}
 	}()
 
-	_, err = acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	_, err = acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLock() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -317,7 +315,7 @@ func TestSharedHoldersAreAllNamed(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
 	for i := 0; i < 3; i++ {
-		release, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
+		release, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, suiteHolder(), refuseHeld)
 		if err != nil {
 			t.Fatalf("shared holder %d: %v", i, err)
 		}
@@ -328,7 +326,7 @@ func TestSharedHoldersAreAllNamed(t *testing.T) {
 		}()
 	}
 
-	_, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	_, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("exclusive acquireStoreLock() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -378,14 +376,15 @@ func TestUnreadableHolderDirIsReportedNotSwallowed(t *testing.T) {
 // over a diagnostic would break a working workspace to protect a message
 // nobody asked for — loud, but never a false failure.
 func TestRecordingFailureLeavesTheLockUsable(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	t.Parallel()
+	notices := &syncWriter{}
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	// A regular file where the holder directory belongs makes MkdirAll fail,
 	// so recording cannot succeed while the lock itself is untouched.
 	blockHolderDir(t, lockPath)
 
 	reports := &heldReports{}
-	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDirOf(lockPath), lockPath, true, 0)
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v, want the lock despite an unrecordable holder", err)
 	}
@@ -414,7 +413,7 @@ func TestHolderRecordSurvivesConcurrentAcquisitions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			release, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 50*time.Millisecond)
+			release, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, suiteHolder(), fixedPatience(50*time.Millisecond))
 			if err != nil {
 				return
 			}
@@ -489,7 +488,7 @@ func TestPublishSurvivesASweepRacingIt(t *testing.T) {
 	}()
 
 	for i := 0; i < 300; i++ {
-		release, err := acquireStoreLock(ctx, testStderr(), storageDir, lockPath, true, 0)
+		release, err := acquireStoreLock(ctx, testStderr(), storageDir, lockPath, true, suiteHolder(), refuseHeld)
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
@@ -658,13 +657,14 @@ func holderDirEntries(t *testing.T, lockPath string) []string {
 // The live holder is the other side of the contract: a sweep that took it too
 // would cost a holding process its name.
 func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	t.Parallel()
+	notices := &syncWriter{}
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
 
-	live, err := acquireStoreLock(ctx, notices, storageDir, lockPath, false, 0)
+	live, err := acquireStoreLock(ctx, notices, storageDir, lockPath, false, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("live holder: %v", err)
 	}
@@ -678,7 +678,7 @@ func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
 	}
 
 	for round := range 5 {
-		release, err := acquireStoreLock(ctx, notices, storageDir, lockPath, false, 0)
+		release, err := acquireStoreLock(ctx, notices, storageDir, lockPath, false, suiteHolder(), refuseHeld)
 		if err != nil {
 			t.Fatalf("round %d: acquire: %v", round, err)
 		}
@@ -714,7 +714,9 @@ func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
 // process with this pid but its own nonce and a sequence starting over, so
 // the test follows whatever the names are made of.
 func TestAReusedPidPublishesPastItsPredecessorsNames(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	// serial: no t.Parallel — it plants names past the process's record
+	// sequence, which a parallel acquisition would advance past them.
+	notices := &syncWriter{}
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
@@ -729,7 +731,7 @@ func TestAReusedPidPublishesPastItsPredecessorsNames(t *testing.T) {
 		}
 	}
 
-	release, err := acquireStoreLock(context.Background(), notices, storageDir, lockPath, true, 0)
+	release, err := acquireStoreLock(context.Background(), notices, storageDir, lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v", err)
 	}
@@ -758,7 +760,7 @@ func TestAnAcquisitionReportsHowManyDeadRecordsItsSweepRetired(t *testing.T) {
 	}
 
 	reports := &heldReports{}
-	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), testStderr(), storageDir, lockPath, true, 0)
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), testStderr(), storageDir, lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v", err)
 	}
@@ -775,7 +777,8 @@ func TestAnAcquisitionReportsHowManyDeadRecordsItsSweepRetired(t *testing.T) {
 // beside the publish it precedes: housekeeping on a diagnostic, so a failure
 // is loud but costs neither the lock nor this holder's own record.
 func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	t.Parallel()
+	notices := &syncWriter{}
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	storageDir := storageDirOf(lockPath)
 	// A directory under a record's name: the probe cannot open it as a file,
@@ -785,7 +788,7 @@ func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
 	}
 
 	reports := &heldReports{}
-	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDir, lockPath, true, 0)
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDir, lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v, want the lock despite a failed sweep", err)
 	}
@@ -810,7 +813,8 @@ func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
 // notice, never the release, and the lock's own release result comes back
 // untouched — neither swallowed nor joined with the record's failure.
 func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	t.Parallel()
+	notices := &syncWriter{}
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
@@ -903,7 +907,7 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	holder, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), WorkspaceLockPath(doltRoot), true, 0)
+	holder, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), WorkspaceLockPath(doltRoot), true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -913,7 +917,7 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 		}
 	}()
 
-	_, err = LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
+	_, err = LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("LockWorkspaceExclusive() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -927,14 +931,16 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 // other coverage feeds wrapCommitLockContention a bare sentinel that carries
 // no account at all. Dropping the %w in either wrap would leave that coverage
 // green while every commit-contention message stopped naming its holder.
+//
+// The holder states the commit lock's allowance under the short hold, so the
+// waiter, under the suite's long deadlines, refuses one short allowance in.
 func TestCommitContentionNamesTheHolder(t *testing.T) {
 	t.Parallel()
-	env := envWithDeadlines(suiteenv.Contention())
-
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	lockPath := commitLockPathForDolt(doltRoot)
-	holder, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), lockPath, true, 0)
+	states := holderStatement{standStill: commitLockWaiterBudget(suiteenv.Contention())}
+	holder, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), lockPath, true, states, refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -944,7 +950,7 @@ func TestCommitContentionNamesTheHolder(t *testing.T) {
 		}
 	}()
 
-	_, err = LockCommitPath(ctx, testStderr(), env.Deadlines(), doltRoot)
+	_, err = LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("LockCommitPath() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -962,7 +968,9 @@ func TestBeaconContentionNamesTheSquatter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	squatter, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), MirrorBeaconLockPath(doltRoot), true, 0)
+	// The squatter states the short hold's allowance, so the mirror, under
+	// the suite's long deadlines, gives up one short allowance in.
+	squatter, err := acquireStoreLock(ctx, testStderr(), workspaceStorageDir(doltRoot), MirrorBeaconLockPath(doltRoot), true, heldUnder(suiteenv.Contention()), refuseHeld)
 	if err != nil {
 		t.Fatalf("squatter acquireStoreLock() error = %v", err)
 	}
@@ -972,7 +980,7 @@ func TestBeaconContentionNamesTheSquatter(t *testing.T) {
 		}
 	}()
 
-	release, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Contention(), doltRoot)
+	release, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err == nil {
 		t.Fatalf("HoldMirrorBeacon() succeeded against an exclusive squatter; release = %v", release())
 	}
@@ -1081,7 +1089,7 @@ func noTick(time.Duration) {}
 
 // arriveShared is a new shared holder of lockPath arriving at instant at.
 func arriveShared(t *testing.T, stderr io.Writer, lockPath string, at time.Duration) func() error {
-	release, err := acquireStoreLock(context.Background(), stderr, storageDirOf(lockPath), lockPath, false, 0)
+	release, err := acquireStoreLock(context.Background(), stderr, storageDirOf(lockPath), lockPath, false, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder arriving at %s: %v", at, err)
 	}
@@ -1133,7 +1141,7 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		handOver(t, &holder, arriveShared(t, testStderr(), lockPath, at), at)
 	})
 
-	_, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err := acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the last holder stood still", err)
 	}
@@ -1187,7 +1195,7 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 		handOver(t, &holder, next, at)
 	})
 
-	release, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	release, err := acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if err != nil {
 		t.Fatalf("acquireStoreLockOn() error = %v, want the lock once the last holder left", err)
 	}
@@ -1197,7 +1205,7 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 	if got := clock.elapsed(); got != drained {
 		t.Fatalf("the contender acquired %s in, want %s: the first attempt after the last holder left", got, drained)
 	}
-	want := LockWait{Lock: filepath.Base(lockPath), Waited: lastArrival, ProgressSeen: steps, Outcome: LockWaitAcquired}
+	want := LockWait{Lock: filepath.Base(lockPath), Waited: lastArrival, ProgressSeen: steps, StandStill: wait, Stated: true, Outcome: LockWaitAcquired}
 	if len(waits) != 1 || waits[0] != want {
 		t.Fatalf("lock waits reported = %+v, want exactly %+v", waits, want)
 	}
@@ -1239,7 +1247,7 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 		}
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
@@ -1265,7 +1273,7 @@ func TestTheAccountSaysWhenTheLastAcquisitionAnnouncedItself(t *testing.T) {
 		t.Fatalf("account of a never-taken lock = %q, want it to say no arrival was announced", got)
 	}
 
-	release, err := acquireStoreLock(ctx, testStderr(), storageDir, lockPath, false, 0)
+	release, err := acquireStoreLock(ctx, testStderr(), storageDir, lockPath, false, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -1320,7 +1328,7 @@ func TestWaitSeesHoldersThatAnnounceNoArrival(t *testing.T) {
 		}
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
@@ -1340,7 +1348,7 @@ func TestAWaitsFirstReadableReadingIsItsBaseline(t *testing.T) {
 	dir := lockHolderDir(storageDir, lockPath)
 	blockHolderDir(t, lockPath)
 
-	w := newHoldWait(testStderr(), storageDir, lockPath, time.Second, time.Now)
+	w := newHoldWait(testStderr(), operatorNotices(), storageDir, lockPath, fixedPatience(time.Second), time.Now)
 	w.Reset()
 
 	if err := os.Remove(dir); err != nil {
@@ -1349,13 +1357,13 @@ func TestAWaitsFirstReadableReadingIsItsBaseline(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := announceArrival(dir, "holder-standing"); err != nil {
+	if err := announceArrival(dir, "holder-standing", suiteHolder()); err != nil {
 		t.Fatal(err)
 	}
 	if w.arrived() {
 		t.Fatal("the first readable reading counted the holder standing since before the wait as an arrival")
 	}
-	if err := announceArrival(dir, "holder-next"); err != nil {
+	if err := announceArrival(dir, "holder-next", suiteHolder()); err != nil {
 		t.Fatal(err)
 	}
 	if !w.arrived() {
@@ -1373,7 +1381,7 @@ func TestWaitFailsOnceHoldersStandStill(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	const wait = 200 * time.Millisecond
 
-	holder, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	holder, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -1384,12 +1392,145 @@ func TestWaitFailsOnceHoldersStandStill(t *testing.T) {
 	}()
 
 	clock := newStepClock(t, noTick)
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
 	if got := clock.elapsed(); got != wait {
 		t.Fatalf("contender gave up %s in against a %s wait; a holder standing still fails it at the wait", got, wait)
+	}
+}
+
+// A waiter judges the holder in front by the allowance the holder states, not
+// by its own run's: a healthy holder under long deadlines, standing still for
+// longer than the waiter's own allowance and the shipped one, is waited out,
+// and the waiter takes the lock the poll after it lets go. The holder lets go
+// at a step of the waiter's own clock, so the interleaving is the test's, not
+// the machine's.
+func TestAWaiterWaitsOutAHolderForTheAllowanceTheHolderStates(t *testing.T) {
+	t.Parallel()
+	holderRun, waiterRun := suiteenv.WithHold(time.Minute), suiteenv.Contention()
+	letGo := 3 * waiterRun.HolderWait().Truncate(deadline.LockPollInterval)
+	if letGo <= waiterRun.HolderWait() || letGo <= deadline.Shipped().HolderWait() || letGo >= holderRun.HolderWait() {
+		t.Fatalf("the holder lets go at %s, which must outlast the waiter's own allowance %s and the shipped %s and fit the holder's %s", letGo, waiterRun.HolderWait(), deadline.Shipped().HolderWait(), holderRun.HolderWait())
+	}
+	var waits []LockWait
+	ctx := WithLockObserver(context.Background(), LockObserver{
+		Waited:   func(w LockWait) { waits = append(waits, w) },
+		Held:     func(LockHold) {},
+		Recorded: func(LockRecord) {},
+	})
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	holder, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, heldUnder(holderRun), refuseHeld)
+	if err != nil {
+		t.Fatalf("holder acquireStoreLock() error = %v", err)
+	}
+	clock := newStepClock(t, func(at time.Duration) {
+		if at == letGo {
+			if err := holder(); err != nil {
+				t.Fatalf("release the holder at %s: %v", at, err)
+			}
+		}
+	})
+
+	release, err := acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true,
+		heldUnder(waiterRun), judgedByHolder(deadline.Shipped().HolderWait()))
+	if err != nil {
+		t.Fatalf("a waiter under short deadlines behind a healthy holder under long ones failed %s in: %v", clock.elapsed(), err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release the waiter: %v", err)
+	}
+	if got := clock.elapsed(); got != letGo {
+		t.Fatalf("the waiter took the lock %s in, want %s: the first attempt after the holder let go", got, letGo)
+	}
+	want := LockWait{Lock: filepath.Base(lockPath), Waited: letGo - deadline.LockPollInterval, StandStill: holderRun.HolderWait(), Stated: true, Outcome: LockWaitAcquired}
+	if len(waits) != 1 || waits[0] != want {
+		t.Fatalf("lock waits reported = %+v, want exactly %+v", waits, want)
+	}
+}
+
+// The same rule the other way: a holder under short deadlines that stands
+// still is refused at the allowance it states, though the waiter's own run
+// would wait far longer, and the refusal names the terms it was judged by.
+func TestAWaiterRefusesAHolderAtTheAllowanceTheHolderStates(t *testing.T) {
+	t.Parallel()
+	holderRun, waiterRun := suiteenv.Contention(), suiteenv.WithHold(time.Minute)
+	var waits []LockWait
+	ctx := WithLockObserver(context.Background(), LockObserver{
+		Waited:   func(w LockWait) { waits = append(waits, w) },
+		Held:     func(LockHold) {},
+		Recorded: func(LockRecord) {},
+	})
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	holder, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, heldUnder(holderRun), refuseHeld)
+	if err != nil {
+		t.Fatalf("holder acquireStoreLock() error = %v", err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+
+	clock := newStepClock(t, noTick)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true,
+		heldUnder(waiterRun), judgedByHolder(deadline.Shipped().HolderWait()))
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
+	}
+	allowance := holderRun.HolderWait()
+	if got := clock.elapsed(); got != allowance {
+		t.Fatalf("the waiter gave up %s in, want %s: the holder's own allowance, a whole number of polls", got, allowance)
+	}
+	if want := "may stand still " + allowance.String(); !strings.Contains(err.Error(), want) {
+		t.Errorf("refusal %q does not name the terms the holder was judged by (%q)", err, want)
+	}
+	if len(waits) != 1 || waits[0].StandStill != allowance || !waits[0].Stated || waits[0].Outcome != LockWaitStoodStill {
+		t.Fatalf("lock waits reported = %+v, want one stood still, judged by the holder's stated %s", waits, allowance)
+	}
+}
+
+// A statement speaks only for the holder that made it. The arrival outlives
+// its hold, so after a lit holder under long deadlines lets go, a holder that
+// states nothing (a raw flock, as a foreign process takes it) is judged by the
+// allowance for an unstated holder, never by the departed holder's terms.
+func TestAStatementSpeaksOnlyForTheHolderThatMadeIt(t *testing.T) {
+	t.Parallel()
+	const unstated = 300 * time.Millisecond
+	var waits []LockWait
+	ctx := WithLockObserver(context.Background(), LockObserver{
+		Waited:   func(w LockWait) { waits = append(waits, w) },
+		Held:     func(LockHold) {},
+		Recorded: func(LockRecord) {},
+	})
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	departed, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, heldUnder(suiteenv.WithHold(time.Minute)), refuseHeld)
+	if err != nil {
+		t.Fatalf("lit holder acquireStoreLock() error = %v", err)
+	}
+	if err := departed(); err != nil {
+		t.Fatalf("release the lit holder: %v", err)
+	}
+	if latest, err := latestArrival(storageDirOf(lockPath), lockPath); err != nil || !latest.stated {
+		t.Fatalf("latestArrival() after the lit holder let go = %+v, %v; want its statement still on the lock, the premise of this test", latest, err)
+	}
+	squat, acquired, err := filelock.Acquire(context.Background(), lockPath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take the lock as a holder that states nothing: acquired=%v err=%v", acquired, err)
+	}
+	defer func() { _ = squat() }()
+
+	clock := newStepClock(t, noTick)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), judgedByHolder(unstated))
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
+	}
+	if got := clock.elapsed(); got != unstated {
+		t.Fatalf("the waiter gave up %s in, want %s: a holder that states nothing is judged by the unstated allowance", got, unstated)
+	}
+	if len(waits) != 1 || waits[0].StandStill != unstated || waits[0].Stated {
+		t.Fatalf("lock waits reported = %+v, want one judged by the unstated %s", waits, unstated)
 	}
 }
 
@@ -1411,7 +1552,7 @@ func TestWaitUnderAnUnrecordedHolderIsTheElapsedBudget(t *testing.T) {
 	defer func() { _ = release() }()
 
 	clock := newStepClock(t, noTick)
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), operatorNotices(), clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -1472,12 +1613,13 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 // clock — a contender whose wait is prolonged by its own housekeeping fails
 // later than the contract says, and by an amount nobody can predict.
 func TestASweepDoesNotRestartTheWait(t *testing.T) {
-	notices := captureLockNotices(t, 0, 0)
+	t.Parallel()
+	notices, schedule := &syncWriter{}, noticeSchedule{}
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	const wait = 300 * time.Millisecond
 
-	holder, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, true, 0)
+	holder, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -1514,7 +1656,7 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 			}
 		}
 	})
-	_, err = acquireStoreLockOn(ctx, notices, clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, notices, schedule, clock, storageDirOf(lockPath), lockPath, true, suiteHolder(), fixedPatience(wait))
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}

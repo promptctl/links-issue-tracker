@@ -116,9 +116,11 @@ const (
 // dolt, a lit older than heartbeats) is judged by this figure exactly as
 // before.
 //
-// It is the run's hold ceiling plus headroom: derived from the hold the run's
-// holders run under, so a run that lifts its hold lifts its waits with it, and
-// a contention test shrinks the wait by handing a short hold.
+// It is the run's hold ceiling plus headroom, derived from the hold the run's
+// holders run under. A holder states it on the lock it holds, and its waiters
+// judge it by that statement, so a run that lifts its hold lifts the waits on
+// its holders, and a contention test shrinks a wait by handing its holder a
+// short hold.
 // [LAW:one-source-of-truth]
 func (d Deadlines) HolderWait() time.Duration {
 	return d.HoldCeiling() + coResidentWaitHeadroom

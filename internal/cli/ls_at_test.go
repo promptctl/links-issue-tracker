@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -106,14 +107,13 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // an unrelated one.
 func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	t.Parallel()
-	contend(t)
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 	loc := workspace.LocationFromStorageDir(storeDir)
 
 	// The --at cwd contract: no workspace anywhere near the cwd.
 	dir := t.TempDir()
 
-	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), loc.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), suiteenv.Contention(), loc.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
@@ -143,10 +143,9 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 // under the workspace app.Open resolved, carried out on the open's error.
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	t.Parallel()
-	contend(t)
 	repo, runLit := initRepoForPrefixTest(t)
 	ws := workspacetest.Resolved(t, runEnv(t), repo)
-	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), suiteenv.Contention(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}

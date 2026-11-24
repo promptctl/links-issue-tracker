@@ -53,10 +53,11 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	env := envWithDeadlines(suiteenv.Contention())
-
+	// The writer runs under the suite's long deadlines: a foreign holder
+	// states no terms, so it is judged by the allowance lit ships, whatever
+	// the writer's own run says.
 	start := time.Now()
-	opened, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -65,8 +66,8 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	if !errors.Is(err, nbs.ErrDatabaseLocked) {
 		t.Fatalf("Open() error = %v; want the nbs.ErrDatabaseLocked contention classification to survive the chain", err)
 	}
-	// Bounded: the short hold's holder wait (plus dolt's own per-attempt lock
-	// waits) must not balloon toward the suite's, whose value this comment
+	// Bounded: the shipped allowance (plus dolt's own per-attempt lock waits)
+	// must not balloon toward the suite's, whose value this comment
 	// deliberately does not restate — it is derived, and a figure copied here
 	// is one more thing to remember into agreement.
 	if elapsed > 10*time.Second {
@@ -143,9 +144,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	env := envWithDeadlines(suiteenv.Contention())
-
-	opened, err := OpenSync(ctx, env, testStderr(), doltRoot, "test-workspace-id")
+	opened, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = opened.Close()
 		t.Fatalf("OpenSync() succeeded against a foreign journal-lock holder; want bounded contention")
@@ -316,8 +315,8 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 // at once instead of waiting the reader out, and the reader goes on answering
 // from the root it opened on (doc.go, ONE ROOT PER ENGINE).
 func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
-	// The writer opens under a short hold, so a writer that did wait on the
-	// reader fails within the test's time.
+	// Both open under a short hold, so a writer that did wait on the reader
+	// fails within the test's time.
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -362,8 +361,10 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 // (links-scale-om3r.zhq): with the store held the way `lit snapshots new`
 // holds it — Dolt's LOCK taken exclusively through LockDoltJournalExclusive,
 // which records the holder — a write open stops trying after
-// the run's holder wait and fails naming the holder's pid, command and age,
-// carrying ErrWorkspaceBusy so the CLI exits with the workspace-busy code.
+// the allowance the holder states and fails naming the holder's pid, command
+// and age, carrying ErrWorkspaceBusy so the CLI exits with the workspace-busy
+// code. The holder is handed the short hold and the writer the suite's long
+// one, so a writer that judged by its own figures would not refuse in time.
 func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — asserts a wall-clock bound against the holder
 	// wait, which parallel load would move.
@@ -377,16 +378,15 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	releaseJournal, err := LockDoltJournalExclusive(WithHolderCommand(ctx, "lit backlog"), testStderr(), suiteenv.Deadlines(), doltRoot)
+	holder := suiteenv.Contention()
+	releaseJournal, err := LockDoltJournalExclusive(WithHolderCommand(ctx, "lit backlog"), testStderr(), holder, doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
 	defer func() { _ = releaseJournal() }()
 
-	env := envWithDeadlines(suiteenv.Contention())
-
 	start := time.Now()
-	opened, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -404,8 +404,8 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 			t.Errorf("contention error %q does not name the holder's %q", message, want)
 		}
 	}
-	if elapsed < env.Deadlines().HolderWait() {
-		t.Fatalf("Open() failed after %s, before the %s wait", elapsed, env.Deadlines().HolderWait())
+	if elapsed < holder.HolderWait() {
+		t.Fatalf("Open() failed after %s, before the %s wait", elapsed, holder.HolderWait())
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("Open() took %s to fail against a held journal lock; the contract is a refusal within seconds", elapsed)

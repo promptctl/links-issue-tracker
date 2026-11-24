@@ -25,7 +25,7 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
-	holderRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	holderRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquisition error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	}
 
 	// The contender's failed attempts must not have broken the holder's hold.
-	if _, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("probe after failed contender = %v, want ErrWorkspaceBusy (hold intact)", err)
 	}
 
@@ -94,7 +94,7 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("lock file should persist after release, stat err = %v", err)
 	}
-	probeRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	probeRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("probe after release error = %v (lock should be free)", err)
 	}

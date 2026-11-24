@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -81,12 +80,13 @@ func workspaceStorageDir(databasePath string) string {
 }
 
 // acquireWorkspaceShared takes a shared hold on the workspace lock for the
-// lifetime of a Store. Released when the returned func is called. Waits out
-// an exclusive holder for HolderWait so a casual concurrent
+// lifetime of a Store, under the run's deadlines d. Released when the
+// returned func is called. Waits out an exclusive holder for the allowance it
+// states (HolderWait under its run) so a casual concurrent
 // lit snapshots restore — a rename — does not paper-cut every reader, and
 // surfaces a "workspace busy" error naming the rotator that outlasts it.
 func acquireWorkspaceShared(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, stderr, doltRootDir, false, d.HolderWait())
+	release, err := acquireWorkspaceLock(ctx, stderr, d, doltRootDir, false, judgedByHolder(deadline.Shipped().HolderWait()))
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Wrap the sentinel so errors.Is(err, ErrWorkspaceBusy) detects
 		// contention while the operator sees which holders to suspect.
@@ -127,8 +127,11 @@ func LockWorkspaceShared(ctx context.Context, stderr io.Writer, d deadline.Deadl
 // that cannot forget it does not start. The forgetting lives here, in the
 // one act every rotator performs, so none of them can leave a record that
 // leads the directory it now sits beside. [LAW:single-enforcer]
-func LockWorkspaceExclusive(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, stderr, doltRootDir, true, 0)
+//
+// The hold states the allowance of the run's deadlines d, which every shared
+// contender waits it out for.
+func LockWorkspaceExclusive(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir string) (func() error, error) {
+	release, err := acquireWorkspaceLock(ctx, stderr, d, doltRootDir, true, refuseHeld)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return nil, fmt.Errorf("another lit process is using this workspace; close other lit commands and retry: %w", err)
 	}
@@ -167,22 +170,23 @@ func bootstrapStagingPath(databasePath string) string {
 // No stand-still bound applies, because the builder announces itself once and
 // then builds, and a build's length is set by the machine's load, which lit
 // does not control: a racer that gave up after HolderWait failed
-// "workspace busy" behind a builder still working. Waiting is safe because
+// "workspace busy" behind a builder still working. So a builder states no
+// bound (noStandStillBound), and a racer judges a builder that states nothing,
+// a lit older than the terms, the same way. Waiting is safe because
 // every wait under this lock is bounded — the build is local work on a fresh
 // database (buildDatabaseOnce), and its engines' waits for the staging root's
 // LOCK are bounded by the engine open — so a builder that stands still is
 // wedged in Dolt, or stopped, and a dead one releases the flock in the
 // kernel. A wait added under this lock must stay bounded, or a racer waits
 // on it with no bound. [LAW:no-ambient-temporal-coupling]
+//
+// [LAW:dataflow-not-control-flow] The unbounded wait is a value through the
+// one wait loop, not a mode of it: holdWait's give-up never fires, and the
+// wait ends only when the lock is taken or the caller's context ends.
 func acquireBootstrapLock(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
-	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, waitOutAnyStandStill)
+	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true,
+		holderStatement{standStill: noStandStillBound}, judgedByHolder(noStandStillBound))
 }
-
-// waitOutAnyStandStill is a stand-still bound no wait reaches: the longest
-// time.Duration, so holdWait's give-up never fires and the wait ends only when
-// the lock is taken or the caller's context ends. A value through the one wait
-// loop, not a mode of it. [LAW:dataflow-not-control-flow]
-const waitOutAnyStandStill = time.Duration(math.MaxInt64)
 
 // SyncPushLockPath returns the single-flight lock path for the background
 // mirror, a sibling of the Dolt directory at
@@ -252,7 +256,7 @@ func MirrorBeaconLockPath(databasePath string) string {
 // dying to that collision, and it is the package's one wait rather than a
 // figure of its own. [LAW:one-source-of-truth]
 func HoldMirrorBeacon(ctx context.Context, stderr io.Writer, d deadline.Deadlines, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, d.HolderWait())
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, heldUnder(d), judgedByHolder(deadline.Shipped().HolderWait()))
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Only a probe's instantaneous exclusive hold can legitimately contend,
 		// so outlasting the whole budget means something anomalous is squatting
@@ -372,8 +376,10 @@ func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 	return BeaconUnheld, nil
 }
 
-func acquireWorkspaceLock(ctx context.Context, stderr io.Writer, doltRootDir string, exclusive bool, wait time.Duration) (func() error, error) {
-	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, wait)
+// acquireWorkspaceLock takes the workspace lock with patience, stating the
+// allowance of the run's deadlines d: shared and exclusive holders alike.
+func acquireWorkspaceLock(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir string, exclusive bool, patience lockPatience) (func() error, error) {
+	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, heldUnder(d), patience)
 }
 
 // errLockHeld is the retry loop's own signal that an attempt found the lock
@@ -383,9 +389,10 @@ var errLockHeld = errors.New("lock held")
 
 // acquireStoreLock runs the filelock acquisition under the package's one
 // wait policy (holdWait) and stamps its contention outcome with the store's
-// domain sentinel. wait is how long the holders in front of the contender may
-// stand still before it gives up; 0 is a single attempt that refuses on
-// contention.
+// domain sentinel. patience is how long the holders in front of the
+// contender may stand still before it gives up (refuseHeld is a single
+// attempt that refuses on contention), and states is what the acquisition
+// states as a holder once it has the lock, on the arrival it announces.
 //
 // [LAW:parse-dont-validate] filelock reports contention as a value (a healthy
 // lock being held is not a failure of the primitive); this is the one
@@ -402,8 +409,8 @@ var errLockHeld = errors.New("lock held")
 // ErrWorkspaceBusy — and carries the same account, so a caller whose deadline
 // ran out in the wait learns who it was waiting on.
 // [LAW:single-enforcer]
-func acquireStoreLock(ctx context.Context, stderr io.Writer, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
-	return acquireStoreLockOn(ctx, stderr, &wallClock{}, storageDir, lockPath, exclusive, wait)
+func acquireStoreLock(ctx context.Context, stderr io.Writer, storageDir, lockPath string, exclusive bool, states holderStatement, patience lockPatience) (func() error, error) {
+	return acquireStoreLockOn(ctx, stderr, operatorNotices(), &wallClock{}, storageDir, lockPath, exclusive, states, patience)
 }
 
 // lockClock is the time a lock wait runs on: the instants holdWait measures
@@ -440,19 +447,19 @@ func (c *wallClock) Stop() {
 
 func (c *wallClock) C() <-chan time.Time { return c.timer.C }
 
-// acquireStoreLockOn is acquireStoreLock on clock, the one input every
-// contender shares and a test replaces: a test's clock drives the whole
-// acquisition, policy and sleeps alike, through instants it chose, so no
-// assertion about the wait depends on how fast the machine runs.
-// [LAW:effects-at-boundaries]
-func acquireStoreLockOn(ctx context.Context, stderr io.Writer, clock lockClock, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
+// acquireStoreLockOn is acquireStoreLock reporting on notices and running on
+// clock, the inputs every contender shares and a test replaces: a test's
+// clock drives the whole acquisition, policy and sleeps alike, through
+// instants it chose, so no assertion about the wait depends on how fast the
+// machine runs. [LAW:effects-at-boundaries]
+func acquireStoreLockOn(ctx context.Context, stderr io.Writer, notices noticeSchedule, clock lockClock, storageDir, lockPath string, exclusive bool, states holderStatement, patience lockPatience) (func() error, error) {
 	var release func() error
 	// sawHeld stays set once any try found the lock held: a ctx that ends
 	// mid-wait surfaces as a bare ctx error — from the retry loop between
 	// tries, or from filelock's own entry check on the next try — and this is
 	// what still knows a holder was in front of it.
 	var sawHeld bool
-	policy := newHoldWait(stderr, storageDir, lockPath, wait, clock.Now)
+	policy := newHoldWait(stderr, notices, storageDir, lockPath, patience, clock.Now)
 	err := backoff.RetryNotifyWithTimer(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {
@@ -483,7 +490,7 @@ func acquireStoreLockOn(ctx context.Context, stderr io.Writer, clock lockClock, 
 	// The arrival is announced whether or not the record could be minted: it
 	// is a fact about the acquisition, which has happened either way, and the
 	// drawn name is unique whether or not a record ever carries it.
-	if err := announceArrival(dir, filepath.Base(recordPath)); err != nil {
+	if err := announceArrival(dir, filepath.Base(recordPath), states); err != nil {
 		fmt.Fprintf(stderr, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, err)
 	}
 	return recorded, nil
@@ -558,9 +565,9 @@ func LockDoltJournalExclusive(ctx context.Context, stderr io.Writer, d deadline.
 	}
 	// The same wait a write engine open gives the same holder: the engine
 	// connector waits with holdWait on this lock's own holder directory, so
-	// an engine and a copy contending for LOCK read one policy.
+	// an engine and a copy contending for LOCK judge it by one statement.
 	// [LAW:one-source-of-truth]
-	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true, d.HolderWait())
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true, heldUnder(d), judgedByHolder(deadline.Shipped().HolderWait()))
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees

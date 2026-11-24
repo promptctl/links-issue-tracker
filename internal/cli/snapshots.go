@@ -216,7 +216,7 @@ func snapshotsRestoreLeaf() wsLeaf {
 		// exclusion; commit lock (held inside withCommitLock below) owns
 		// writer-vs-restore exclusion. Both held while the Dolt directory is
 		// rotated so no Store — open or about to open — can observe the rename.
-		releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, inv.Stderr, ws.DatabasePath)
+		releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, inv.Stderr, inv.Env.Deadlines(), ws.DatabasePath)
 		if err != nil {
 			// An open boundary like takeUserSnapshot's: stamp holder contention
 			// for Run's dispatch trace.

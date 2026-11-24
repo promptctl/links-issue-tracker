@@ -176,8 +176,9 @@ func rotationReserve(d deadline.Deadlines) time.Duration {
 }
 
 // commitLockWaiterBudget is how long a commit-lock waiter lets the holder in
-// front of it stand still before giving up: the one home for that figure.
-// [LAW:one-source-of-truth]
+// front of it stand still before giving up: the one home for that figure,
+// which the holder states on the lock under its run's deadlines and its
+// waiters read there. [LAW:one-source-of-truth]
 //
 // It is the ordinary holder's whole allowance and nothing more. The ordinary
 // holder is a mutation, and the longest one is a mutation that suffered a
@@ -192,8 +193,9 @@ func rotationReserve(d deadline.Deadlines) time.Duration {
 // retention prune — is not ordinary and fails a waiter naming it, the same
 // answer every store lock gives (holdWait).
 //
-// Derived from the run's deadlines (d), so a contention test that hands a
-// short hold is measured against its own budget, not production's.
+// Derived from the holder's run's deadlines (d), so a contention test that
+// hands its holder a short hold is measured against that holder's budget,
+// not production's.
 func commitLockWaiterBudget(d deadline.Deadlines) time.Duration {
 	return d.HolderWait() + rotationReserve(d)
 }
@@ -457,7 +459,7 @@ func commitLockPathForDolt(databasePath string) string {
 }
 
 // acquireCommitLockAtPath takes the exclusive commit flock, waiting out a
-// co-resident writer up to the declared budget. Liveness needs no probe: the
+// co-resident writer up to the budget it states, and stating the run's own. Liveness needs no probe: the
 // hold dies with its holder's file description, so acquisition succeeding IS
 // the proof every prior holder is gone — and nothing here can evict a live
 // one. Release unlocks the holder's own descriptor and never touches the lock
@@ -468,7 +470,8 @@ func commitLockPathForDolt(databasePath string) string {
 // guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
 // contention exactly as it does every other store lock's.
 func acquireCommitLockAtPath(ctx context.Context, stderr io.Writer, d deadline.Deadlines, storageDir, lockPath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, stderr, storageDir, lockPath, true, commitLockWaiterBudget(d))
+	release, err := acquireStoreLock(ctx, stderr, storageDir, lockPath, true,
+		holderStatement{standStill: commitLockWaiterBudget(d)}, judgedByHolder(commitLockWaiterBudget(deadline.Shipped())))
 	if err != nil {
 		return nil, wrapCommitLockContention(err)
 	}

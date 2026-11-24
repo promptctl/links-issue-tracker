@@ -71,13 +71,18 @@ const (
 // LockWait is one acquisition that found its lock held at least once: which
 // lock, how long it waited (to the last poll that found the lock held; an
 // acquisition lands within one poll interval after), how many holder names it saw arrive (each
-// acquisition and each heartbeat of a working routine holder is one), and how
-// it ended. An acquisition that found its lock free waited for nothing and
+// acquisition and each heartbeat of a working routine holder is one), how
+// long it let its holders stand still at its last poll and whether a holder
+// stated that allowance (Stated false is the shipped allowance an unstated
+// holder is judged by, or a contender that refuses at once), and how it
+// ended. An acquisition that found its lock free waited for nothing and
 // reports nothing.
 type LockWait struct {
 	Lock         string
 	Waited       time.Duration
 	ProgressSeen int
+	StandStill   time.Duration
+	Stated       bool
 	Outcome      LockWaitOutcome
 }
 
@@ -144,9 +149,9 @@ func lockObserverFrom(ctx context.Context) LockObserver {
 }
 
 // holdHeartbeatInterval is how often a working routine hold says so: four
-// times per HolderWait, so three heartbeats in a row can be lost to scheduling
-// before a working holder looks still. Derived from the run's deadlines, so a
-// test that hands a short hold shrinks the heartbeat with the wait.
+// times per HolderWait, the allowance it states, so three heartbeats in a row
+// can be lost to scheduling before a working holder looks still. Derived from
+// the holder's run's deadlines, as the allowance is, and stated beside it.
 // [LAW:one-source-of-truth] derived, never a second figure.
 func holdHeartbeatInterval(d deadline.Deadlines) time.Duration { return d.HolderWait() / 4 }
 
@@ -189,9 +194,12 @@ type lockHold struct {
 	phase       *longPhase
 	wait        *holdWait
 	heartbeat   time.Duration
-	now         func() time.Time
-	held        func(LockHold)
-	waited      func(LockWait)
+	// states is what the hold says of itself on every arrival it writes:
+	// its heartbeat when it is routine, and its run's allowance.
+	states holderStatement
+	now    func() time.Time
+	held   func(LockHold)
+	waited func(LockWait)
 
 	mu        sync.Mutex
 	state     holdState
@@ -230,16 +238,28 @@ func newLockHold(ctx context.Context, stderr io.Writer, d deadline.Deadlines, do
 		access:      access,
 		phase:       phase,
 		// The same holdWait every store lock waits with, keyed by Dolt's LOCK,
-		// so an engine open and a LockDoltJournalExclusive contender give the
-		// same holder the same wait and read the same progress. One per open:
-		// backoff state is per-open, and the connector Resets it before each.
-		// [LAW:one-source-of-truth]
-		wait:      newHoldWait(stderr, storageDir, lockPath, d.HolderWait(), time.Now),
+		// so an engine open and a LockDoltJournalExclusive contender judge the
+		// same holder by the same statement and read the same progress. One
+		// per open: backoff state is per-open, and the connector Resets it
+		// before each. [LAW:one-source-of-truth]
+		wait:      newHoldWait(stderr, operatorNotices(), storageDir, lockPath, judgedByHolder(deadline.Shipped().HolderWait()), time.Now),
 		heartbeat: holdHeartbeatInterval(d),
+		states:    lockHoldStatement(d, access),
 		now:       time.Now,
 		held:      observer.Held,
 		waited:    observer.Waited,
 	}
+}
+
+// lockHoldStatement is what an engine's hold of LOCK states under the run's
+// deadlines d: the heartbeat a routine hold sends, none for a long one, and
+// the co-resident allowance either may go without engine work.
+func lockHoldStatement(d deadline.Deadlines, access engineAccess) holderStatement {
+	states := heldUnder(d)
+	if access.routine() {
+		states.heartbeat = holdHeartbeatInterval(d)
+	}
+	return states
 }
 
 // name is the hold's record name: its arrival, and the stem of its heartbeats.
@@ -342,7 +362,7 @@ func (h *lockHold) tick() {
 // under mu. A failed write is counted and reported once per hold; it never
 // fails the hold, whose lock is held either way. [LAW:no-silent-failure]
 func (h *lockHold) announce(name string) {
-	err := announceArrival(lockHolderDir(h.storageDir, h.lockPath), name)
+	err := announceArrival(lockHolderDir(h.storageDir, h.lockPath), name, h.states)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err != nil {

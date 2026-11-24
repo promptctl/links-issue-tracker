@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,7 +217,8 @@ func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
 
 // A hold has one life, so a second Taken is said aloud, never dropped.
 func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	t.Parallel()
+	notices := &syncWriter{}
 	hold, _ := takenHold(t, notices, engineWriteRoutine, &heldReports{})
 	hold.taken()
 	if printed := notices.String(); !strings.Contains(printed, "again under a hold that already took it") {
@@ -308,9 +310,10 @@ func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 // LOCK, and returns the contender's open error and how long it took. The
 // holder's open runs under reports' observer.
 //
-// The contender opens under env, so its wait is the one env's deadlines
-// derive.
-func contend(t *testing.T, env environ.Env, open func(context.Context, string) (*Store, error), work func(*Store) error, reports *heldReports) (error, time.Duration) {
+// The contender opens under the suite's long deadlines, whatever the
+// holder's: it judges the holder by the allowance the holder states, so a
+// test sets the wait by the deadlines it hands the holder.
+func contend(t *testing.T, open func(context.Context, string) (*Store, error), work func(*Store) error, reports *heldReports) (error, time.Duration) {
 	t.Helper()
 	ctx := WithLockObserver(context.Background(), reports.observer())
 	doltRoot := migratedDoltDir(t)
@@ -322,7 +325,7 @@ func contend(t *testing.T, env environ.Env, open func(context.Context, string) (
 	go func() { holderDone <- errors.Join(work(holder), holder.Close()) }()
 
 	start := time.Now()
-	contender, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
+	contender, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		err = contender.Close()
@@ -347,7 +350,7 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 	env := envWithDeadlines(suiteenv.Contention())
 	statement := 5 * env.Deadlines().HolderWait()
 	reports := &heldReports{}
-	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return OpenRoutine(ctx, env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), sqlSleep(statement))
@@ -381,7 +384,7 @@ func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
 	// wall-clock margin, which parallel load would eat.
 	env := envWithDeadlines(suiteenv.Contention())
 	reports := &heldReports{}
-	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return OpenMaintenance(ctx, env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), sqlSleep(5*env.Deadlines().HolderWait()))
@@ -402,7 +405,7 @@ func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	env := envWithDeadlines(suiteenv.Contention())
 	wait := env.Deadlines().HolderWait()
 	reports := &heldReports{}
-	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return Open(WithHolderCommand(ctx, "lit import"), env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), sqlSleep(3*wait))
@@ -471,7 +474,7 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 // acquisition failed, failed: neither refused nor cancelled.
 func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
-	w := newHoldWait(testStderr(), storageDirOf(lockPath), lockPath, time.Hour, time.Now)
+	w := newHoldWait(testStderr(), operatorNotices(), storageDirOf(lockPath), lockPath, fixedPatience(time.Hour), time.Now)
 	w.Reset()
 	w.NextBackOff()
 	if wait, waited := w.report(context.Background(), errors.New("disk on fire")); !waited || wait.Outcome != LockWaitFailed {
@@ -500,7 +503,7 @@ func TestAWriterBehindARoutineHolderOutsideItsEngineFails(t *testing.T) {
 	// wall-clock margin, which parallel load would eat.
 	env := envWithDeadlines(suiteenv.Contention())
 	reports := &heldReports{}
-	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), env, testStderr(), root, "test-workspace-id")
 	}, func(*Store) error {
 		time.Sleep(3 * env.Deadlines().HolderWait())
@@ -530,7 +533,7 @@ func TestTheHolderAccountTellsAHeartbeatFromAnAcquisition(t *testing.T) {
 		{"holder-1-abc-1", "the last lit acquisition announced itself"},
 		{"holder-1-abc-1.3", "the holder's last heartbeat was"},
 	} {
-		if err := announceArrival(dir, c.name); err != nil {
+		if err := announceArrival(dir, c.name, suiteHolder()); err != nil {
 			t.Fatal(err)
 		}
 		if got := describeArrival(storageDir, lockPath); !strings.HasPrefix(got, c.want) {
@@ -550,10 +553,10 @@ func TestAnArrivalIsNeverReadEmptyWhileItIsRewritten(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := announceArrival(dir, "holder-1-abc-10"); err != nil {
+	if err := announceArrival(dir, "holder-1-abc-10", suiteHolder()); err != nil {
 		t.Fatal(err)
 	}
-	if err := announceArrival(dir, "holder-1-abc-1"); err != nil {
+	if err := announceArrival(dir, "holder-1-abc-1", suiteHolder()); err != nil {
 		t.Fatal(err)
 	}
 	if latest, err := latestArrival(storageDir, lockPath); err != nil || latest.name != "holder-1-abc-1" {
@@ -570,7 +573,7 @@ func TestAnArrivalIsNeverReadEmptyWhileItIsRewritten(t *testing.T) {
 				return
 			default:
 			}
-			if err := announceArrival(dir, fmt.Sprintf("holder-1-abc-1.%d", seq)); err != nil {
+			if err := announceArrival(dir, fmt.Sprintf("holder-1-abc-1.%d", seq), suiteHolder()); err != nil {
 				writeErr <- err
 				return
 			}
@@ -592,11 +595,60 @@ func TestAnArrivalIsNeverReadEmptyWhileItIsRewritten(t *testing.T) {
 	}
 }
 
+// An arrival reads back as the name and the terms its holder wrote; a line
+// that states no terms, as a lit older than them writes, reads as its name
+// alone, still a name no earlier writing used. The longest line lit writes,
+// a heartbeat of the largest pid and sequence stating no bound, fits the file.
+func TestAnArrivalReadsBackTheTermsItsHolderStated(t *testing.T) {
+	t.Parallel()
+	storageDir := t.TempDir()
+	lockPath := filepath.Join(storageDir, "LOCK")
+	dir := lockHolderDir(storageDir, lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	states := holderStatement{heartbeat: 575 * time.Millisecond, standStill: 2300 * time.Millisecond}
+	if err := announceArrival(dir, "holder-1-abc-1.2", states); err != nil {
+		t.Fatal(err)
+	}
+	if latest, err := latestArrival(storageDir, lockPath); err != nil || latest.name != "holder-1-abc-1.2" || !latest.stated || latest.states != states {
+		t.Fatalf("latestArrival() = %+v, %v; want the name and the terms written", latest, err)
+	}
+	older := "holder-1-abc-2"
+	if err := os.WriteFile(filepath.Join(dir, lockHolderArrivalName), []byte(older+strings.Repeat(" ", lockArrivalWidth-len(older))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if latest, err := latestArrival(storageDir, lockPath); err != nil || latest.name != older || latest.stated {
+		t.Fatalf("latestArrival() of an older lit's line = %+v, %v; want its name and no terms", latest, err)
+	}
+	longest := heartbeatName(lockHolderRecordPrefix+"4194304-ffffffff-18446744073709551615", math.MaxUint64)
+	if err := announceArrival(dir, longest, holderStatement{heartbeat: noStandStillBound, standStill: noStandStillBound}); err != nil {
+		t.Fatalf("announceArrival() of the longest line lit writes: %v", err)
+	}
+}
+
+// What an engine's hold of LOCK states: a routine hold its heartbeat and its
+// run's allowance, a long hold the allowance and no heartbeat.
+func TestALockHoldStatesItsHeartbeatAndAllowance(t *testing.T) {
+	t.Parallel()
+	d := suiteenv.WithHold(handTickedHold)
+	for access, want := range map[engineAccess]holderStatement{
+		engineWriteRoutine: {heartbeat: holdHeartbeatInterval(d), standStill: d.HolderWait()},
+		engineWrite:        {standStill: d.HolderWait()},
+	} {
+		hold, _ := takenHold(t, testStderr(), access, &heldReports{})
+		latest, err := latestArrival(hold.storageDir, hold.lockPath)
+		if err != nil || !latest.stated || latest.states != want {
+			t.Errorf("a %v hold's arrival = %+v, %v; want it to state %+v", access, latest, err, want)
+		}
+	}
+}
+
 // A name the arrival file cannot hold whole is refused, not cut short: a cut
 // name could equal one written before and read as no progress.
 func TestAnArrivalTooLongForTheFileIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	if err := announceArrival(dir, strings.Repeat("x", lockArrivalWidth+1)); err == nil {
+	if err := announceArrival(dir, strings.Repeat("x", lockArrivalWidth+1), suiteHolder()); err == nil {
 		t.Fatal("announceArrival() accepted a name longer than the arrival file")
 	}
 }

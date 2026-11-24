@@ -40,7 +40,7 @@ func TestExclusiveWorkspaceLockForgetsReceivedRefs(t *testing.T) {
 		t.Fatalf("release shared error = %v", err)
 	}
 
-	releaseExclusive, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
+	releaseExclusive, err := LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestExclusiveWorkspaceLockForgetsReceivedRefs(t *testing.T) {
 
 	// Absent is the end state, not a failure: a second rotation with nothing to
 	// forget must still take its hold.
-	releaseExclusive, err = LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
+	releaseExclusive, err = LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive() with no record error = %v", err)
 	}

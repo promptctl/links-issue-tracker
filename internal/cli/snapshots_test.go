@@ -357,7 +357,6 @@ func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 // inodes.
 func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	t.Parallel()
-	contend(t)
 	repo, ws := initBootstrapTestRepo(t)
 
 	// Produce a snapshot to restore.
@@ -406,15 +405,14 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 // DOLT_CLONE has written so far.
 //
 // Duration: the refusal lands only once the exclusive holder has stood still
-// for the holder wait — the same grace every Store open extends to a
-// transient rotation — which the contention hold makes about a second and a
-// half (contend).
+// for the allowance it states — the same grace every Store open extends to a
+// transient rotation — which the holder's contention deadlines make about a
+// second and a half, though the command runs under the suite's long ones.
 func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	t.Parallel()
-	contend(t)
 	repo, ws := initBootstrapTestRepo(t)
 
-	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), suiteenv.Contention(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}

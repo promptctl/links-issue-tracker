@@ -227,7 +227,7 @@ func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
 	if _, err := PromoteCandidate(ctx, testEnv(), testStderr(), "  ", nil); err == nil {
 		t.Error("PromoteCandidate must reject an empty canonical path")
 	}
-	if err := HealWorkspace(ctx, testStderr(), "  "); err == nil {
+	if err := HealWorkspace(ctx, testStderr(), testEnv().Deadlines(), "  "); err == nil {
 		t.Error("HealWorkspace must reject an empty canonical path")
 	}
 }

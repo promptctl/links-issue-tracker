@@ -194,7 +194,9 @@ func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	release, err := LockWorkspaceExclusive(ctx, testStderr(), root)
+	// The holder states a short allowance, so the refusal arrives one short
+	// holder wait in.
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Contention(), root)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
@@ -203,8 +205,7 @@ func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
 			t.Fatalf("release: %v", err)
 		}
 	}()
-	// A short hold, so the refusal arrives one short holder wait in.
-	if _, err := EnsureDatabase(ctx, envWithDeadlines(suiteenv.Contention()), testStderr(), root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("EnsureDatabase under exclusive hold = %v, want ErrWorkspaceBusy", err)
 	}
 }
@@ -225,12 +226,13 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 		t.Fatalf("writeAdoptPendingMarker: %v", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, testStderr(), root)
+	// The holder states a short allowance, so the refusal arrives one short
+	// holder wait in.
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Contention(), root)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
-	// A short hold, so the refusal arrives one short holder wait in.
-	_, openErr := OpenForRead(ctx, envWithDeadlines(suiteenv.Contention()), testStderr(), root, "ws")
+	_, openErr := OpenForRead(ctx, testEnv(), testStderr(), root, "ws")
 	if !errors.Is(openErr, ErrWorkspaceBusy) {
 		t.Fatalf("OpenForRead during live hold = %v, want ErrWorkspaceBusy", openErr)
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,6 +169,13 @@ func heartbeatName(recordName string, seq uint64) string {
 
 func isHeartbeat(name string) bool { return strings.Contains(name, ".") }
 
+// recordOfArrival is the record name of the hold an arrival announced: the
+// name itself, or a heartbeat's stem.
+func recordOfArrival(name string) string {
+	record, _, _ := strings.Cut(name, ".")
+	return record
+}
+
 // privateNameFor names the private sibling of the record at recordPath. The
 // two names are one inode, so proving the swept name unheld proves the private
 // one unheld by the same acquisition — and retiring only the swept name would
@@ -266,9 +274,10 @@ func publishLockHolder(ctx context.Context, storageDir, lockPath, privatePath, r
 // lockHolderArrivalName is the file in a lock's holder directory that names
 // the lock's latest sign of progress: the record name of the most recent
 // acquisition, or a working routine holder's heartbeat, `<name>.<sequence>`
-// (lockHold). Either is a name no earlier writing used, which is all a waiter
-// reads from it. It carries neither record prefix, so no sweep or listing
-// ever reads it as a record.
+// (lockHold). Either is a name no earlier writing used. Beside the name the
+// writer states its terms as a holder (holderStatement), which is what a
+// waiter judges it by. It carries neither record prefix, so no sweep or
+// listing ever reads it as a record.
 //
 // It exists because a record lives exactly as long as its hold, and a hold can
 // begin and end between two of a contender's polls: a `lit new` holds Dolt's
@@ -280,11 +289,14 @@ func publishLockHolder(ctx context.Context, storageDir, lockPath, privatePath, r
 // it is read.
 const lockHolderArrivalName = "arrival"
 
-// announceArrival names recordName as the lock's latest arrival, overwriting
-// the last one in place. Record names are unique among every record ever
+// announceArrival names recordName as the lock's latest arrival, with the
+// terms its holder states (states), overwriting the last one in place: the
+// file reads `<name> <heartbeat> <stand-still>`, the durations as
+// time.Duration writes them. Record names are unique among every record ever
 // minted, and a heartbeat is one with a sequence after it, so the file's
 // content changes on every acquisition and every heartbeat and never returns
-// to an earlier value.
+// to an earlier value. A lit that predates the terms reads the whole line as
+// the name, which is still one no earlier writing used.
 //
 // In place, with no temporary name and no rename: a reader can catch the file
 // torn, or — under two shared holders writing at once — spliced from both
@@ -304,29 +316,108 @@ const lockHolderArrivalName = "arrival"
 // any reader holding the file open.
 // [LAW:no-ambient-temporal-coupling] the announcement is a value an
 // acquisition writes, not an interval a reader has to catch.
-func announceArrival(dir, recordName string) error {
-	if len(recordName) > lockArrivalWidth {
-		return fmt.Errorf("announce arrival: name %q is longer than the arrival file's %d bytes", recordName, lockArrivalWidth)
+func announceArrival(dir, recordName string, states holderStatement) error {
+	line := recordName + " " + states.heartbeat.String() + " " + states.standStill.String()
+	if len(line) > lockArrivalWidth {
+		return fmt.Errorf("announce arrival: %q is longer than the arrival file's %d bytes", line, lockArrivalWidth)
 	}
 	f, err := os.OpenFile(filepath.Join(dir, lockHolderArrivalName), os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
-	_, writeErr := f.WriteAt([]byte(recordName+strings.Repeat(" ", lockArrivalWidth-len(recordName))), 0)
+	_, writeErr := f.WriteAt([]byte(line+strings.Repeat(" ", lockArrivalWidth-len(line))), 0)
 	return errors.Join(writeErr, f.Close())
 }
 
-// lockArrivalWidth is the arrival file's size: every name is padded to it, so
+// lockArrivalWidth is the arrival file's size: every line is padded to it, so
 // each write covers the whole file. A heartbeat name is under 80 bytes
-// (holder-<pid>-<nonce>-<seq>.<sequence>).
+// (holder-<pid>-<nonce>-<seq>.<sequence>), and each duration under 25.
 const lockArrivalWidth = 128
 
+// holderStatement is what a holder of a store lock states beside its arrival:
+// how often it heartbeats while its engine works (zero for a hold that sends
+// none), and its stand-still allowance, the longest it can go without a new
+// arrival while healthy. A contender judges the holders in front of it by
+// this statement (judgedByHolder), never by its own run's figures: the
+// allowance is a fact about the holder's run, so two runs handed different
+// deadlines still agree on when a holder has stood still too long.
+// [LAW:one-source-of-truth]
+type holderStatement struct {
+	heartbeat  time.Duration
+	standStill time.Duration
+}
+
+// heldUnder is what a holder that sends no heartbeat states under its run's
+// deadlines: the store's co-resident allowance (deadline.Deadlines.HolderWait).
+func heldUnder(d deadline.Deadlines) holderStatement {
+	return holderStatement{standStill: d.HolderWait()}
+}
+
+// noStandStillBound is the allowance of a holder no wait gives up on: the
+// longest time.Duration, which no elapsed figure reaches.
+const noStandStillBound = time.Duration(math.MaxInt64)
+
+// parseHolderStatement reads the terms an arrival line states after its name.
+// A line that states none, as a lit older than the terms writes, or one that
+// a writer tore, states nothing a waiter can judge by.
+// [LAW:parse-dont-validate]
+func parseHolderStatement(terms []string) (holderStatement, bool) {
+	if len(terms) != 2 {
+		return holderStatement{}, false
+	}
+	heartbeat, heartbeatErr := time.ParseDuration(terms[0])
+	standStill, standStillErr := time.ParseDuration(terms[1])
+	if heartbeatErr != nil || standStillErr != nil || heartbeat < 0 || standStill <= 0 {
+		return holderStatement{}, false
+	}
+	return holderStatement{heartbeat: heartbeat, standStill: standStill}, true
+}
+
+// describe is the statement as the holder account renders it.
+func (s holderStatement) describe() string {
+	allowance := "may stand still " + s.standStill.String()
+	if s.standStill == noStandStillBound {
+		allowance = "may stand still for any length"
+	}
+	if s.heartbeat == 0 {
+		return "it sends no heartbeat and " + allowance
+	}
+	return "it heartbeats every " + s.heartbeat.String() + " while it works and " + allowance
+}
+
+// lockPatience is how long a contender lets the holders in front of it stand
+// still, given what the latest arrival states (ok is false when no holder
+// stated terms). A refusing contender ignores the statement; every waiting
+// one is judged by it (judgedByHolder).
+type lockPatience func(stated holderStatement, ok bool) time.Duration
+
+// refuseHeld is the patience of a contender that refuses on contention: a
+// single attempt.
+func refuseHeld(holderStatement, bool) time.Duration { return 0 }
+
+// judgedByHolder is the patience of a contender that waits: the allowance the
+// holders in front state, or unstated when none states one (a foreign dolt, a
+// raw flock, a lit older than the terms). unstated is the shipped allowance of
+// the lock's holders, the one an older lit holds by, never the contender's
+// own run's: a contender's figures say nothing about another run's hold.
+func judgedByHolder(unstated time.Duration) lockPatience {
+	return func(stated holderStatement, ok bool) time.Duration {
+		if ok {
+			return stated.standStill
+		}
+		return unstated
+	}
+}
+
 // lockArrival is one reading of a lock's latest arrival: the record name that
-// announced it and when it was written. The zero value is a lock no
-// acquisition has announced.
+// announced it, the terms its holder stated (stated false when it stated
+// none) and when it was written. The zero value is a lock no acquisition has
+// announced.
 type lockArrival struct {
-	name string
-	at   time.Time
+	name   string
+	states holderStatement
+	stated bool
+	at     time.Time
 }
 
 // latestArrival reads the lock's latest arrival. A lock nothing has announced
@@ -349,11 +440,16 @@ func latestArrival(storageDir, lockPath string) (lockArrival, error) {
 	if err != nil {
 		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
 	}
-	name, err := io.ReadAll(f)
+	line, err := io.ReadAll(f)
 	if err != nil {
 		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
 	}
-	return lockArrival{name: strings.TrimRight(string(name), " "), at: info.ModTime()}, nil
+	fields := strings.Fields(string(line))
+	if len(fields) == 0 {
+		return lockArrival{at: info.ModTime()}, nil
+	}
+	states, stated := parseHolderStatement(fields[1:])
+	return lockArrival{name: fields[0], states: states, stated: stated, at: info.ModTime()}, nil
 }
 
 // describeArrival is the holder account's clause about the lock's latest
@@ -372,13 +468,17 @@ func describeArrival(storageDir, lockPath string) string {
 	switch {
 	case err != nil:
 		return fmt.Sprintf("arrivals unreadable, so a waiter sees only the holders standing at each poll: %v", err)
-	case latest.at.IsZero():
+	case latest.at.IsZero() || latest.name == "":
 		return "no lit acquisition has announced an arrival here"
-	case isHeartbeat(latest.name):
-		return fmt.Sprintf("the holder's last heartbeat was %s ago", time.Since(latest.at).Round(time.Millisecond))
-	default:
-		return fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
 	}
+	clause := fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
+	if isHeartbeat(latest.name) {
+		clause = fmt.Sprintf("the holder's last heartbeat was %s ago", time.Since(latest.at).Round(time.Millisecond))
+	}
+	if !latest.stated {
+		return clause + ", stating no terms"
+	}
+	return clause + "; " + latest.states.describe()
 }
 
 type holderCommandKey struct{}
@@ -722,11 +822,20 @@ func renderHolderCommand(command string) string {
 // behind it is the failure this exists to end, so a Dolt bug is what gives
 // way. A long hold sends no heartbeat and is never waited on that way.
 //
+// How long holders may stand still is the holders' to say, not the
+// contender's: each arrival states its holder's allowance (holderStatement),
+// and the contender's patience (lockPatience) reads, at each poll, the
+// longest allowance stated by a holder whose record still stands. A statement
+// speaks only for the holder that made it: the arrival outlives its hold, and
+// a holder that states nothing (a foreign dolt, a raw flock) taking the lock
+// after a lit holder let go must not be judged by the terms of a holder that
+// is gone. [FRAMING:representation]
+//
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
-// is the lock's directory and its budget, both values. A holder that leaves
-// no name (a foreign dolt) contributes no progress, so under
-// it the rule is the plain elapsed budget it reduces to when there is nothing
-// to read.
+// is the lock's directory, its patience and its notice schedule, all values.
+// A holder that leaves no name (a foreign dolt) contributes no progress, so
+// under it the rule is the plain elapsed allowance it reduces to when there
+// is nothing to read.
 //
 // [LAW:no-ambient-temporal-coupling] No timestamp is trusted; the signal is
 // a name, which only an acquisition mints.
@@ -741,10 +850,18 @@ type holdWait struct {
 	// stderr is where the wait reports itself once it outlasts the notice
 	// grace: the run's operator channel.
 	stderr     io.Writer
+	notices    noticeSchedule
 	storageDir string
 	lockPath   string
-	wait       time.Duration
+	patience   lockPatience
 	now        func() time.Time
+	// statements is every holder statement this wait has read, by the
+	// record of the holder that made it; stated is the longest of those whose
+	// record stood at the last readable listing, and statedOK whether there
+	// was one.
+	statements map[string]holderStatement
+	stated     holderStatement
+	statedOK   bool
 	// known is every holder name this wait has seen; nil until its first
 	// readable reading, which is the baseline every later one is judged
 	// against, so a reading that failed at Reset cannot make a long-standing
@@ -769,24 +886,24 @@ type holdWait struct {
 	stoodStill bool
 }
 
-// newHoldWait builds the policy for one lock. wait is read at each poll, not
-// at construction, so a policy built into a long-lived connector still waits
-// the figure a test has since shrunk. [LAW:one-source-of-truth] now is the
+// newHoldWait builds the policy for one lock, reporting on notices and
+// judging its holders with patience. now is the
 // clock the wait is measured on, and it must be the timeline the retry loop
 // sleeps on between polls: acquireStoreLockOn takes both from one lockClock,
 // so a test that steps the instants also takes the sleeps; an engine open
 // passes time.Now beside Dolt's own real timer. time.Now's readings carry the
 // monotonic clock, so a wall-clock step cannot shorten or stretch a wait.
 // [LAW:effects-at-boundaries]
-func newHoldWait(stderr io.Writer, storageDir, lockPath string, wait time.Duration, now func() time.Time) *holdWait {
-	return &holdWait{stderr: stderr, storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
+func newHoldWait(stderr io.Writer, notices noticeSchedule, storageDir, lockPath string, patience lockPatience, now func() time.Time) *holdWait {
+	return &holdWait{stderr: stderr, notices: notices, storageDir: storageDir, lockPath: lockPath, patience: patience, now: now}
 }
 
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
 	w.started = w.now()
-	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(lockWaitNoticeGrace)
+	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(w.notices.grace)
 	w.heldAt, w.progress, w.stoodStill = time.Time{}, 0, false
+	w.statements, w.stated, w.statedOK = map[string]holderStatement{}, holderStatement{}, false
 	w.arrived()
 }
 
@@ -804,25 +921,40 @@ func (w *holdWait) NextBackOff() time.Duration {
 	if w.arrived() {
 		w.since = now
 	}
-	if now.Sub(w.since) >= w.wait {
+	if now.Sub(w.since) >= w.patience(w.stated, w.statedOK) {
 		w.stoodStill = true
 		return backoff.Stop
 	}
 	if !now.Before(w.noticeDue) {
 		fmt.Fprintf(w.stderr, "lit: still waiting for %s after %s; %s\n",
 			w.lockPath, now.Sub(w.started).Round(time.Second), describeLockHolders(w.storageDir, w.lockPath))
-		w.noticeDue = now.Add(lockWaitNoticeInterval)
+		w.noticeDue = now.Add(w.notices.interval)
 	}
 	return deadline.LockPollInterval
 }
 
 // arrived takes one reading of the holder names and reports whether any is
-// new to this wait, remembering every name it sees. The first readable
-// reading is the baseline and reports nothing.
+// new to this wait, remembering every name it sees and the terms its holders
+// state. The first readable reading is the baseline and reports nothing.
 func (w *holdWait) arrived() bool {
-	names, readable := w.holderNames()
+	records, listed, latest, readable := w.holderNames()
+	if latest.stated {
+		w.statements[recordOfArrival(latest.name)] = latest.states
+	}
+	if listed {
+		w.stated, w.statedOK = holderStatement{}, false
+		for _, record := range records {
+			if states, ok := w.statements[record]; ok && (!w.statedOK || states.standStill > w.stated.standStill) {
+				w.stated, w.statedOK = states, true
+			}
+		}
+	}
 	if !readable {
 		return false
+	}
+	names := records
+	if latest.name != "" {
+		names = append(names, latest.name)
 	}
 	baseline := w.known == nil
 	if baseline {
@@ -866,21 +998,21 @@ func (w *holdWait) report(ctx context.Context, acquireErr error) (LockWait, bool
 		Lock:         filepath.Base(w.lockPath),
 		Waited:       w.heldAt.Sub(w.started),
 		ProgressSeen: w.progress,
+		StandStill:   w.patience(w.stated, w.statedOK),
+		Stated:       w.statedOK,
 		Outcome:      outcome,
 	}, true
 }
 
-// holderNames is every holder name the lock shows at one instant: its standing
-// records and its latest arrival. It is unreadable only when both are; either
-// failure alone surfaces in the holder account (readLockHolders,
-// describeArrival), which every notice and every refusal renders.
-func (w *holdWait) holderNames() ([]string, bool) {
-	names, listErr := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
+// holderNames is what the lock shows of its holders at one instant: its
+// standing records (listed false when they could not be listed) and its
+// latest arrival. It is unreadable only when both are; either failure alone
+// surfaces in the holder account (readLockHolders, describeArrival), which
+// every notice and every refusal renders.
+func (w *holdWait) holderNames() (records []string, listed bool, latest lockArrival, readable bool) {
+	records, listErr := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
 	latest, arrivalErr := latestArrival(w.storageDir, w.lockPath)
-	if latest.name != "" {
-		names = append(names, latest.name)
-	}
-	return names, listErr == nil || arrivalErr == nil
+	return records, listErr == nil, latest, listErr == nil || arrivalErr == nil
 }
 
 // holderRecordNames lists the record names under a lock's holder directory —
@@ -909,22 +1041,28 @@ func holderRecordNames(dir string) ([]string, error) {
 	return names, nil
 }
 
-var (
+const (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
 	// overlapping for a few milliseconds — prints nothing, short enough to
-	// land inside HolderWait, the stand-still budget of every wait
-	// that gives up, so a contender that is about to fail has
+	// land inside the shipped HolderWait, the stand-still allowance of every
+	// wait that gives up, so a contender that is about to fail has
 	// already said who it is waiting on. A grace under a second would report
 	// the overlaps this one exists to ignore. lockWaitNoticeInterval then
 	// repeats the notice, because a wait behind a queue of holders can run
 	// as long as the queue does, and a wait that stops reporting itself is
 	// indistinguishable from the hang this notice exists to rule out.
-	//
-	// Package variables, not constants, by the convention
-	// HolderWait already sets:
-	// tests whose premise is a wait must shrink the budget rather than sleep
-	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second
 	lockWaitNoticeInterval = 30 * time.Second
 )
+
+// noticeSchedule is when a wait reports itself to its operator: once it has
+// lasted grace, and every interval after.
+type noticeSchedule struct {
+	grace, interval time.Duration
+}
+
+// operatorNotices is the schedule every wait lit runs reports on.
+func operatorNotices() noticeSchedule {
+	return noticeSchedule{grace: lockWaitNoticeGrace, interval: lockWaitNoticeInterval}
+}
