@@ -183,6 +183,24 @@ func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
 	}
 }
 
+func TestTheGoToolIsMatchedByNameOrPathBase(t *testing.T) {
+	class, err := parseClassification([]byte(`{"git": ["git"], "go_builders": ["go"], "packages": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{
+		"go":                   true,
+		"/usr/local/go/bin/go": true,
+		"gofmt":                false,
+		"git":                  false,
+		"/go/bin/staticcheck":  false,
+	} {
+		if got := class.buildsGo(name); got != want {
+			t.Errorf("buildsGo(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 // suiteFrom type-checks each source as the package at its path, of the
 // module its path begins with ("example.com/app/..." is example.com/app's),
 // the suite being app's module, linking the modules linked.

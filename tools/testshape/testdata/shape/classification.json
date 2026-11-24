@@ -2,6 +2,7 @@
   "note": "The fixture module's classification: what each outside function the fixtures call can do. strings is left out, so the unclassified fixture refuses.",
   "cli": ["example.com/shape/selfcli.Run", "example.com/shape/cmdshape.main", "example.com/shape/spawnindirect.Main"],
   "git": ["git"],
+  "go_builders": ["go"],
   "modules": {"std": {"init": "none"}, "example.com/shape/nested": {"init": "none"}},
   "packages": {
     "example.com/shape/nested": {"note": "Dial reads a file; it is charged net so the nested-module fixture shows its own module is not walked.", "default": "net"},

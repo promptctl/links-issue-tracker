@@ -206,25 +206,38 @@ func TestAMainPackageRunsItselfAndGitThroughOneHelper(t *testing.T) {
 	})
 }
 
-func TestAnUnresolvedProgramMayBeTheCLI(t *testing.T) {
-	// No setup here runs the CLI, and the program may be it all the same: a
-	// program the tool cannot name may be any program.
+func TestAnUnresolvedProgramWithNoCLIToBeIsAnotherProcess(t *testing.T) {
+	// The setup does not run the CLI and nothing in reach builds one, so the
+	// program, whatever it is, cannot be a CLI.
 	r := reachOf(t, "unresolved", "TestRunTool")
-	expectReach(t, r, EndToEnd, "cli,proc", nil)
-	for _, touch := range []Touch{Proc, CLI} {
-		if w := r[touch].String(); !strings.Contains(w, "os/exec.Command spawns an unresolved program (") {
-			t.Errorf("%s witness = %s, want it to say the program is unresolved, and why", touch, w)
-		}
+	expectReach(t, r, Integration, "proc", nil)
+	if w := r[Proc].String(); !strings.Contains(w, "os/exec.Command spawns an unresolved program (") {
+		t.Errorf("proc witness = %s, want it to say the program is unresolved, and why", w)
 	}
 }
 
-func TestACLIBuiltApartFromTheTestBinaryIsACLIRun(t *testing.T) {
-	// The setup builds nothing the tool can see run the CLI, yet the path it
-	// hands the test is the CLI: a suite's real worker is this shape.
-	r := reachOf(t, "builtcli", "TestRunsTheBuiltCLI")
+func TestAnUnresolvedProgramIsACLIRunInATestThatBuildsOne(t *testing.T) {
+	// The test builds a CLI with the go tool, so the program it cannot name
+	// may be that CLI; the build is another process.
+	r := reachOf(t, "buildsgo", "TestBuildsThenRuns")
 	expectReach(t, r, EndToEnd, "cli,proc", nil)
-	if w := r[CLI].String(); !strings.Contains(w, "builtcli.Run ⇒ os/exec.Command spawns an unresolved program (") || !strings.HasSuffix(w, "which may be the CLI") {
-		t.Errorf("cli witness = %s, want the spawn of an unresolved program that may be the CLI", w)
+	if w := r[CLI].String(); !strings.Contains(w, "buildsgo.RunTool ⇒ os/exec.Command spawns an unresolved program (") || !strings.HasSuffix(w, `which may be a CLI the reach builds with "go"`) {
+		t.Errorf("cli witness = %s, want the unresolved spawn, which may be the CLI the reach builds", w)
+	}
+	// The binary's other test builds nothing: its unresolved program cannot
+	// be a CLI.
+	expectReach(t, reachOf(t, "buildsgo", "TestRunsOnly"), Integration, "proc", nil)
+}
+
+func TestAGoBuildInTheSetupMakesEveryTestsUnresolvedProgramACLIRun(t *testing.T) {
+	// TestMain builds the CLI and never runs it: every test that runs a
+	// program it cannot name may be running that CLI.
+	for _, test := range []string{"TestRunsTheBuiltCLI", "TestRunsItAgain"} {
+		r := reachOf(t, "builtcli", test)
+		expectReach(t, r, EndToEnd, "cli,proc", nil)
+		if w := r[CLI].String(); !strings.Contains(w, "builtcli.Run ⇒ os/exec.Command spawns an unresolved program (") || !strings.HasSuffix(w, `which may be a CLI the reach builds with "go"`) {
+			t.Errorf("%s cli witness = %s, want the unresolved spawn, which may be the CLI the setup builds", test, w)
+		}
 	}
 }
 
@@ -556,11 +569,12 @@ func TestAFunctionStoredInAStructHandedToOutsideCodeIsReached(t *testing.T) {
 
 func TestAParameterOfAFunctionReachedDynamicallyMayHoldAnyProgram(t *testing.T) {
 	// spawn's static call hands it git; apply's dynamic call hands it the
-	// test binary, which no static call shows, so the program is unresolved:
-	// another process, and a CLI run.
+	// test binary, which no static call shows, so the program is unresolved.
+	// Under a TestMain that runs the CLI, it may be the test binary as the
+	// CLI.
 	expectReach(t, reachOf(t, "spawnindirect", "TestStatusAndRerun"), EndToEnd, "git,cli,proc", map[Touch]string{
 		Git: "spawnindirect.TestStatusAndRerun → spawnindirect.Status → spawnindirect.spawn ⇒ os/exec.Command spawns \"git\", which is git",
-		CLI: "spawnindirect.TestStatusAndRerun → spawnindirect.Status → spawnindirect.spawn ⇒ os/exec.Command spawns an unresolved program (parameter program of spawnindirect.spawn, which a call other than a static one may pass anything: dynamic call reaches value from TestStatusAndRerun, made in spawnindirect.Rerun), which may be the CLI",
+		CLI: "spawnindirect.TestStatusAndRerun → spawnindirect.Status → spawnindirect.spawn ⇒ os/exec.Command spawns an unresolved program (parameter program of spawnindirect.spawn, which a call other than a static one may pass anything: dynamic call reaches value from TestStatusAndRerun, made in spawnindirect.Rerun), which may be the test binary, whose setup runs the CLI",
 	})
 }
 

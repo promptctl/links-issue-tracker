@@ -183,6 +183,10 @@ type classificationFile struct {
 	// Git names the programs that are git, matched against a spawned
 	// program's name or the last element of its path.
 	Git []string `json:"git"`
+	// GoBuilders names the programs that build Go code (the go tool),
+	// matched as git's are: a test whose reach spawns one may have built a
+	// CLI to run in another process.
+	GoBuilders []string `json:"go_builders"`
 	// Modules classifies each module the measured builds link a package of,
 	// by what its packages' initializers can do: every one must have an
 	// entry, so a dependency added later cannot bring an initializer in
@@ -203,13 +207,15 @@ type packageClassEntry struct {
 }
 
 // Classification is the parsed data file: every outside function's class,
-// the CLI's entry points, and git's names. [LAW:one-source-of-truth] it is
-// the one home of what code outside the module can do.
+// the CLI's entry points, git's names, and the go tool's.
+// [LAW:one-source-of-truth] it is the one home of what code outside the
+// module can do.
 type Classification struct {
-	cli      map[funcName]bool
-	git      []string
-	modules  map[string]Effect       // each module's initializers, by module path
-	packages map[string]packageClass // by import path, or a path prefix ending "/..."
+	cli        map[funcName]bool
+	git        []string
+	goBuilders []string
+	modules    map[string]Effect       // each module's initializers, by module path
+	packages   map[string]packageClass // by import path, or a path prefix ending "/..."
 }
 
 type packageClass struct {
@@ -246,7 +252,7 @@ func parseClassification(data []byte) (*Classification, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("classification file: %w", err)
 	}
-	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, packages: map[string]packageClass{}}
+	c := &Classification{cli: map[funcName]bool{}, git: f.Git, goBuilders: f.GoBuilders, modules: map[string]Effect{}, packages: map[string]packageClass{}}
 	for path, e := range f.Modules {
 		init, err := parseEffect(e.Init)
 		if err != nil {
@@ -424,9 +430,15 @@ func (c *Classification) isArg0(pkg, name string) bool {
 func (c *Classification) isCLI(n funcName) bool { return c.cli[n] }
 
 // isGit reports whether a program named name is git.
-func (c *Classification) isGit(name string) bool {
-	base := name[strings.LastIndex(name, "/")+1:]
-	return slices.Contains(c.git, base)
+func (c *Classification) isGit(name string) bool { return namedAs(c.git, name) }
+
+// buildsGo reports whether a program named name builds Go code.
+func (c *Classification) buildsGo(name string) bool { return namedAs(c.goBuilders, name) }
+
+// namedAs reports whether name, or the last element of its path, is one of
+// names.
+func namedAs(names []string, name string) bool {
+	return slices.Contains(names, name[strings.LastIndex(name, "/")+1:])
 }
 
 // splitInterfaceName splits a called-back interface's name, importpath.Name

@@ -215,25 +215,68 @@ func (w *walker) arg0(v *ssa.UnOp) (string, bool) {
 
 // settle turns every spawn in the walk's reach, its binary's setup's
 // included, into touches, each resolved through every call site the walk
-// holds — the witness saying which program, or why it is unresolved.
+// holds — the witness saying which program, or why it is unresolved. Every
+// spawn's sources are resolved once, first, because whether a CLI exists for
+// an unresolved program to be is a fact of the whole reach (cliFor).
 func (w *walker) settle(setupRunsCLI bool) {
+	type resolved struct {
+		site    spawnSite
+		sources sources
+	}
+	var spawns []resolved
 	for s := range w.spawns.all {
-		for p := range s.program.sources(w).all {
-			for t, what := range w.programTouches(p, setupRunsCLI) {
-				w.touch(t, s.in, func() string { return fmt.Sprintf("%s spawns %s", s.spawner, what) })
+		spawns = append(spawns, resolved{s, s.program.sources(w)})
+	}
+	cli := cliFor(setupRunsCLI, func(yield func(program) bool) {
+		for _, s := range spawns {
+			for p := range s.sources.all {
+				if !yield(p) {
+					return
+				}
+			}
+		}
+	}, w.a.class)
+	for _, s := range spawns {
+		for p := range s.sources.all {
+			for t, what := range w.programTouches(p, setupRunsCLI, cli) {
+				w.touch(t, s.site.in, func() string { return fmt.Sprintf("%s spawns %s", s.site.spawner, what) })
 			}
 		}
 	}
 }
 
+// cliHost is why a CLI exists for a test to run in another process, or
+// that none does (exists false).
+type cliHost struct {
+	exists bool
+	how    string
+}
+
+// cliFor decides whether a CLI exists for a test to run in another process.
+// One exists only if the test binary is one, because its setup runs the CLI,
+// or the reach builds one, by spawning a program that builds Go code
+// (Classification.buildsGo): a lit is a built program, and a test can run
+// only one that is built. Every reach that could build one says so, so the
+// reading errs away from unit. [LAW:no-silent-failure]
+func cliFor(setupRunsCLI bool, programs func(yield func(program) bool), class *Classification) cliHost {
+	if setupRunsCLI {
+		return cliHost{exists: true, how: "the test binary, whose setup runs the CLI"}
+	}
+	for p := range programs {
+		if n, ok := p.(programNamed); ok && class.buildsGo(n.name) {
+			return cliHost{exists: true, how: fmt.Sprintf("a CLI the reach builds with %q", n.name)}
+		}
+	}
+	return cliHost{}
+}
+
 // programTouches is the one place a program becomes touches: git when it is
 // git; a CLI run when it is the test binary and the binary's setup runs the
-// CLI; another process otherwise. An unresolved program may be any program,
-// a CLI built apart from the test binary included, so it is charged both
-// another process and a CLI run whatever the setup reaches: the reading that
-// errs furthest from unit. [LAW:no-silent-failure] the tool never reads a
-// touch away.
-func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(Touch, string) bool) {
+// CLI; another process otherwise. An unresolved program may be any program:
+// another process always, and a CLI run whenever a CLI exists for it to be
+// (cli), the reading that errs furthest from unit. [LAW:no-silent-failure]
+// the tool never reads a touch away.
+func (w *walker) programTouches(p program, setupRunsCLI bool, cli cliHost) func(yield func(Touch, string) bool) {
 	return func(yield func(Touch, string) bool) {
 		switch p := p.(type) {
 		case programNamed:
@@ -249,10 +292,10 @@ func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(To
 			}
 			yield(Proc, fmt.Sprintf("%s, the test binary, whose setup does not reach the CLI: another process", p.name))
 		case programUnresolved:
-			if !yield(Proc, "an unresolved program ("+p.why+"): another process") {
+			if !yield(Proc, "an unresolved program ("+p.why+"): another process") || !cli.exists {
 				return
 			}
-			yield(CLI, "an unresolved program ("+p.why+"), which may be the CLI")
+			yield(CLI, "an unresolved program ("+p.why+"), which may be "+cli.how)
 		}
 	}
 }
