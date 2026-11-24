@@ -36,15 +36,18 @@ func TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased(t *testing.T) {
 		t.Fatalf("JoinDetachedWorkers() with a hold open = %v; want an error naming %s", err, workerLockName)
 	}
 
+	// The hold is released by unlocking it, then closed. Close alone drops
+	// only this process's descriptor: a process a parallel test forks copies
+	// every fd, this one included, and the flock lives on the open file
+	// description they share until that process execs. LOCK_UN releases the
+	// description's lock whoever else still has it open.
+	if err := syscall.Flock(int(holds[0].Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("unlock the hold: %v", err)
+	}
 	if err := holds[0].Close(); err != nil {
 		t.Fatalf("release the hold: %v", err)
 	}
-	// The released hold can outlive Close for a moment: a process a parallel
-	// test forks copies every fd, this one included, and keeps the open file
-	// description, flock and all, until it execs. So the join that must
-	// succeed waits the stall bound, and it returns the instant the kernel
-	// grants the lock, so a passing run pays nothing for it.
-	if err := JoinDetachedWorkers(storageDir, suiteenv.StallBound); err != nil {
+	if err := JoinDetachedWorkers(storageDir, 100*time.Millisecond); err != nil {
 		t.Fatalf("JoinDetachedWorkers() with every hold released = %v; want nil", err)
 	}
 }
