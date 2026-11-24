@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// applyAt is the instant every Apply in this package's tests is handed.
+// applyAt is this package's one fixture instant: every Apply in its tests is
+// handed it, and every Retain that needs only one instant is too.
 var applyAt = time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
 
 func TestNewStatusStateMirrorsValue(t *testing.T) {
@@ -36,8 +37,10 @@ func TestNewStatusClosedAtBelongsOnlyToClosed(t *testing.T) {
 // TestApplyTargetStateMatrix exercises every (from, action) pair in the 3x4
 // matrix. Each cell asserts the post-state matches the action's target state —
 // same-state cells (start@InProgress, done@Closed, close@Closed, reopen@Open)
-// are no-ops that preserve the receiver. There are no rejection cells: every
-// cell here is a legal call, and Apply cannot fail by construction.
+// are no-ops that preserve the receiver. Every cell that moves into Closed is
+// stamped with exactly the instant Apply was handed, location included. There
+// are no rejection cells: every cell here is a legal call, and Apply cannot
+// fail by construction.
 func TestApplyTargetStateMatrix(t *testing.T) {
 	allActions := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
 	for _, from := range []State{Open, InProgress, Closed} {
@@ -47,6 +50,12 @@ func TestApplyTargetStateMatrix(t *testing.T) {
 				next := NewStatus(from, nil, nil, nil).Apply(action, applyAt)
 				if got := next.State(); got != target {
 					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, got, target)
+				}
+				if target != Closed || from == Closed {
+					return
+				}
+				if closedAt := next.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(applyAt) || closedAt.Location() != time.UTC {
+					t.Fatalf("Apply(%s on %s).ClosedAt() = %v, want %v — the instant Apply was handed", action.Name(), from, closedAt, applyAt)
 				}
 			})
 		}
@@ -93,22 +102,12 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 	}
 }
 
-// TestApplyClosedAtBookkeeping locks in the close-timestamp invariant under the
-// sum type: a transition into Closed is stamped with the instant Apply is
-// handed; every transition out of Closed lands on a variant that structurally
-// cannot hold one, so the timestamp is gone.
+// TestApplyClosedAtBookkeeping locks in the other half of the close-timestamp
+// invariant under the sum type (the matrix pins the stamp on the way in):
+// every transition out of Closed lands on a variant that structurally cannot
+// hold one, so the timestamp is gone.
 func TestApplyClosedAtBookkeeping(t *testing.T) {
 	priorClosed := time.Unix(1_700_000_000, 0).UTC()
-
-	openToClosed := NewStatus(Open, nil, nil, nil).Apply(Close{Outcome: Wontfix{}}, applyAt)
-	if closedAt := openToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(applyAt) {
-		t.Fatalf("Apply(close on open).ClosedAt() = %v, want %v — the instant Apply was handed", closedAt, applyAt)
-	}
-
-	inProgressToClosed := NewStatus(InProgress, nil, nil, nil).Apply(Done{}, applyAt)
-	if closedAt := inProgressToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(applyAt) {
-		t.Fatalf("Apply(done on in_progress).ClosedAt() = %v, want %v — the instant Apply was handed", closedAt, applyAt)
-	}
 
 	closedToOpen := NewStatus(Closed, &priorClosed, nil, nil).Apply(Reopen{}, applyAt)
 	if closedAt := closedToOpen.(StatusPrimitive).ClosedAt(); closedAt != nil {

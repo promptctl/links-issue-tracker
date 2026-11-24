@@ -151,10 +151,6 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// check guards a write and there is no write here to guard. Checking first
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
-	//
-	// The plan is handed the write's one stamped instant, so a close's
-	// closed_at is this write's updated_at and its event's instant by
-	// construction. [LAW:one-source-of-truth]
 	plan, err := claims.PlanStatus(current, e.eventsFor(current.ID), action, e.attribution, now)
 	if err != nil {
 		return model.Issue{}, nil, nil, err

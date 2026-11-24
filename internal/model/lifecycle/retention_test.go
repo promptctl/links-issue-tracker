@@ -60,7 +60,7 @@ func TestRetentionTimestampsRefusesImpostors(t *testing.T) {
 // RetentionAction, so feeding one to Retain does not compile.
 func TestRetainTransitionTable(t *testing.T) {
 	prior := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	at := applyAt
 	live := Live{}
 	archived := Archived{At: prior}
 	deleted := Deleted{At: prior}
@@ -132,7 +132,7 @@ func TestRetainTransitionTable(t *testing.T) {
 // Pins the epic-decided lifecycle sequence: archive → delete → restore lands
 // on Live, never back on Archived — Deleted remembers nothing.
 func TestRetainArchiveDeleteRestoreLandsLive(t *testing.T) {
-	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	at := applyAt
 	var cur Retention = Live{}
 	for _, action := range []RetentionAction{Archive{}, Delete{}, Restore{}} {
 		next, err := Retain(cur, action, at)

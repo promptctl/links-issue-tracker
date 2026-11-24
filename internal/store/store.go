@@ -1919,23 +1919,17 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 // validation, which reads a foreign row on the write's tx, then the single
 // UPDATE plus the event. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
-// field write. A noop plan records that the target state and assignee already
-// hold, so no write is owed. [LAW:decomposition]
+// field write, and which the write half reads every column it writes off.
+// A noop plan records that the target state and assignee already hold, so no
+// write is owed. [LAW:decomposition] [LAW:one-source-of-truth]
 type transitionWrite struct {
-	issueID           model.ID
-	toStatus          string
-	postAssignee      string
-	now               time.Time
-	closedAtArg       any
-	resolutionArg     any
-	redirectTargetArg any
-	action            model.ActionName
-	reason            string
-	actor             string
-	changes           []model.FieldChange
-	post              model.Issue
-	noop              bool
-	claimHandover     *claims.Handover
+	action        model.ActionName
+	reason        string
+	actor         string
+	changes       []model.FieldChange
+	post          model.Issue
+	noop          bool
+	claimHandover *claims.Handover
 }
 
 func (w transitionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
@@ -1951,9 +1945,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// because it is exactly what recordEvent will stamp on the event this plan
 	// is deciding whether to write. Whether it is owed at all is
 	// claims.StatusPlan's to say, where the memory engine and the hold gate
-	// read it too. [LAW:one-source-of-truth] The plan is handed at, the write's
-	// one stamped instant, so a close's closed_at is this write's updated_at by
-	// construction rather than a second clock reading.
+	// read it too. [LAW:one-source-of-truth]
 	plan, err := claims.PlanStatus(issue, history, action, s.attribution, at)
 	if err != nil {
 		return transitionWrite{}, err
@@ -1964,34 +1956,16 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	updated := plan.Updated
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
-	now := at
-	var closedAtArg any
-	if value := updated.ClosedAtValue(); value != nil {
-		closedAtArg = value.Format(time.RFC3339Nano)
-	}
 	// The close outcome traveled through the state machine into the closed leaf,
-	// so the post-transition resolution is read back off the updated issue — no
-	// re-attachment, and a non-closed target structurally carries none, so a
-	// resolution can never linger on a non-closed row. [LAW:types-are-the-program]
-	postResolution := updated.ResolutionValue()
-	var resolutionArg any
-	if postResolution != nil {
-		resolutionArg = string(*postResolution)
-	}
-	// The redirect target traveled through the state machine into the closed
-	// leaf exactly like the resolution — only the redirecting outcomes carry
-	// one, structurally — so the plan reads it back off the post-transition
-	// issue. Its integrity (target exists, is not the issue itself, is not a
-	// deleted canonical) is validated by applyTransitionTx on the write's tx,
+	// so the post-transition resolution and redirect target are read back off
+	// the updated issue — no re-attachment, and a non-closed target
+	// structurally carries neither, so neither can linger on a non-closed row.
+	// The redirect's integrity (target exists, is not the issue itself, is not
+	// a deleted canonical) is validated by applyTransitionTx on the write's tx,
 	// not here: the plan reads nothing itself, and validateRedirectTarget reads
-	// a FOREIGN row. [LAW:effects-at-boundaries] [LAW:one-source-of-truth] The leaf is
-	// the single carrier; there is no separate outcome re-extraction to drift
-	// from it.
+	// a FOREIGN row. [LAW:types-are-the-program] [LAW:effects-at-boundaries]
+	postResolution := updated.ResolutionValue()
 	postRedirect := updated.RedirectTargetValue()
-	var redirectTargetArg any
-	if postRedirect != nil {
-		redirectTargetArg = *postRedirect
-	}
 	// [LAW:one-source-of-truth] Change rows mirror the columns that actually
 	// moved. A same-state reclaim records only the assignee row — a from==to
 	// status row would be a schema lie.
@@ -2015,24 +1989,17 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if plan.Prior.Assignee != plan.Post.Assignee {
 		changes = append(changes, model.FieldChange{Field: "assignee", From: plan.Prior.Assignee.Raw(), To: plan.Post.Assignee.Raw()})
 	}
-	updated.UpdatedAt = now
+	updated.UpdatedAt = at
 	// updated already carries the leaf the write will persist — the outcome
 	// traveled through the machine, so there is no post-hoc rehydration to
 	// re-attach a resolution. [LAW:one-source-of-truth]
 	return transitionWrite{
-		issueID:           issue.ID,
-		toStatus:          toStatus,
-		postAssignee:      plan.Post.Assignee.Raw(),
-		now:               now,
-		closedAtArg:       closedAtArg,
-		resolutionArg:     resolutionArg,
-		redirectTargetArg: redirectTargetArg,
-		action:            action.Name(),
-		reason:            reason,
-		actor:             actor,
-		changes:           changes,
-		post:              updated,
-		claimHandover:     plan.Handover(),
+		action:        action.Name(),
+		reason:        reason,
+		actor:         actor,
+		changes:       changes,
+		post:          updated,
+		claimHandover: plan.Handover(),
 	}, nil
 }
 
@@ -2054,11 +2021,15 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
+	// Every column is read off post, the issue validation just read, so what
+	// is validated and what is written cannot drift. [LAW:one-source-of-truth]
+	post := w.post
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
-		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID); err != nil {
+		post.StatusValue(), post.AssigneeValue(), post.UpdatedAt.Format(time.RFC3339Nano), nullableTime(post.ClosedAtValue()),
+		nullableResolution(post.ResolutionValue()), nullableStringPtr(post.RedirectTargetValue()), post.ID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
+	return s.recordEvent(ctx, tx, post.ID, string(w.action), w.reason, w.actor, post.UpdatedAt, w.changes)
 }
 
 // retentionWrite is a fully-planned retention transition, the retention-axis
@@ -2597,6 +2568,9 @@ func (s *Store) laneFamilyIDs(ctx context.Context, issueID model.ID) ([]model.ID
 	}
 	return append(ids, issueID), nil
 }
+
+// Clock is the clock this store stamps every write with.
+func (s *Store) Clock() storage.Clock { return s.clock }
 
 // StampCorrections is the account of every stamp this store handed out that
 // history held back from its clock.

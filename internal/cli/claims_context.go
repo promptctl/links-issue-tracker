@@ -43,7 +43,7 @@ func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, 
 	if err != nil {
 		return claimContext{}, err
 	}
-	checkouts, err := gatherCheckouts(env, stdout, ap)
+	checkouts, err := gatherCheckouts(env, stdout, ap, ap.Store.Clock().Now())
 	if err != nil {
 		return claimContext{}, err
 	}
@@ -61,8 +61,8 @@ type checkoutFacts struct {
 }
 
 // gatherCheckouts reads those facts, the half of a claim's reading that a read
-// of one lane and a read of the backlog share.
-func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App) (checkoutFacts, error) {
+// of one lane and a read of the backlog share, judging freshness as of now.
+func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App, now time.Time) (checkoutFacts, error) {
 	cfg, err := config.Load(env, ap.Workspace.Project)
 	if err != nil {
 		return checkoutFacts{}, err
@@ -86,7 +86,7 @@ func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App) (checkoutFa
 		addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)
 	}
 
-	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
+	fresh := claims.Freshness{Now: now, Window: cfg.Claims.FreshnessWindow}
 	return checkoutFacts{fresh: fresh, local: local, addresses: addresses}, nil
 }
 

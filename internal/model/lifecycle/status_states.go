@@ -144,8 +144,6 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 // It cannot fail: Target is total over StatusAction.
 // [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
 // this function maintains no parallel table.
-// [LAW:effects-at-boundaries] The close instant is a parameter, not a clock
-// read: the write boundary that stamps the event hands over that same instant.
 func applyStatusAction(current Lifecycle, action StatusAction, at time.Time) Lifecycle {
 	target := action.Target()
 	if current.State() == target {

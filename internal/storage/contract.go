@@ -335,6 +335,12 @@ type Store interface {
 	StrandedWritesReporter
 	ScratchDeleteReporter
 
+	// Clock is the clock this engine stamps its writes with. A caller that
+	// judges an instant against what the store recorded reads it here, so a
+	// run has one clock and Clock.Now stays its one UTC normalization.
+	// [LAW:one-source-of-truth]
+	Clock() Clock
+
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing
 	// what it was — for the Dolt engine that includes the workspace lock, and a

@@ -126,9 +126,8 @@ type StatusPlan struct {
 	reclaims         bool
 }
 
-// PlanStatus runs action against issue, whose own history is events, as
-// taken by taker — the checkout the event it would record will name — at the
-// instant at, which a close records as its close time.
+// PlanStatus runs action at the instant at against issue, whose own history is
+// events, as taken by taker — the checkout the event it would record will name.
 func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution, at time.Time) (StatusPlan, error) {
 	updated, err := issue.Apply(action, at)
 	if err != nil {

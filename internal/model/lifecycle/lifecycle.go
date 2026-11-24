@@ -124,8 +124,9 @@ type Container interface {
 // returns the receiver, so there is no error to return. The actor/reason of a
 // transition are event provenance owned by the store's write boundary — the
 // machine computes the next state and nothing else. at is the instant of the
-// transition, as Retain takes it: a close records it as its close time.
-// [LAW:effects-at-boundaries]
+// transition, as Retain takes it, and a close records it as its close time; a
+// write hands the instant it stamps itself with, so a close's closed_at is its
+// write's updated_at. [LAW:effects-at-boundaries] [LAW:one-source-of-truth]
 type Actionable interface {
 	Lifecycle
 	Apply(action StatusAction, at time.Time) Lifecycle
