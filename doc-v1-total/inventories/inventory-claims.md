@@ -436,7 +436,7 @@ The `self.Present()` half is load-bearing: a zero checkout compared against the 
 There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes (unless the holder's worktree is locked), so `relationOf` never learns a claim existed. The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
 **`authorizeHold(ctx, inv, ap, issueID, prior, action, take)`** (`internal/cli/claims_takeover.go`):
-1. `landable(prior, action)` — `Issue.PlanPhase` for a phase move, `Issue.Apply` for a status action — so a transition that cannot land is refused before any lane is gated.
+1. `landable(prior, action)` — `Issue.PlanPhase` for a phase move, `Issue.PlanStatus` for a status action — so a transition that cannot land is refused before any lane is gated.
 2. `ap.Store.LaneFamily(ctx, issueID)`, whose size `<verb>.lane_family_issues` records, parsed by `claims.NewLane(issueID, family)` into the `claims.Lane` the ticket is in. `NewLane` shares `partition` with `NewEvidence`, refusals included.
 3. `gatherCheckouts`.
 4. `relationOf(standing, ownAttribution(ap))` over `standing := lane.Standing(checkouts.fresh, checkouts.local)`; `<verb>.lane_held` is set on the invocation's event to whether the relation is anything but `laneUnclaimed`, then `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the transition.

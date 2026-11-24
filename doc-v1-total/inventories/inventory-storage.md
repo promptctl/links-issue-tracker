@@ -845,23 +845,23 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention` and `model.SetPhase` → `planPhase`, each with a nil handover; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
 
 **`planStatus`** (`internal/storage/memory/apply.go`)
-- `current.Apply(action)` — the state machine's own rejections propagate, among them `model.FrozenIssueError` for an archived or deleted issue.
-- Claimant rule: `prior := claims.ClaimantOf(current, e.eventsFor(current.ID))`, `post := prior.After(action, e.attribution)`, and `updated.Assignee = post.Assignee`. Start is the one variant that moves the (assignee, checkout) pair.
-- **No-op rule**: if `updated.StatusValue() == current.StatusValue() && post == prior` → return `(current, nil, nil, nil)` with no event. A same-state start that moves the claimant — a new assignee, or a new checkout under the same identity — is the reclaim path and falls through, recording the ownership change.
+- `claims.PlanStatus(current, e.eventsFor(current.ID), action, e.attribution)` — `Issue.PlanStatus`'s rejections propagate, among them `model.FrozenIssueError` for an archived or deleted issue. The plan's `Prior` is `claims.ClaimantOf` over the issue's own history; its `Post` differs only for a start, which installs the taking checkout and the canonical assignee.
+- **No-op rule**: `!plan.Records()` → return `(current, nil, nil, nil)` with no event. `Records` is the status moving, the claimant moving, or a reclaim; a same-state start that moves the claimant — a new assignee, or a new checkout under the same identity — falls through, recording the ownership change.
 - The no-op is decided BEFORE the redirect target is checked, because the check guards a write and there is no write here to guard.
-- `validateRedirectTarget(updated)`.
-- Sets `updated.UpdatedAt = now`; emits one event with `action: string(action.Name())`, the change's `reason`, the `actor`, and `statusChanges(current, updated)`, and returns `prior.HandoverTo(post)` as the handover.
+- `updated := plan.Updated(at)` — the post-state stamped with the write's stamp, which is its `UpdatedAt` and a close's `closed_at`.
+- `storage.ValidateRedirectTarget(updated, e.retentionOf)`.
+- Emits one event with `action: string(action.Name())`, the change's `reason`, the `actor`, and `plan.FieldChanges(at)`, and returns `plan.Handover()` as the handover.
 
 **`planRetention`** (`internal/storage/memory/apply.go`)
 - `model.Retain(current.Retention(), action, now)` — the legal moves and every rejection reason are the model's transition table.
 - **There is no same-state success cell** — re-archiving an archived issue is a rejection, not a quiet no-op — so every planned retention move owes a write.
 - Sets retention and `UpdatedAt = now`; emits one event with `retentionChanges(...)`.
 
-**`validateRedirectTarget`** (`internal/storage/memory/apply.go`)
+**`storage.ValidateRedirectTarget(closing, retentionOf)`** (`internal/storage/redirect.go`) — the one redirect rule; each engine supplies only `retentionOf`, its read of the canonical's retention (the memory engine's `e.retentionOf`, the Dolt store's `currentRetentionTx` on the write's tx).
 - Target nil and resolution non-nil and `resolution.RedirectsToCanonical()` → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`.
 - Target nil and not redirect-requiring → nil.
 - `*target == closing.ID` → `fmt.Errorf("cannot redirect %s to itself", closing.ID)`.
-- Target not present → `mustRecord`'s `NotFoundError`.
+- Target not present → `retentionOf`'s `NotFoundError`.
 - Target's retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted"...)`.
 - **Archived stays legal**, because "duplicate of something already done" is the most common real redirect.
 
@@ -882,7 +882,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.ApplyProseFields(provisional, texts merge.ProseTexts)`** (`internal/storage/fields.go`) — states each merged text on an `UpdateIssueInput` (`ProseTitle` → `Title`, `ProseDescription` → `Description`, `ProsePrompt` → `Prompt`, `ProsePlan` → `Plan`) and returns `ApplyIssueFields(provisional, in)`, so `agent_prompt` is recorded as `prompt`. Any other field → error `issue <id>: no editable field for merged prose field "<field>"`.
 
-**`statusChanges`** (`internal/storage/memory/apply.go`) — rows, in order, for: `status` (when `StatusValue()` moved), `closed_at` (`model.StampText`, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
+**`model.StatusChange.FieldChanges(at)`** (`internal/model/model.go`) — the status rows both engines record, in order, for: `status` (when the status moved), `closed_at` (`model.StampText`, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
 
 **`retentionChanges`** (`internal/storage/memory/apply.go`) — projects both retentions through `model.RetentionTimestamps` and emits `archived_at` and/or `deleted_at` rows (`model.StampText`) for whichever moved — the same encoding an export carries.
 
@@ -893,8 +893,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`statusViewOf`** (`internal/storage/memory/apply.go`) — a container projects to the **zero** `model.StatusView` (the same nothing Dolt stores as a NULL column); a leaf projects `{Value: issue.State(), ClosedAt, Resolution, RedirectTarget}`.
 
 **Optional-value helpers** (`internal/storage/memory/compare.go`) — shared contract: two absent values are equal, absence renders as the empty string, and absence is never conflated with a present zero.
-- `timesEqual`, `resolutionsEqual`, `stringsEqual`.
-- `formatResolution` → `""` for nil; `formatString` → `""` for nil.
+- `timesEqual`.
 
 ### 2.9 Comments (`internal/storage/memory/edges.go`)
 

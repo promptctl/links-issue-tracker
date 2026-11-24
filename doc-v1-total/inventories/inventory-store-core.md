@@ -109,18 +109,14 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 #### 1.7 Other free helpers defined in store.go
 
 - `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go`).
-- `scanTime(value string) (time.Time, error)` = `model.ParseStamp(value)` (`store.go`). Single parse boundary for every timestamp column.
+- `scanTime(value string) (time.Time, error)` = `model.ParseStamp(value)`, in UTC (`store.go`). Single parse boundary for every timestamp column, so no reader re-normalizes an instant it reads.
 - `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go`).
 - `nullableTime(*time.Time) any` — nil → `nil`, else the `model.StampText` string (`store.go`).
 - `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go`).
 - `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go`).
 - `nullableStringPtr(*string) any` — nil → `NULL` (`store.go`).
 - `model.TimestampChange(field model.TimestampField, from, to *time.Time)` (`internal/model/stamp.go`) — the change row of a timestamp field: each side `""` for nil, else the stored spelling.
-- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go`).
-- `formatNullableString(*string) string` — nil → `""` (`store.go`).
 - `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go`).
-- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go`).
-- `stringPointersEqual(a, b *string) bool` — same (`store.go`).
 - `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go`). Sole feeder of the `archived_at`/`deleted_at` column pair.
 - `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go`). Containers therefore store NULL status.
 - `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go`).
@@ -680,45 +676,33 @@ Evidence: a start attempted amid another Apply's plan reads waits on its hold ra
 
 `lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`, `handover() *claims.Handover` (nil for every write but a status transition whose plan set one).
 
-#### 6.3 The guard: `Issue.Apply`
+#### 6.3 The guard: `Issue.PlanStatus`
 
-`planStatusTransition` calls `issue.Apply(action)` (`model.go`) and propagates its refusals: `ContainerActionError` for a container, then `FrozenIssueError` for an archived or deleted issue. The Dolt store adds no guard of its own; the memory engine's `planStatus` calls the same method, so both engines refuse with one error.
+`planStatusTransition` plans through `claims.PlanStatus`, which calls `issue.PlanStatus(action)` (`model.go`) and propagates its refusals: `ContainerActionError` for a container, then `FrozenIssueError` for an archived or deleted issue. The Dolt store adds no guard of its own; the memory engine's `planStatus` calls the same function, so both engines refuse with one error.
 
 Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
-`transitionWrite` fields (`store.go`): `issueID, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`prior.HandoverTo(post)`, left nil on a no-op). Methods at `store.go`.
+`transitionWrite` fields (`store.go`): `action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`plan.Handover()`, left nil on a no-op). Every column the write sets is read off `post`. Methods at `store.go`.
 
-`planStatusTransition(ctx, issue, actor, reason, action) (transitionWrite, error)` (`store.go`):
-1. `issue.Apply(action)` → `updated` or the rejection.
-2. `priorAssignee := issue.AssigneeValue()`; `postAssignee := priorAssignee` unless the action is `model.Start`, in which case `postAssignee = strings.TrimSpace(start.Assignee)` (`store.go`). Only `Start` rewrites the assignee.
-3. `fromStatus := issue.StatusValue()`, `toStatus := updated.StatusValue()` (`store.go`).
-4. **No-op rule**: `toStatus == fromStatus && postAssignee == priorAssignee` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
-5. `now := time.Now().UTC()` (`store.go`).
-6. `closedAtArg` = `model.StampText(*updated.ClosedAtValue())` when non-nil, else nil (`store.go`).
-7. `resolutionArg` = `string(*updated.ResolutionValue())` when non-nil, else nil (`store.go`).
-8. `redirectTargetArg` = `*updated.RedirectTargetValue()` when non-nil, else nil (`store.go`). Its integrity is deliberately **not** validated here (`store.go`).
-9. Change rows, in this order (`store.go`):
-   - `status` when `fromStatus != toStatus`;
-   - `closed_at` when `!timesEqual(prior, new)`, values via `model.TimestampChange`;
-   - `resolution` when `!resolutionsEqual(...)`, via `formatNullableResolution`;
-   - `redirect_target` when `!stringPointersEqual(...)`, via `formatNullableString`;
-   - `assignee` when `priorAssignee != postAssignee`.
-10. `updated.UpdatedAt = now` (`store.go`) and the struct is returned with `post: updated`.
+`planStatusTransition(issue, history, at, actor, reason, action) (transitionWrite, error)` (`store.go`):
+1. `plan := claims.PlanStatus(issue, history, action, s.attribution)` → the plan or the rejection.
+2. **No-op rule**: `!plan.Records()` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
+3. Otherwise `changes: plan.FieldChanges(at)` and `post: plan.Updated(at)`: the post-state carries `at`, the write's stamp, as its `UpdatedAt` and a close's `closed_at`, and the change rows are `model.StatusChange.FieldChanges` — `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`, each when it moved.
 
 Evidence: each of the six non-identity (from→to) pairs records exactly one event carrying the action's own name (`store_test.go`); a same-state `Start` with a new assignee records one `start` event with the calling actor and **no** status change row, and persists the new assignee (`store_test.go`); a same-state, same-assignee `Start` records zero events and does not bump `UpdatedAt` (`store_test.go`).
 
 #### 6.5 `applyTransitionTx`
 
 `store.go`:
-1. `validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue())` — on the **same tx** as the write (`store.go`).
+1. `storage.ValidateRedirectTarget(post, …)` with `currentRetentionTx` — on the **same tx** as the write (`store.go`).
 2. The UPDATE (`store.go`):
 ```sql
 UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?
 ```
-bound `w.toStatus, w.postAssignee, model.StampText(w.now), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID`. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
-3. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go`).
+bound from `w.post`: its status, assignee, `UpdatedAt` (`model.StampText`), close time, resolution, redirect target, and id. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
+3. `s.recordEvent(...)` with the action name, reason, actor, `w.changes`, and `w.post.UpdatedAt` as the event's instant (`store.go`).
 
 The UPDATE touches only the status-axis columns — a transition restates no retention column (`store.go`).
 
@@ -741,21 +725,21 @@ bound `model.StampText(w.now), w.nextArchived, w.nextDeleted, w.issueID`; exec f
 
 Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 
-#### 6.7 `validateRedirectTarget`
+#### 6.7 Redirect-target validation
 
-`store.go` — a free function of `(ctx, tx, closingID string, resolution *model.Resolution, target *string)`:
-- `target == nil` and `resolution != nil && resolution.RedirectsToCanonical()` → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`;
-- `target == nil` otherwise → `nil`;
-- `*target == closingID` → `fmt.Errorf("cannot redirect %s to itself", closingID)`;
-- `currentRetentionTx(ctx, tx, *target)` — a missing row surfaces as `storage.NotFoundError`;
-- target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)`;
-- `Archived` targets are accepted (matched as the specific `Deleted` variant only, `store.go`).
+`storage.ValidateRedirectTarget` (`internal/storage/redirect.go`), the rule both engines call; the Dolt store hands it `currentRetentionTx` on the write's tx:
+- target nil and the resolution redirects to a canonical → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`;
+- target nil otherwise → `nil`;
+- target is the closing issue → `fmt.Errorf("cannot redirect %s to itself", closing.ID)`;
+- the target's retention read — a missing row surfaces as `storage.NotFoundError`;
+- target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closing.ID, *target)`;
+- `Archived` targets are accepted (matched as the specific `Deleted` variant only).
 
 Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go`); self-redirect rejected (`store_test.go`); redirect to an **archived** canonical succeeds (`store_test.go`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go`); a redirecting outcome with an empty target is rejected (`store_test.go`).
 
 #### 6.8 In-tx read helpers
 
-`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`), read by `validateRedirectTarget` (§6.7): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
+`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`), read by `storage.ValidateRedirectTarget` (§6.7): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
 
 `requireIssueExistsTx(ctx, tx, issueID) error` (`store.go`): `SELECT 1 FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("check issue exists: %w", err)`. Accepts archived/deleted rows — no `deleted_at` filter (`store.go`).
 
@@ -2235,7 +2219,7 @@ This runs after the totality and problem phases, so a shape fault masks an arity
 | Transform | NULL (`nil`) input | `string` input | other Go type input |
 |---|---|---|---|
 | `identity` | returns `nil` | returns the value unchanged | returns the value unchanged (shapemap.go) |
-| `timestamp` | returns `nil, nil` (shapemap.go) | `parseTimestamp` → `time.Time`, or error `invalid timestamp %q` (shapemap.go) | error: `%s requires a string cell, got %T` with `%s` = `"timestamp"` (shapemap.go) |
+| `timestamp` | returns `nil, nil` (shapemap.go) | `parseTimestamp` → `time.Time` in UTC, or error `invalid timestamp %q` (shapemap.go) | error: `%s requires a string cell, got %T` with `%s` = `"timestamp"` (shapemap.go) |
 | `legacy_status_value` | `cellNullString` → invalid → `canonicalLegacyStatus` keeps invalid → `nullableSQLString` → `nil` | canonicalized string (table below) | error `legacy_status_value: expected a string or NULL cell, got %T` (shapemap.go) |
 | `event_action` | `canonicalEventAction(invalid)` → `nil` | `strings.TrimSpace`; empty after trim → `nil`; else trimmed string | error `event_action: expected a string or NULL cell, got %T` |
 | `event_reason` | → `""` | `strings.TrimSpace(v)` | error `event_reason: expected a string or NULL cell, got %T` |

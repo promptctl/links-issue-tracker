@@ -104,13 +104,10 @@ unarchive, delete, restore`.
 
 - `Lifecycle` — `lifecycle.go`: `State() State`, `Progress() Progress`.
 - `Container` — `lifecycle.go`: `Lifecycle` + `Children() []Lifecycle`.
-- `Actionable` — `lifecycle.go`: `Lifecycle` + `Apply(action StatusAction) Lifecycle`.
-  `Apply` is documented total — no error return, because `StatusAction.Target()`
-  always names a real state and a same-state call returns the receiver
-  (`lifecycle.go`).
-- `StatusPrimitive` — `status_states.go`: `Actionable` +
+- `StatusPrimitive` — `status_states.go`: `Lifecycle` +
   `ClosedAt() *time.Time`, `Resolution() *Resolution`, `RedirectTarget() *string`.
-  `AllOf` is deliberately not a `StatusPrimitive` (`status_states.go`).
+  It is the one kind of lifecycle `Apply` takes; `AllOf` is deliberately not a
+  `StatusPrimitive` (`status_states.go`).
 
 ### `Walk(l Lifecycle, visit func(Lifecycle) bool)` — `lifecycle.go`
 Depth-first. Returns immediately if `l == nil` **or** `visit(l)` returns false
@@ -222,24 +219,27 @@ target — none is mandatory at the type level (rationale `status_states.go`).
   `TestNewStatusResolutionBelongsOnlyToClosed`,
   `TestNewStatusRedirectTargetRequiresRedirectingResolution`.
 
-### `applyStatusAction(current Lifecycle, action StatusAction) Lifecycle` — `status_states.go`
-The shared transition for all three leaf variants (each `Apply` delegates:
-).
-- `target := action.Target()`; if `current.State() == target`, returns the
-  receiver **unchanged** (`status_states.go`). Consequence: re-closing a
-  closed issue keeps the existing resolution/closedAt rather than rewriting it
-  (`status_states.go`; pinned by `TestApplySameStateReturnsReceiverUnchanged`,
-  `lifecycle_test.go`).
-- Target `Closed`: stamps `closedAt = time.Now().UTC()` and attaches
-  `closeResolution(action)` and `closeRedirectTarget(action)`
-  (`status_states.go`).
-- Target `InProgress`: returns `inProgressState{}`.
-- Target anything else (i.e. `Open`): returns `openState{}` — so a
-  reopen clears closedAt, resolution and redirect target (pinned by
+### `Apply(current StatusPrimitive, action StatusAction, at stamp.Instant) StatusPrimitive` — `status_states.go`
+The one transition for all three leaf variants.
+- `Moves(current, action)` — `current.State() != action.Target()` — is the
+  same-state rule's one owner. When the action does not move, `Apply` returns
+  the receiver **unchanged**. Consequence: re-closing a closed issue keeps the
+  existing resolution/closedAt rather than rewriting it (pinned by
+  `TestApplySameStateReturnsReceiverUnchanged`, `lifecycle_test.go`).
+- Otherwise the result is `NewStatus(action.Target(), &closedAt, closeResolution(action), closeRedirectTarget(action))`
+  with `closedAt = at.Time()`, so `NewStatus` decides what each target state
+  keeps: a close records the stamp, its resolution and its target; a start or
+  a reopen lands on a variant that carries none of them (pinned by
   `TestApplyReopenClearsResolution`, `lifecycle_test.go`).
-- Cannot fail — no error channel (`status_states.go`).
+- Cannot fail — no error channel.
 - Target matrix pinned by `TestApplyTargetStateMatrix` (`lifecycle_test.go`)
   and close bookkeeping by `TestApplyClosedAtBookkeeping`.
+
+### `stamp.Instant` and `stamp.Next(now, newest time.Time) Instant` — `internal/model/stamp/stamp.go`
+The instant a write is stamped at, built only by `Next`: `now` when it is past
+`newest`, else `newest` plus one nanosecond, in UTC either way. `Time()` reads
+it. `Apply`, `StatusChange.Updated` and `StatusChange.FieldChanges` take one.
+Pinned by `TestStampNext` (`phase_test.go`), across zones.
 
 ### `closeResolution(action StatusAction) *Resolution` — `status_states.go`
 - If the action is a `Close`: `c.Outcome == nil` **panics** with
@@ -251,7 +251,7 @@ The shared transition for all three leaf variants (each `Apply` delegates:
 
 ### `closeRedirectTarget(action StatusAction) *string` — `status_states.go`
 Non-`Close` → nil. `Duplicate` → its `Of`; `Superseded` → its `By`; any other
-outcome → nil. Result passes through `normalizeRedirectTarget`.
+outcome → nil. `NewStatus` normalizes the result through `normalizeRedirectTarget`.
 
 ### `normalizeRedirectTarget(target *string) *string` — `status_states.go`
 nil → nil; `strings.TrimSpace`; empty after trim → nil; otherwise a **fresh**
@@ -275,7 +275,7 @@ Helpers: `cloneTime` (`status_states.go`), `cloneString`
   `Progresses(a)` (i.e. over every non-container descendant). Pinned by
   `TestAllOfProgressAndActions` (`lifecycle_test.go`) and
   `TestAllOfProgressIncludesNonStatusLeafPrimitives`.
-- `AllOf` does not implement `Actionable` — no `Apply` method exists
+- `AllOf` is not a `StatusPrimitive`, so `Apply` cannot be handed one
   (`all_of.go`; pinned by `TestAllOfIsNotActionable`, `lifecycle_test.go`).
 
 ## 1.10 Retention axis — `retention.go`
@@ -625,28 +625,41 @@ establish.
   - `Unfinished() == 0` → `all %d are done`
   - else → `%d of %d are not done`
 
-`(Issue).Apply(action lifecycle.StatusAction) (Issue, error)` — `model.go`:
-1. `lifecycleOrError()`; on error returns `(Issue{}, err)`.
+`(Issue).PlanStatus(action lifecycle.StatusAction) (StatusChange, error)` — `model.go`. It takes no instant: a caller that only asks whether a transition lands has none to invent.
+1. `lifecycleOrError()`; on error returns the error.
 2. If the root lifecycle is a `lifecycle.Container` → returns
    `ContainerActionError{ID, action.Name(), State(action.Target()), State(root.State()), root.Progress()}`
 . Every status action on a container is refused, including one
    whose target the children already establish — the refusal is what keeps a
    `start` that changes nothing from reaching the engines' no-op rule, which
-   compares `StatusValue` (vacuously `""` for a container) and would decide on
-   the claimant alone. Pinned by `TestApplyRefusesContainerForEveryAction`,
-   `model_test.go`.
+   would decide on the claimant alone. Pinned by
+   `TestPlanStatusRefusesContainerForEveryAction`, `model_test.go`.
 3. If `lifecycle.Thaw(Retention())` reports frozen → returns
    `FrozenIssueError{ID, Retention(), thaw}`. After the container check, so a
    frozen container still refuses as a container. Pinned by
-   `TestApplyRefusesFrozenLeafNamingTheThaw` and
-   `TestApplyOnFrozenContainerRefusesAsContainer` (`model_test.go`).
-4. If the root is not `lifecycle.Actionable` → error
+   `TestPlanStatusRefusesFrozenLeafNamingTheThaw` and
+   `TestPlanStatusOnFrozenContainerRefusesAsContainer` (`model_test.go`).
+4. A start's assignee is parsed by `NormalizeAssignee`, refused when no filter
+   could select it, and carried in canonical form in the action. Pinned by
+   `TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect`.
+5. If the root is not a `lifecycle.StatusPrimitive` → error
    `no %s action available on this issue`.
-5. Otherwise replaces the lifecycle with `actionable.Apply(action)` and returns
-   the modified copy. Root-only; multi-leaf `AllOf` composition is
-   intentionally unsupported (`model.go`). Pinned by
-   `TestApplyTargetStateOnLeafProducesTargetState` (`model_test.go`) and
-   `TestApplyCloseOutcomeSurfacesThroughResolutionValue`.
+6. Otherwise returns the `StatusChange`. Root-only; multi-leaf `AllOf`
+   composition is intentionally unsupported (`model.go`).
+
+`StatusChange` (`model.go`) — an accepted, unstamped action; only `PlanStatus`
+builds one, and a zero value panics on use.
+- `Changed()` — the action moves the status (`lifecycle.Moves`).
+- `Taking()` — a start's canonical assignee; `Reclaims()` — a start's `Reclaim`.
+- `Updated(at stamp.Instant) Issue` — `lifecycle.Apply` on the leaf, a start's
+  assignee, and `at` as `UpdatedAt`. Pinned by
+  `TestPlanStatusTargetStateOnLeafProducesTargetState`,
+  `TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue`,
+  `TestUpdatedRecordsTheStampOnce` and
+  `TestUpdatedStartTakesTheTicketForTheCanonicalAssignee` (`model_test.go`).
+- `FieldChanges(at stamp.Instant) []FieldChange` — the change rows both engines
+  record: `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`,
+  each when it moved.
 
 ### Hydration
 - `HydrateStatus(issue Issue, view StatusView) (Issue, error)` — `model.go`:
@@ -1809,7 +1822,7 @@ cancellation.
    (`status_states.go`).
 4. Unhydrated lifecycle reads panic on the accessor path
    (`model.go`) but become errors at the JSON boundary
-   (`model.go`) and at `Apply` (`model.go`).
+   (`model.go`) and at `PlanStatus` (`model.go`).
 5. Container-ness is decided by `IssueType` alone (`issue_type.go`,
    `model.go`), never by the lifecycle shape.
 6. Two orthogonal axes: activity (`State`, driven by `StatusAction`) and
