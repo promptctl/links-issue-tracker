@@ -365,7 +365,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	canonical := filepath.Join(storageDir, "dolt")
 	markerDir(t, canonical+".backup-1700000000000000007", "pre-crash")
 
-	if err := HealWorkspace(ctx, testStderr(), canonical); err != nil {
+	if err := HealWorkspace(ctx, testStderr(), testEnv().Deadlines(), canonical); err != nil {
 		t.Fatalf("HealWorkspace: %v", err)
 	}
 	if got := readMarker(t, canonical); got != "pre-crash" {
@@ -373,7 +373,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	}
 
 	// Running again on the now-healthy workspace must be a no-op, not a re-restore.
-	if err := HealWorkspace(ctx, testStderr(), canonical); err != nil {
+	if err := HealWorkspace(ctx, testStderr(), testEnv().Deadlines(), canonical); err != nil {
 		t.Fatalf("HealWorkspace (no-op): %v", err)
 	}
 	if got := readMarker(t, canonical); got != "pre-crash" {

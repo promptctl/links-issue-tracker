@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // A genuine RowsAffected() error must surface to the caller as the failure it
@@ -51,7 +52,7 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 // of counting.
 func swapInExecErrDB(t *testing.T, st *Store, match string, causeErr error) {
 	t.Helper()
-	inner, err := newDoltConnector(testEnv(), st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), testStderr(), st.doltRootDir, st.access, &longPhase{}))
+	inner, err := newDoltConnector(testEnv(), st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), testStderr(), suiteenv.Deadlines(), st.doltRootDir, st.access, &longPhase{}))
 	if err != nil {
 		t.Fatalf("newDoltConnector error = %v", err)
 	}

@@ -81,7 +81,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 		// read path below would reject before the swap's own heal could run. The
 		// presence of the directory is the datum that decides whether this acts; a
 		// healthy workspace makes it a no-op.
-		if err := store.HealWorkspace(ctx, inv.Stderr, ws.DatabasePath); err != nil {
+		if err := store.HealWorkspace(ctx, inv.Stderr, inv.Env.Deadlines(), ws.DatabasePath); err != nil {
 			return err
 		}
 		dump, err := store.DumpRaw(ctx, inv.Env, inv.Stderr, ws.DatabasePath, ws.WorkspaceID)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
@@ -62,7 +63,7 @@ func PromoteCandidate(ctx context.Context, env environ.Env, stderr io.Writer, ca
 		return PromotionResult{}, fmt.Errorf("surrender candidate workspace for promotion: %w", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, stderr, canonicalDoltDir)
+	release, err := LockWorkspaceExclusive(ctx, stderr, env.Deadlines(), canonicalDoltDir)
 	if err != nil {
 		return PromotionResult{}, err
 	}
@@ -188,7 +189,7 @@ func verifyHeadUnchanged(ctx context.Context, env environ.Env, stderr io.Writer,
 // repair a fresh recovery runs first. Without this pre-step the promote-start heal
 // is unreachable after a crash, because the read path gates on the canonical
 // directory existing.
-func HealWorkspace(ctx context.Context, stderr io.Writer, canonicalDoltDir string) (err error) {
+func HealWorkspace(ctx context.Context, stderr io.Writer, d deadline.Deadlines, canonicalDoltDir string) (err error) {
 	// [LAW:single-enforcer][LAW:one-source-of-truth] Validate and canonicalize: an
 	// empty path would put .links-workspace.lock in cwd and scan cwd for backups,
 	// and a trailing separator would make healCanonical/newestBackup look in the
@@ -198,7 +199,7 @@ func HealWorkspace(ctx context.Context, stderr io.Writer, canonicalDoltDir strin
 	if err != nil {
 		return err
 	}
-	release, err := LockWorkspaceExclusive(ctx, stderr, canonicalDoltDir)
+	release, err := LockWorkspaceExclusive(ctx, stderr, d, canonicalDoltDir)
 	if err != nil {
 		return err
 	}

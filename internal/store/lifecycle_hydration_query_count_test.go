@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // The listing hot path hydrates every open epic's children. The contract under
@@ -88,7 +89,7 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 func swapInCountingDB(t *testing.T, st *Store) *int64 {
 	t.Helper()
 	var n int64
-	inner, err := newDoltConnector(testEnv(), st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), testStderr(), st.doltRootDir, st.access, &longPhase{}))
+	inner, err := newDoltConnector(testEnv(), st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), testStderr(), suiteenv.Deadlines(), st.doltRootDir, st.access, &longPhase{}))
 	if err != nil {
 		t.Fatalf("newDoltConnector error = %v", err)
 	}

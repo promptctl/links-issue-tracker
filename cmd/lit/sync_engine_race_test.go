@@ -23,7 +23,7 @@ import (
 // The race this reproduces: each mutating command's on-change mirror is a
 // detached subprocess that keeps running (spawning its own read-write
 // embedded Dolt engine, pushing) after the command itself has returned.
-// waitForParentExit only knows about its OWN spawning command's PID — it has
+// A mirror waits out only its OWN spawning command's PID — it has
 // no awareness that a DIFFERENT, still-running mirror (or the next
 // command's own engine) might already hold the path's one read-write engine.
 // Without the store's write-open serialization this is a genuine collision.

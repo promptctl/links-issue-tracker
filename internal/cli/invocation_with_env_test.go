@@ -15,12 +15,13 @@ func TestWithEnvKeepsEveryOtherField(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr strings.Builder
 	inv := Invocation{
-		Dir:    WorkingDirOf("/work", nil),
-		Args:   []string{"version"},
-		Env:    environ.Of([]string{"A=1"}),
-		Stdin:  strings.NewReader("in"),
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Dir:     WorkingDirOf("/work", nil),
+		Args:    []string{"version"},
+		Env:     environ.Of([]string{"A=1"}),
+		Stdin:   strings.NewReader("in"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Workers: LaunchWorkersAs("/opt/lit"),
 	}
 	replacement := environ.Of([]string{"B=2"})
 	got := inv.withEnv(replacement)

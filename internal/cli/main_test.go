@@ -1,11 +1,10 @@
 package cli
 
 import (
-	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
@@ -13,7 +12,7 @@ import (
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() unless it
-// swaps a package variable (a store deadline, time.Local, a seam function),
+// swaps a package variable (time.Local, a seam function),
 // which every parallel reader of it would race. A test hands lit its working
 // directory and environment through the Invocation
 // (dirInvocation, setRunEnv) instead of the process's, so two runs overlapping
@@ -21,50 +20,15 @@ import (
 // from changing the process's.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
-// suiteStallDeadline is the deadline this suite runs the mirror's hold and the
-// automatic receive under, in this process and in the detached workers it
-// spawns. Both shipped figures sit close enough to the local work these tests
-// really do that a busy machine reaches them: the hold bounds a clone, and a
-// receive that follows a re-root measures about a third of its deadline. So a
-// test with no interest in either would take its verdict from the load.
-// [LAW:no-ambient-temporal-coupling] The push deadline stays as shipped: a whole
-// mirror cycle against these tests' file remotes measures about a twelfth of it.
-// A minute is still a stall detector: over ten times that work, and far below
-// go test's timeout, so a hang ends inside the test that met it and the
-// package's other verdicts stand. A test about either deadline installs its own
-// figure.
-const suiteStallDeadline = time.Minute
-
-// testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
-// runs as a child of this binary, where store.MirrorPushDeadline is the
-// child's own and no other test reads it.
-const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
-
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
-// would spawn the on-change push mirror (via os.Executable(), which under
-// `go test` is the test binary) and the receive worker (a real network fetch)
-// as a side effect of unrelated tests. The receive path is exercised explicitly,
-// by tests that run the receive worker's body in-process (receiveNow), so
-// disabling it package-wide loses no coverage.
+// would spawn the on-change push mirror and the receive worker (a real network
+// fetch) as a side effect of unrelated tests. The receive path is exercised
+// explicitly, by tests that run the receive worker's body in-process
+// (receiveNow), so disabling it package-wide loses no coverage. A test that
+// starts a worker anyway, autosync off or on, is refused by the launcher its
+// runs are handed (refusedWorkers).
 func TestMain(m *testing.M) {
-	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
-	// A detached worker spawns os.Executable(), which here is this test binary.
-	// Run as that worker rather than as a second copy of the whole suite; the
-	// suite's tests call the receive body directly and never mean to spawn one.
-	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
-		if deadline, ok := os.LookupEnv(testMirrorPushDeadlineEnvVar); ok {
-			d, err := time.ParseDuration(deadline)
-			if err != nil {
-				panic(testMirrorPushDeadlineEnvVar + ": " + err.Error())
-			}
-			store.MirrorPushDeadline = d
-		}
-		if err := Run(context.Background(), Invocation{Dir: WorkingDirOf(os.Getwd()), Args: os.Args[1:], Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
-			os.Exit(WriteCommandError(os.Stderr, err))
-		}
-		os.Exit(0)
-	}
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
@@ -118,6 +82,10 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := dirtemplate.Run(m, storeTemplate)
+	if err := removeRealLit(); err != nil {
+		fmt.Fprintf(os.Stderr, "remove the real lit: %v\n", err)
+		code = max(code, 1)
+	}
 	for _, dir := range suiteDirs {
 		_ = os.RemoveAll(dir)
 	}

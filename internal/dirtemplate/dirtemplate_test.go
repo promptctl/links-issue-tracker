@@ -142,6 +142,35 @@ func TestTheTemplateRefusesWrites(t *testing.T) {
 	requireHolds(t, dir, seed)
 }
 
+// A program the build made still runs once frozen. The program is this test
+// binary, copied in by the build, so it runs on every platform, and run
+// testing nothing it only exits.
+func TestTheTemplateKeepsAProgramRunnable(t *testing.T) {
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatalf("read the test binary: %v", err)
+	}
+	prog := "prog" + filepath.Ext(os.Args[0])
+	tpl := New("bin", func(dir string) error {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, prog), self, 0o755)
+	})
+	t.Cleanup(func() {
+		if err := tpl.remove(); err != nil {
+			t.Error(err)
+		}
+	})
+	dir, err := tpl.Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	if out, err := exec.Command(filepath.Join(dir, prog), "-test.run=^$").CombinedOutput(); err != nil {
+		t.Fatalf("run the frozen program: %v\n%s", err, out)
+	}
+}
+
 // A build that fails reports its error to every caller and leaves nothing on
 // disk: no later run inherits half a template.
 func TestAFailedBuildLeavesNothing(t *testing.T) {

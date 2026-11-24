@@ -40,7 +40,7 @@ const doltDatabaseName = "links"
 //
 // A write open is one of two holds of Dolt's LOCK, and long is the default.
 // engineWrite is the long hold (an import, a restore, a sync session), judged
-// by its waiters as it always was, failing them after coResidentHolderWait.
+// by its waiters as it always was, failing them after HolderWait.
 // engineWriteRoutine is the routine hold, which sends a heartbeat while its
 // engine works (lockHold), so a hold slowed by a loaded machine is waited out
 // rather than failing every writer behind it. There is no routine read: a read
@@ -250,7 +250,7 @@ type Store struct {
 
 // Open opens the store for a long write hold (engineWrite): the hold every
 // write takes unless it states it is routine. Its waiters fail after
-// coResidentHolderWait, naming it, as they always have.
+// HolderWait, naming it, as they always have.
 func Open(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
 	return openWrite(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
 }
@@ -275,7 +275,7 @@ func openWrite(ctx context.Context, env environ.Env, stderr io.Writer, doltRootD
 	// Acquiring after would leave a window in which `lit snapshots restore`
 	// or an adopt could rotate the directory between the check and the
 	// install.
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, env.Deadlines(), doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func openInitialized(ctx context.Context, env environ.Env, stderr io.Writer, dol
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	release, err := acquireLiveStoreHold(ctx, stderr, doltRootDir)
+	release, err := acquireLiveStoreHold(ctx, stderr, env.Deadlines(), doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +462,7 @@ func EnsureDatabase(ctx context.Context, env environ.Env, stderr io.Writer, dolt
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return storage.Bootstrap{}, err
 	}
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, env.Deadlines(), doltRootDir)
 	if err != nil {
 		return storage.Bootstrap{}, err
 	}
@@ -597,7 +597,7 @@ func (s *Store) Close() error {
 // to Open (see OpenForRead).
 //
 // A write engine that opened holds LOCK, so it records itself as its holder
-// (recordLockHolder, retired by closeEngine before the engine lets go). A read
+// (lockHold.taken publishes it the instant Dolt takes LOCK, and closeEngine retires it before the engine lets go). A read
 // engine does not: it never holds LOCK, and a record naming a reader would send
 // an operator after the wrong pid. The one branch is the open contract's own
 // discriminator. [LAW:dataflow-not-control-flow]
@@ -642,9 +642,10 @@ func openEngine(ctx context.Context, env environ.Env, stderr io.Writer, doltRoot
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// The engine took LOCK through Dolt's own loader, so the record is
-	// published here rather than by acquireStoreLock.
-	return db, hold, hold.record(ctx), nil
+	// The engine took LOCK through Dolt's own loader, so its hold published
+	// the record the instant Dolt took it (lockHold.taken), not
+	// acquireStoreLock.
+	return db, hold, hold.retire, nil
 }
 
 // openHeldPool opens a pool on database at doltRootDir, inside phase, and
@@ -657,7 +658,7 @@ func openEngine(ctx context.Context, env environ.Env, stderr io.Writer, doltRoot
 // (lockHold.under). A contended open fails naming the holder
 // (wrapEngineOpenContention).
 func openHeldPool(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir, workspaceID, database string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, error) {
-	hold := newLockHold(ctx, stderr, doltRootDir, access, phase)
+	hold := newLockHold(ctx, stderr, env.Deadlines(), doltRootDir, access, phase)
 	db, err := openDoltPool(env, doltRootDir, workspaceID, database, hold)
 	if err != nil {
 		return nil, nil, err
@@ -693,7 +694,7 @@ func openHeldPool(ctx context.Context, env environ.Env, stderr io.Writer, doltRo
 // commit lock is held — the inverted order this package's doc documents
 // as this site's tolerated deviation. It cannot wedge, and the reason is two
 // bounds and not one. Per call, the re-open fails the mutation loudly once
-// the holders in front of it have stood still for coResidentHolderWait
+// the holders in front of it have stood still for HolderWait
 // (holdWait) — with wrapEngineOpenContention's holder account, from the ping
 // that makes the open (and its contention) surface here rather than at
 // whichever query runs next. Holders cannot keep arriving while this
@@ -702,7 +703,7 @@ func openHeldPool(ctx context.Context, env environ.Env, stderr io.Writer, doltRo
 // first to arrive stands still in front of this re-open until it fails; the
 // only LOCK taker that skips the commit lock, RecordPushedHead, runs once
 // per mirror cycle, and the next cycle begins with a clone. So the per-call
-// wait is at most a few multiples of coResidentHolderWait. Across a mutation,
+// wait is at most a few multiples of HolderWait. Across a mutation,
 // this call is retryTransientGCContention's one rotation, which that function
 // refuses unless the whole hold still fits commitLockWaiterBudget, pinned by
 // TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters. The
@@ -717,7 +718,7 @@ func openHeldPool(ctx context.Context, env environ.Env, stderr io.Writer, doltRo
 // and the heartbeats a waiter reads carry one hold's name.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
-	hold := newLockHold(ctx, s.stderr, s.doltRootDir, s.access, s.phase)
+	hold := newLockHold(ctx, s.stderr, s.env.Deadlines(), s.doltRootDir, s.access, s.phase)
 	next, err := openDoltPool(s.env, s.doltRootDir, s.workspaceID, doltDatabaseName, hold)
 	if err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
@@ -736,7 +737,7 @@ func (s *Store) reconnect(ctx context.Context) error {
 	if err := wrapEngineOpenContention(pingErr, s.doltRootDir); err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
-	s.releaseEngineRecord = hold.record(ctx)
+	s.releaseEngineRecord = hold.retire
 	return s.resumeCheckedOut(ctx)
 }
 
@@ -3583,233 +3584,6 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// The co-resident-holder sizing chain. Measured facts at the root — what each
-// routine holder of the live store costs to wait out — and every wait in the
-// store derived from them by arithmetic. [LAW:one-source-of-truth] Hand-set
-// waits would each have to be remembered into agreement, and one set below the
-// cost of the work it bounds is nothing the code could notice. Change a
-// measurement; the waits follow.
-//
-// The mirror holds the live store only to clone it — workspace shared,
-// Dolt's LOCK, commit lock, one copy-on-write clone of the dolt directory,
-// release — and pushes from the clone with no lock on the live store held.
-// The push's own deadline is the separate chain below (mirrorPushDeadline).
-const (
-	// mirrorCloneObservedTail is the slowest a HEALTHY hold — take the three
-	// locks, clone the dolt directory, clear the pending marker, release —
-	// has been measured to run. Measured 2026-09-27 against this repository's
-	// own store (283 MB on disk: 94 MB noms, 183 MB git-remote-cache), load
-	// average 7–13, as the clone step alone, which is the whole hold but for
-	// three flock calls and one unlink:
-	//
-	//   - APFS clonefile of the whole directory (dbsnapshot.CloneTree's
-	//     Darwin path), 6 samples: 0.109s–0.240s.
-	//   - byte-for-byte copy of the same directory (the walk-and-copy path a
-	//     filesystem without copy-on-write falls back to), 2 samples:
-	//     0.390s, 0.461s.
-	//
-	// The hold has two healthy regimes — a copy-on-write clone whose cost is
-	// metadata, and a byte copy whose cost is proportional to the store — and
-	// a stall detector sits above the SLOWER of them, so the figure is the
-	// byte copy's tail rounded up to the next 100ms, not the clone's.
-	// [FRAMING:representation] a map of an operation whose territory grows
-	// with the store; mirror.log's `hold=` values are the place to re-measure
-	// from, and a byte-copy regime on a slow disk is the reading that would
-	// move it.
-	mirrorCloneObservedTail = 500 * time.Millisecond
-
-	// mirrorHoldStallFactor is what separates "slow" from "stalled". A hold
-	// still running at twice the slowest healthy hold ever recorded is not a
-	// hold running a bit long; it is a copy that has stopped making progress,
-	// and the budget fires there. A budget set AT the cost of the work is not
-	// a safety valve; it is a scheduled failure.
-	mirrorHoldStallFactor = 2
-
-	// mirrorHoldBudget is the deadline each mirror hold on the live store runs
-	// under — the clone step, and the pushed-head record after the push. The
-	// exported MirrorHoldBudget below is the variable the cli reads and tests
-	// shrink; this const is what it starts at, so the waits derived from it
-	// further down stay const arithmetic.
-	mirrorHoldBudget = mirrorCloneObservedTail * mirrorHoldStallFactor
-
-	// mirrorHoldCancelLag is how much longer a cut hold can keep the store
-	// after its deadline has fired. The clone step's one uncancelable unit is
-	// a single clonefile syscall (the walk-and-copy path checks the context
-	// between 32 MiB chunks), and a syscall that ran long is bounded by the
-	// clone tail above; the record step's is one journal append. So a cut
-	// lands within one observed tail of its deadline — a bound derived from
-	// the measurement, not a second measurement, which is why it is not
-	// exported as an "observed" figure.
-	mirrorHoldCancelLag = mirrorCloneObservedTail
-
-	// mirrorHoldCeiling is the longest a mirror can hold the live store's
-	// LOCK and commit lock: its deadline plus the lag its cut takes to land.
-	// This — not the budget — is the number every co-resident waiter must
-	// outlast.
-	mirrorHoldCeiling = mirrorHoldBudget + mirrorHoldCancelLag
-
-	// storeLockPollInterval is how often a contender re-tries a held lock,
-	// and so the granularity of every wait in this package: a holder that
-	// releases is noticed within this much. coResidentWaitHeadroom is a
-	// multiple of it for that reason — the headroom has to cover sleeping
-	// through the release, not a step of the hold. [LAW:one-source-of-truth]
-	// declared once, read by holdWait and by the sizing chain here.
-	storeLockPollInterval = 100 * time.Millisecond
-
-	// coResidentWaitHeadroom is scheduling slop above the ceiling, and the one
-	// number here that is a judgment rather than a measurement — so it is
-	// pinned to something real: eight polls, which is how much of the wait
-	// can be spent asleep between polls on a machine under load. It is
-	// deliberately not folded into the steps above; slop hidden inside a
-	// measured step is how a measured step stops being measurable.
-	coResidentWaitHeadroom = 8 * storeLockPollInterval
-)
-
-// coResidentHolderWait is the ONE answer to "how long does a caller wait for
-// a co-resident holder of this store to let go" — a live write Store in this
-// or another process, a non-lit dolt process, or the snapshot copy's
-// LockDoltJournalExclusive hold. It is sized to the longest ROUTINE hold, the
-// mirror's clone or record step, because a wait shorter than a legal routine
-// hold does not protect anyone, it manufactures "another process is holding
-// this workspace's Dolt store open" out of a workspace behaving exactly as
-// designed — and a wait longer than that answers a stalled holder with
-// silence, which is what sends a user or agent into a retry that adds a
-// second waiter. Every other holder is not routine and is named: a snapshot
-// copy, a migration, an import, the explicit push (which still holds the
-// store across the network), all of them fail a contender after this wait
-// with the holder's pid, command and age in the refusal. The automatic
-// receive fetches on a clone, so its holds on this store — the copy, the
-// landing, the settle — are routine ones, except a landing of a fetch that
-// brought much more than the usual few commits, which is named like the rest.
-//
-// The wait counts from the last time the holders in front of the contender
-// showed progress, not from the contender's arrival (holdWait): sixteen `lit
-// new` at once serialize on this store at tens of milliseconds each and every
-// one lands, because each one's arrival is progress; a holder that stands
-// still for this long is the one that fails the contender. A routine write
-// hold (engineWriteRoutine; engineAccess says which holds are) also shows
-// progress while its engine works, by heartbeat (lockHold), so it is waited out
-// however long a loaded machine stretches it; this figure is then the longest
-// it may go without engine work. Every hold that sends no heartbeat (the long holds above, a foreign
-// dolt, a lit older than heartbeats) is judged by this figure exactly as
-// before. A package variable so
-// tests can set it: contention tests shrink it rather than sleep through the
-// production one, and a test whose subject is not the budget lifts it out of
-// play. Nothing else assigns it.
-var coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom
-
-// The push deadline chain. The mirror's push runs from a clone with no lock on
-// the live store held, so nothing waits on it — but the mirror process itself
-// holds the single-flight sync-push lock for its whole run, and every mirror
-// spawned meanwhile loses that race and exits. A push hung on a stalled
-// transport would therefore stop pushes for as long as the remote cared to
-// stall, so the push runs under a deadline.
-const (
-	// mirrorPushObservedTail is the slowest a HEALTHY push — open the clone's
-	// engine, push, close — has been measured to run on a real workspace.
-	// Measured 2026-09-12 against this repo's own store, from two samples,
-	// because the one the mirror keeps for itself is censored by the very
-	// deadline sized from it:
-	//
-	//   - .git/links/mirror.log, 279 cycles: min 10.6s; p50 13.2s over all of
-	//     them, 12.7s over the 235 that were not cut; slowest uncut cycle
-	//     20.0s. 44 of the 279 (15.8%) were cut, so every cycle that would
-	//     have run longer is recorded as a cut and the log cannot show the
-	//     tail. A floor, never a ceiling.
-	//   - 20 foreground `lit sync push` runs of the same store: min 9.8s,
-	//     p50 12.2s, max 17.0s. Uncensored — the foreground push shares
-	//     performSyncPush with the mirror and is deliberately unbounded — so
-	//     this is the sample the deadline can honestly be sized against.
-	//
-	// Compared like with like — completed work against completed work, the
-	// mirror's uncut p50 of 12.7s against the foreground's 12.2s — the two
-	// agree to about half a second: the background path does not cost twice
-	// the foreground one. Both paths ARE the push. The engine open and close
-	// bracketing it measure ~0.3s together, so the cost is the network round
-	// trip and nothing else. [FRAMING:representation] a map of an operation
-	// whose territory — a push against a remote holding a repository that
-	// grows — moves; mirror.log's `push=` values are the place to re-measure
-	// from.
-	mirrorPushObservedTail = 20 * time.Second
-
-	// mirrorPushStallFactor: a transport that has stopped answering is not a
-	// push running a bit long, it is a push that will never end, so the
-	// deadline fires at twice the slowest healthy push ever recorded, where
-	// the only thing on the far side is a stall.
-	mirrorPushStallFactor = 2
-
-	// mirrorPushDeadline is the deadline the mirror's push runs under. The
-	// exported MirrorPushDeadline below is the variable the cli reads and the
-	// deadline regression test shrinks; this const is what it starts at.
-	mirrorPushDeadline = mirrorPushObservedTail * mirrorPushStallFactor
-
-	// MirrorPushCancelLagObserved is how much longer a cut push keeps its
-	// engine (the clone's) after its deadline has already fired:
-	// cancellation reaches the transport, but the push does not unwind
-	// instantly. Measured 2026-09-12 over the 44 cut cycles in mirror.log as
-	// elapsed-minus-budget: p50 1.3s, but 21.4s at the tail.
-	//
-	// Exported because the cli's push-deadline regression tests assert where
-	// a cut push ENDS, and restating that bound there would be a second,
-	// unattributed copy of this figure that a re-measurement here leaves
-	// behind. [LAW:one-source-of-truth] No store wait is sized against it: the
-	// push holds nothing on the live store, so its lag is the mirror process's
-	// own lifetime and nobody else's.
-	MirrorPushCancelLagObserved = 22 * time.Second
-)
-
-// MirrorHoldBudget is the deadline each background-mirror hold on the live
-// store runs under: the clone step before the push, and the pushed-head record
-// after it. It is a deadline, not a bound on the hold: a cut lands up to
-// mirrorHoldCancelLag later, and mirrorHoldCeiling is the number that follows
-// from that. TestMirrorHoldBudgetExceedsObservedCloneCost and
-// TestCoResidentWaitIsSizedToTheMirrorHold pin both relations. A package
-// variable so a regression test can shrink it without sleeping through the
-// production one, and a test whose subject is not the budget lifts it out of
-// play.
-var MirrorHoldBudget = mirrorHoldBudget
-
-// MirrorPushDeadline is the deadline the background mirror's push runs
-// under: the clone engine's open and the push from it. The close after them
-// takes no ctx and is not bounded by it. The push traverses
-// the network with no inherent bound, so the bound is imposed by the actor
-// that owns it. It holds nothing on the live store; it exists so a stalled
-// transport cannot wedge the single-flight mirror forever.
-// TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
-// measured push. A package variable so the deadline regression test can
-// shrink it without sleeping through the production one.
-var MirrorPushDeadline = mirrorPushDeadline
-
-// ReceiveDeadline bounds the automatic receive — the remote check and the
-// fetch its detached worker runs when the receive debounce lapses — so an
-// offline or slow remote cannot keep the worker running indefinitely. A cut
-// abandons only the fetch (the next interval retries). The fetch runs on a
-// clone of this store, so this deadline bounds the worker, not a hold: the
-// live store is held for the clone's copy (under MirrorHoldBudget) and for the
-// landing of the fetch, whose cost is proportional to how far the remote moved
-// and which only this deadline bounds (LandFetchedHead says why). A package
-// variable so a test whose subject is not this deadline lifts it out of play.
-// [LAW:one-source-of-truth]
-var ReceiveDeadline = 15 * time.Second
-
-// HistoryBoundDeadline is the deadline a landed push's history bound runs
-// under. The bound crosses the network three times — the re-root's lease
-// push, the remote's GC, the fetch that learns what the remote carries — and
-// each leg is a transport of a push's kind, so each gets the push deadline.
-// The local legs, the re-roots, ride in the stall factor's margin; their cost
-// is reroot.elapsed_ms. The bound's follow collects nothing below the cut:
-// the live store's push verb runs that full GC after the bound, on its own
-// lifetime (collectOwedCut). The remote GC's upload has not been measured
-// against a hosted remote; history_bound.elapsed_ms on the push's event is
-// the figure to re-measure from. A cut bound fails nothing:
-// the push landed. A cut before the re-root reaches the remote leaves the
-// next push past the bound to run it again; a cut after it leaves the
-// remote's history below the cut to the next re-root's GC, which collects it
-// with its own, since the remote's GC replaces nothing once a push lands on
-// top of the re-root. A function because the push deadline it derives from
-// is a variable. [LAW:one-source-of-truth]
-func HistoryBoundDeadline() time.Duration { return 3 * MirrorPushDeadline }
-
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its wait against a held Dolt journal lock, naming who holds it;
 // every other error passes through untouched. The wrap carries BOTH
@@ -3829,11 +3603,6 @@ func wrapEngineOpenContention(err error, doltRootDir string) error {
 	}
 	return err
 }
-
-// coResidentHolderWaitNow reads the wait at the moment a contender needs it,
-// so a connector built before a contention test shrank the variable still
-// waits the shrunken figure. [LAW:one-source-of-truth]
-func coResidentHolderWaitNow() time.Duration { return coResidentHolderWait }
 
 // newDoltConnector assembles the embedded-driver connector every store
 // connection is built from. database selects the initial database ("" for the

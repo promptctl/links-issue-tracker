@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -85,7 +86,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-	bootstrap, err := openDoltPool(testEnv(), doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), doltRoot, engineWrite, &longPhase{}))
+	bootstrap, err := openDoltPool(testEnv(), doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), suiteenv.Deadlines(), doltRoot, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
@@ -135,7 +136,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -1045,7 +1046,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	dbBefore := st.db
 	attempts := 0
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, testStderr(), func(context.Context) error {
+		return retryTransientGCContention(ctx, testStderr(), suiteenv.Deadlines(), func(context.Context) error {
 			attempts++
 			if attempts == 1 {
 				return gcReset

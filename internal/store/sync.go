@@ -56,7 +56,7 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// EnsureDatabase so the bootstrap and the long-lived sync connection
 	// are both protected against a concurrent `lit snapshots restore`
 	// rotating the Dolt directory — the same invariant store.Open enforces.
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, env.Deadlines(), doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// the call site that must wait out an earlier foreground command's (or
 	// earlier mirror's) still-live engine instead of colliding with it — the
 	// wait happens inside the eager engine open, on Dolt's own journal lock,
-	// bounded by coResidentHolderWait.
+	// bounded by HolderWait.
 	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
@@ -1631,7 +1631,7 @@ func parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error) {
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, s.stderr, operation, s.reconnect)
+		return retryTransientGCContention(ctx, s.stderr, s.env.Deadlines(), operation, s.reconnect)
 	})
 }
 

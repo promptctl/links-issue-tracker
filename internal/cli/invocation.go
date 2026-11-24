@@ -13,10 +13,12 @@ import (
 
 // Invocation is what one lit run takes from the process that started it: the
 // directory it ran in, its arguments, its environment and its standard
-// streams. The fields are named as os/exec.Cmd names the same things. cmd/lit's
-// main reads the process once to build it, and a test builds its own, so
-// nothing under internal/ reads the process's working directory, arguments,
-// environment or stdin, and two runs in one process cannot see each other's.
+// streams, named as os/exec.Cmd names the same things, and the two things the
+// process decides for every run it starts: how a detached worker is started
+// and the deadlines background sync runs under. cmd/lit's main builds it
+// once, and a test builds its own, so nothing under internal/ reads the
+// process's working directory, arguments, environment or stdin, nor reaches a
+// process-wide deadline, and two runs in one process cannot see each other's.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 type Invocation struct {
 	Dir WorkingDir
@@ -26,6 +28,8 @@ type Invocation struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	// Workers starts the detached workers the run spawns.
+	Workers WorkerLauncher
 }
 
 // withEnv is inv with env as its environment. It is a literal and not an
@@ -33,7 +37,7 @@ type Invocation struct {
 // process's Env; a field added to Invocation must be carried here
 // (TestWithEnvKeepsEveryOtherField fails until it is).
 func (inv Invocation) withEnv(env environ.Env) Invocation {
-	return Invocation{Dir: inv.Dir, Args: inv.Args, Env: env, Stdin: inv.Stdin, Stdout: inv.Stdout, Stderr: inv.Stderr}
+	return Invocation{Dir: inv.Dir, Args: inv.Args, Env: env, Stdin: inv.Stdin, Stdout: inv.Stdout, Stderr: inv.Stderr, Workers: inv.Workers}
 }
 
 // WorkingDir is the absolute directory an invocation ran in, or the error

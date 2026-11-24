@@ -8,9 +8,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // A write open collects the table files a dead writer left staged, and only
@@ -20,13 +20,14 @@ import (
 // removes the file and leaves everything else in the directory alone. Read
 // and sync opens do not look.
 func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait
-	// budget, which the refused open below exhausts by design.
-	shrinkWait(t, 700*time.Millisecond)
+	// The refused open below exhausts its holder wait by design, so the run is
+	// handed a short hold.
+	t.Parallel()
+	env := envWithDeadlines(suiteenv.Contention())
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -37,7 +38,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	staged := filepath.Join(dir, "buffered_file_byte_sink_4242")
 	writeFileForTest(t, staged, strings.Repeat("x", 1234))
 
-	if refused, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id"); !errors.Is(err, ErrWorkspaceBusy) {
+	if refused, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id"); !errors.Is(err, ErrWorkspaceBusy) {
 		if refused != nil {
 			_ = refused.Close()
 		}
@@ -64,7 +65,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	}
 	spared = append(spared, stagedNamedDir)
 
-	next, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	next, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after the writer closed: error = %v", err)
 	}
@@ -85,7 +86,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -95,7 +96,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader Close() error = %v", err)
 	}
-	syncer, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	syncer, err := OpenSync(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}

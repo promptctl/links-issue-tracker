@@ -6,11 +6,12 @@ import (
 	"io"
 	"os"
 	"testing"
-	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // The package's migrated-store templates: each built once per test binary by
@@ -75,11 +76,6 @@ func buildStoreTemplate(dir string) error {
 }
 
 func TestMain(m *testing.M) {
-	// These deadlines bound local holds here, the work a busy machine slows, so
-	// a test with no interest in them would take its verdict from the load. A
-	// minute still cuts a hung hold inside the test that met it. A test about a
-	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
-	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
 	os.Exit(withTestMirrorRoot(func() int { return dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate) }))
 }
 
@@ -104,6 +100,29 @@ func withTestMirrorRoot(run func() int) int {
 // The rest of the Env is suiteenv.Of's.
 func testEnv() environ.Env {
 	return suiteenv.Of(append(os.Environ(), MirrorRootEnvVar+"="+testMirrorRoot))
+}
+
+// envWith is testEnv with its run facts built from the suite's parts as change
+// leaves them, for a test whose subject is one fact.
+func envWith(change func(*suiteenv.FactParts)) environ.Env {
+	parts := suiteenv.Parts()
+	change(&parts)
+	return testEnv().WithFacts(parts.Facts())
+}
+
+// envWithCeiling is testEnv with its run's released-schema ceiling at ceiling.
+func envWithCeiling(ceiling version.SchemaCeiling) environ.Env {
+	return envWith(func(p *suiteenv.FactParts) { p.ReleasedSchema = ceiling })
+}
+
+// envWithPolicy is testEnv with its run's raise policy at policy.
+func envWithPolicy(policy version.RaisePolicy) environ.Env {
+	return envWith(func(p *suiteenv.FactParts) { p.RaisePolicy = policy })
+}
+
+// envWithDeadlines is testEnv with its run's deadlines at d.
+func envWithDeadlines(d deadline.Deadlines) environ.Env {
+	return envWith(func(p *suiteenv.FactParts) { p.Deadlines = d })
 }
 
 // testStderr is where a store a test opens prints its notices: the test

@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -68,13 +70,15 @@ func TestCompactMarkerIsDistinctFromTheReceiveMarker(t *testing.T) {
 func TestMirrorParentWaitExceedsThePostSpawnTail(t *testing.T) {
 	t.Parallel()
 
-	if parentPostSpawnTail < compactTimeout {
-		t.Fatalf("parentPostSpawnTail (%s) omits compactTimeout (%s); a step that runs after the spawn must be summed into the tail",
-			parentPostSpawnTail, compactTimeout)
-	}
-	if workerParentWaitTimeout <= parentPostSpawnTail {
-		t.Fatalf("workerParentWaitTimeout (%s) is inside the parent's designed tail (%s); a healthy parent would be abandoned mid-tail",
-			workerParentWaitTimeout, parentPostSpawnTail)
+	for name, d := range map[string]deadline.Deadlines{"shipped": deadline.Shipped(), "suite": suiteenv.Deadlines()} {
+		if tail := parentPostSpawnTail(d); tail < d.Compaction() {
+			t.Fatalf("%s: the parent's post-spawn tail (%s) omits the compaction deadline (%s); a step that runs after the spawn must be summed into the tail",
+				name, tail, d.Compaction())
+		}
+		if wait, tail := workerParentWait(d), parentPostSpawnTail(d); wait <= tail {
+			t.Fatalf("%s: the worker's parent wait (%s) is inside the parent's designed tail (%s); a healthy parent would be abandoned mid-tail",
+				name, wait, tail)
+		}
 	}
 }
 

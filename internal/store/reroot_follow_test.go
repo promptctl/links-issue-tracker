@@ -21,6 +21,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // reRootedRemote is two checkouts sharing a remote after one of them re-rooted
@@ -84,7 +85,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		updateAndPush(t, ctx, r.alpha, r.ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
 	}
 
-	r.alphaReRoot, err = ReRoot(ctx, testStderr(), r.alpha, "master", r.cut)
+	r.alphaReRoot, err = ReRoot(ctx, testStderr(), suiteenv.Deadlines(), r.alpha, "master", r.cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -645,12 +646,12 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 		lowCut = firstParentBelowHead(t, ctx, ddb, 4)
 		highCut = firstParentBelowHead(t, ctx, ddb, 1)
 	})
-	if _, err := ReRoot(ctx, testStderr(), bravo, "master", lowCut.String()); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), bravo, "master", lowCut.String()); err != nil {
 		t.Fatalf("ReRoot(bravo, low cut) error = %v", err)
 	}
 	updateLocal(t, ctx, bravo, ticket, storage.UpdateIssueInput{Title: strptr(bravoTitle)})
 	updateAndPush(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
-	alphaReRoot, err := ReRoot(ctx, testStderr(), alpha, "master", highCut.String())
+	alphaReRoot, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), alpha, "master", highCut.String())
 	if err != nil {
 		t.Fatalf("ReRoot(alpha, high cut) error = %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestLeasedPushLandsOnlyOverTheHeadItNames drives two checkouts sharing one
@@ -40,7 +41,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
 		cut = firstParentBelowHead(t, ctx, ddb, 1).String()
 	})
-	rewritten, err := ReRoot(ctx, testStderr(), alpha, "master", cut)
+	rewritten, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), alpha, "master", cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -150,7 +151,7 @@ func TestLeasedPushBelowASchemaAheadHeadIsALowering(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The newer binary's release carries the schema it pushes.
-	pusher, err := OpenSync(ctx, testEnv().WithReleasedSchema(ceilingAt(registryMax+1)), testStderr(), bravo, "ws")
+	pusher, err := OpenSync(ctx, envWithCeiling(ceilingAt(registryMax+1)), testStderr(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

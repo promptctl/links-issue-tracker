@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // forkBelowTheCut is two checkouts sharing a remote after one of them
@@ -62,7 +63,7 @@ func newForkBelowTheCutAfter(t *testing.T, ctx context.Context, deltaWrites func
 		createAndPush(t, ctx, f.alpha, f.epic, title)
 	}
 	var err error
-	f.alphaReRoot, err = ReRoot(ctx, testStderr(), f.alpha, "master", headAt(t, ctx, f.alpha))
+	f.alphaReRoot, err = ReRoot(ctx, testStderr(), suiteenv.Deadlines(), f.alpha, "master", headAt(t, ctx, f.alpha))
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -273,7 +274,7 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Description: strptr("delta-description")})
 
 	updateLocal(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
-	if _, err := ReRoot(ctx, testStderr(), alpha, "master", headAt(t, ctx, alpha)); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), alpha, "master", headAt(t, ctx, alpha)); err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)

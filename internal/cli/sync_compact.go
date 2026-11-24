@@ -53,22 +53,6 @@ const (
 	// re-attempt on every subsequent mutation and turn one broken store into a
 	// stall on every command. [LAW:carrying-cost]
 	compactProbeInterval = 15 * time.Minute
-
-	// compactTimeout bounds a single pass so a wedged collection cannot hang
-	// the command that triggered it.
-	//
-	// A deep pass over this repository's 72 MB store measured 1.36s, so this
-	// covers a store some thirty times larger before it binds at all — it is a
-	// bound on pathology, not on size. It is deliberately not larger than that:
-	// this pass runs after the on-change mirror has been spawned, so it is a
-	// term in parentPostSpawnTail and every second here is a second the mirror
-	// must be willing to wait for a healthy parent. [LAW:carrying-cost]
-	//
-	// It also bounds how long a writer waits behind a pass. This deadline is what
-	// lets the backstop's hold be routine (store.OpenMaintenance): a pass ends on
-	// its own, so the writers behind it wait rather than fail. It cuts DOLT_GC's
-	// marking; a collection past marking finishes its local disk work first.
-	compactTimeout = 45 * time.Second
 )
 
 // compactMarkerPath is the single marker for "a compaction was last attempted
@@ -103,7 +87,9 @@ func maintainInline(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 		fmt.Fprintf(stderr, "lit: compaction probe interval not recorded: %v\n", err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, compactTimeout)
+	// The pass runs under the run's compaction deadline, a term in the
+	// spawner's post-spawn tail (parentPostSpawnTail).
+	timeoutCtx, cancel := context.WithTimeout(ctx, env.Deadlines().Compaction())
 	defer cancel()
 	m, closeStore, err := openMaintainer(timeoutCtx, env, stderr, ws)
 	if err != nil {

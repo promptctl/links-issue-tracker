@@ -67,7 +67,7 @@
 // opening an engine; and RecordPushedHead's chunk-store open
 // (pushed_head.go), which takes LOCK the way a write engine does — through
 // dolt's own loader, fail-fast on contention, retried for
-// coResidentHolderWait — to move one remote-tracking ref and close.
+// HolderWait — to move one remote-tracking ref and close.
 // That standing Store hold is the trap in the natural
 // reading of "hold Dolt's LOCK during a walk": taking LOCK (opening a write
 // engine, or locking the file directly) while holding the commit lock
@@ -77,7 +77,7 @@
 // under the held commit lock. It cannot wedge — each re-open's wait is
 // bounded (every LOCK taker but the pushed-head record then waits on the
 // commit lock, so none can keep arriving in front of it past
-// coResidentHolderWait; a routine taker heartbeats through its own open, but
+// HolderWait; a routine taker heartbeats through its own open, but
 // its commit-lock wait runs in lit, outside its engine, so its heartbeat
 // stops there, and the pushed-head record's handle waits on the commit lock
 // outside its engine too) and the retry makes that re-open at most once, only

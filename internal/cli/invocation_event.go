@@ -210,10 +210,13 @@ func rankRespaceValue(r store.Respace) map[string]any {
 // lockWaitValue is one lock.waits occurrence.
 func lockWaitValue(w store.LockWait) map[string]any {
 	return map[string]any{
-		"lock.wait.lock":          w.Lock,
-		"lock.wait.waited_ms":     w.Waited.Milliseconds(),
-		"lock.wait.progress_seen": w.ProgressSeen,
-		"lock.wait.outcome":       string(w.Outcome),
+		"lock.wait.lock":               w.Lock,
+		"lock.wait.waited_ms":          w.Waited.Milliseconds(),
+		"lock.wait.progress_seen":      w.ProgressSeen,
+		"lock.wait.stand_still_ms":     w.StandStill.Milliseconds(),
+		"lock.wait.stand_still_stated": w.Stated,
+		"lock.wait.list_error":         telemetry.ErrorText(w.ListErr),
+		"lock.wait.outcome":            string(w.Outcome),
 	}
 }
 

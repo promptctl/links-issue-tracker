@@ -700,7 +700,7 @@ func TestAReRootOfAHeadAtANewerSchemaPublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The newer binary's release carries the schema it pushes.
-	pusher, err := OpenSync(ctx, testEnv().WithReleasedSchema(ceilingAt(registryMax+1)), testStderr(), bravo, "ws")
+	pusher, err := OpenSync(ctx, envWithCeiling(ceilingAt(registryMax+1)), testStderr(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

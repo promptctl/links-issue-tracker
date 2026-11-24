@@ -40,21 +40,16 @@ import (
 // its network I/O either way, and releasing between attempts would break the
 // one-lock atomicity SyncCompactAndPush documents (the push reflects exactly
 // the compacted state). The larger hold this budget sleeps inside is bounded
-// per actor: the background mirror runs its whole session under
-// MirrorHoldBudget, which cuts retries and attempt alike, while an explicit
+// per actor: the background mirror runs its whole session under its push
+// deadline (Deadlines.MirrorPush), which cuts retries and attempt alike, while an explicit
 // foreground `lit sync push` stays unbounded — the operator invoked it,
 // watches it, and can interrupt it.
 // [LAW:no-ambient-temporal-coupling] the hold's owner and bound are stated
 // here, at the budget that creates them.
-//
-// A package variable (the delays stay const) so tests whose premise makes
-// exhaustion CERTAIN can shrink the budget instead of sleeping through the
-// production one — the same convention coResidentHolderWait serves.
-var remoteIORetryMaxAttempts = 4
-
 const (
-	remoteIORetryBaseDelay = 1 * time.Second
-	remoteIORetryMaxDelay  = 4 * time.Second
+	remoteIORetryMaxAttempts = 4
+	remoteIORetryBaseDelay   = 1 * time.Second
+	remoteIORetryMaxDelay    = 4 * time.Second
 )
 
 // RemoteUnreachableError is the terminal outcome of remote I/O whose transport

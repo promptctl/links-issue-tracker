@@ -17,8 +17,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
+	"github.com/promptctl/links-issue-tracker/internal/process"
 )
 
 // basePrefix starts the name of every base this user's test binaries make in
@@ -89,8 +91,11 @@ func (tp *Template) CopyTo(dst string) error {
 // the bases that dead test binaries left behind, runs the tests, removes the
 // package's templates, and returns the exit code for os.Exit.
 //
-// [LAW:no-ambient-temporal-coupling] Removal happens here and only here, after
-// m.Run has returned, so no test can ever see a template vanish.
+// [LAW:no-ambient-temporal-coupling] A template is removed in three places,
+// none of which a test can see: here, after m.Run has returned, for every
+// template this run built; at the start of a run, before m.Run, for a base
+// whose owning binary died (sweepDead); and inside its own build, for a base
+// whose build failed and so was never a template (buildFrozen).
 // [LAW:no-silent-failure] A frozen tree left behind is one nothing else will
 // delete, so a sweep or a removal that fails fails the run.
 func Run(m *testing.M, templates ...*Template) int {
@@ -152,16 +157,11 @@ func (tp *Template) buildFrozen() (_ string, err error) {
 }
 
 // freeze makes every file under root read-only and every directory
-// unwritable.
+// unwritable, by the one freeze rule (fsperm.WalkFreeze), so a program the
+// build made still runs.
 func freeze(root string) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return os.Chmod(path, 0o555)
-		}
-		return os.Chmod(path, 0o444)
+	return fsperm.WalkFreeze(root, func(path string, _ fs.DirEntry, perm fs.FileMode) error {
+		return os.Chmod(path, perm)
 	})
 }
 
@@ -222,15 +222,9 @@ func ownerPID(name string) (int, bool) {
 	return pid, err == nil
 }
 
-// processGone reports that no process holds pid. os.FindProcess fails for a
-// dead pid on Windows; on Unix it always succeeds, and the null signal comes
-// back as os.ErrProcessDone. A pid reused by a live process reads as alive, so
-// the worst a reuse can do is postpone a sweep, never delete a live template.
+// processGone reports that no process holds pid. A pid reused by a live
+// process reads as alive, so the worst a reuse can do is postpone a sweep,
+// never delete a live template.
 func processGone(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	defer p.Release()
-	return errors.Is(p.Signal(syscall.Signal(0)), os.ErrProcessDone)
+	return !process.Alive(pid)
 }

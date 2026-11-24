@@ -204,7 +204,7 @@ func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(
 	if err := os.Chtimes(record, started, started); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
+	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws)
 	fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now())
 	if fetch == nil || fetch.basis != noFetchSucceeded {
 		t.Fatalf("record after a failed receive = %+v; want noFetchSucceeded", fetch)

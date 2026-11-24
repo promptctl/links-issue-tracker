@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestOpenForReadDoesNotWaitOnCommitLock pins links-scale-om3r.k1k's
@@ -36,7 +37,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}

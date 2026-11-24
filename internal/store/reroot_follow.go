@@ -253,7 +253,7 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote storage.RemoteName
 }
 
 // withEngineClosed closes this store's engine, runs write under
-// holdForRefWrite — LOCK, then the commit lock — within ReRootHoldBudget, and
+// holdForRefWrite — LOCK, then the commit lock — within the run's re-root hold deadline, and
 // reopens the engine whatever happened, so the store is usable again on every
 // return. A follow and the bound's re-root both rewrite history this way.
 // [LAW:single-enforcer] The reopen restores the store rather than doing the
@@ -267,7 +267,7 @@ func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context
 	if err := s.closeEngine(); err != nil {
 		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))
 	}
-	holdErr := holdForRefWrite(ctx, s.stderr, s.doltRootDir, engineWrite, ReRootHoldBudget, write)
+	holdErr := holdForRefWrite(ctx, s.stderr, s.env.Deadlines(), s.doltRootDir, engineWrite, s.env.Deadlines().ReRootHold(), write)
 	return errors.Join(holdErr, s.reopenEngine(reopenCtx))
 }
 

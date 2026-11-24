@@ -32,10 +32,8 @@ const (
 	ownerNotifyHookTimeout = 10 * time.Second
 
 	// ownerNotifyPipeWaitDelay is how long past the kill Wait will hold the
-	// output pipe. Named rather than inlined because it is a term in the
-	// parent's post-spawn tail, which the detached mirror's parent-wait bound
-	// is derived from — a number only spelled at its use site cannot be summed
-	// there. [LAW:one-source-of-truth]
+	// output pipe: with the hook timeout, the most a hung notifier can add to
+	// the command that ran it.
 	ownerNotifyPipeWaitDelay = time.Second
 	// ownerNotifyCooldown is how often a PERSISTING condition re-notifies. The
 	// first detection of an episode always fires (its marker was cleared when the

@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -41,8 +42,8 @@ func isUserSnapshotName(name string) bool {
 // for directory readers, exclusive for rotators — the contract and its
 // callers live at store/workspace_lock.go); this commit lock remains the
 // writer-vs-writer gate only.
-func withCommitLock(ctx context.Context, stderr io.Writer, ws workspace.Info, fn func() error) (err error) {
-	release, err := store.LockCommitPath(ctx, stderr, ws.DatabasePath)
+func withCommitLock(ctx context.Context, stderr io.Writer, d deadline.Deadlines, ws workspace.Info, fn func() error) (err error) {
+	release, err := store.LockCommitPath(ctx, stderr, d, ws.DatabasePath)
 	if err != nil {
 		// The snapshots family has no handler-level trace writer, so unlike
 		// the mutation family's mid-command commit contention this acquisition
@@ -77,7 +78,7 @@ func snapshotsNewLeaf() wsLeaf {
 		if err != nil {
 			return err
 		}
-		snap, err := takeUserSnapshot(ctx, inv.Stderr, ws, strings.TrimSpace(*label))
+		snap, err := takeUserSnapshot(ctx, inv.Stderr, inv.Env.Deadlines(), ws, strings.TrimSpace(*label))
 		// The record prints the moment it exists — before the prune, and even
 		// beside a failure that landed after the take (a lock release, the
 		// retention prune). [FRAMING:representation] the snapshot is durable and
@@ -105,7 +106,7 @@ func snapshotsNewLeaf() wsLeaf {
 		// retired by the store's size-ceiling rule (pruneAutomaticSnapshots).
 		// Without the kind filter, `lit snapshots new` could evict a recovery
 		// snapshot a migration, reconcile or downgrade is depending on.
-		return withCommitLock(ctx, inv.Stderr, ws, func() error {
+		return withCommitLock(ctx, inv.Stderr, inv.Env.Deadlines(), ws, func() error {
 			return dbsnapshot.PruneMatching(ws.DatabasePath, cfg.Snapshot.RetentionBudget, isUserSnapshotName)
 		})
 	}}
@@ -114,8 +115,8 @@ func snapshotsNewLeaf() wsLeaf {
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
 // copy needs and releases them at return, so the caller's housekeeping never
 // extends the exclusion window past the last directory read.
-func takeUserSnapshot(ctx context.Context, stderr io.Writer, ws workspace.Info, label string) (snap dbsnapshot.Taken, err error) {
-	err = withDoltDirectoryHeld(ctx, stderr, ws, func() error {
+func takeUserSnapshot(ctx context.Context, stderr io.Writer, d deadline.Deadlines, ws workspace.Info, label string) (snap dbsnapshot.Taken, err error) {
+	err = withDoltDirectoryHeld(ctx, stderr, d, ws, func() error {
 		s, err := dbsnapshot.Take(ctx, stderr, ws.DatabasePath, label)
 		if err != nil {
 			return err
@@ -145,11 +146,11 @@ func takeUserSnapshot(ctx context.Context, stderr io.Writer, ws workspace.Info, 
 // open, read-only by contract, writes nothing held or not), and writer
 // serialization. One home for that sequence, so the second copier cannot
 // take two of the three and call it held.
-func withDoltDirectoryHeld(ctx context.Context, stderr io.Writer, ws workspace.Info, fn func() error) (err error) {
+func withDoltDirectoryHeld(ctx context.Context, stderr io.Writer, d deadline.Deadlines, ws workspace.Info, fn func() error) (err error) {
 	// These direct acquisitions are open boundaries like any Store open, so
 	// holder contention is stamped for Run's dispatch trace exactly as
 	// runWithApp stamps app.Open.
-	releaseWorkspace, err := store.LockWorkspaceShared(ctx, stderr, ws.DatabasePath)
+	releaseWorkspace, err := store.LockWorkspaceShared(ctx, stderr, d, ws.DatabasePath)
 	if err != nil {
 		return markEngineOpenContention(err, ws)
 	}
@@ -169,7 +170,7 @@ func withDoltDirectoryHeld(ctx context.Context, stderr io.Writer, ws workspace.I
 	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
 		return err
 	}
-	releaseJournal, err := store.LockDoltJournalExclusive(ctx, stderr, ws.DatabasePath)
+	releaseJournal, err := store.LockDoltJournalExclusive(ctx, stderr, d, ws.DatabasePath)
 	if err != nil {
 		return markEngineOpenContention(err, ws)
 	}
@@ -181,7 +182,7 @@ func withDoltDirectoryHeld(ctx context.Context, stderr io.Writer, ws workspace.I
 			err = errors.Join(err, relErr)
 		}
 	}()
-	return withCommitLock(ctx, stderr, ws, fn)
+	return withCommitLock(ctx, stderr, d, ws, fn)
 }
 
 func snapshotsListLeaf() wsLeaf {
@@ -215,7 +216,7 @@ func snapshotsRestoreLeaf() wsLeaf {
 		// exclusion; commit lock (held inside withCommitLock below) owns
 		// writer-vs-restore exclusion. Both held while the Dolt directory is
 		// rotated so no Store — open or about to open — can observe the rename.
-		releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, inv.Stderr, ws.DatabasePath)
+		releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, inv.Stderr, inv.Env.Deadlines(), ws.DatabasePath)
 		if err != nil {
 			// An open boundary like takeUserSnapshot's: stamp holder contention
 			// for Run's dispatch trace.
@@ -234,7 +235,7 @@ func snapshotsRestoreLeaf() wsLeaf {
 		}()
 		var rotated string
 		restored := false
-		err = withCommitLock(ctx, inv.Stderr, ws, func() error {
+		err = withCommitLock(ctx, inv.Stderr, inv.Env.Deadlines(), ws, func() error {
 			// rotated is captured even when Restore then fails: a non-empty path
 			// beside an error means the pre-restore directory was already moved
 			// aside (Restore's install step failed after its rotation step), and

@@ -84,13 +84,13 @@ const (
 
 Both hooks are per-`Store` instance state, not package globals (`store.go`).
 
-#### 1.4 `coResidentHolderWait`
+#### 1.4 `Deadlines.HolderWait()`
 
-`var coResidentHolderWait = mirrorHoldCeiling + coResidentWaitHeadroom` (`store.go`), = 1.5s (= `mirrorHoldBudget` 1s + `mirrorHoldCancelLag` 500ms) + 8 × `storeLockPollInterval` (100ms) = 2.3s. A package **variable**, not a const, so tests can shrink it; `engine_open_contract_test.go` sets it to `700 * time.Millisecond` and restores it in cleanup. It is the wait of every store lock acquisition (`acquireStoreLock`, `workspace_lock.go`), of the write-open backoff (`store.go`), of the chunk-store open `RecordPushedHead` runs (`pushed_head.go`), and a term of `commitLockWaiterBudget()` (`commit_lock.go`). It is read through `coResidentHolderWaitNow` at the moment a contender needs it (`store.go`).
+`func (d Deadlines) HolderWait() time.Duration { return d.HoldCeiling() + coResidentWaitHeadroom }` (`internal/deadline/deadline.go`), where `HoldCeiling()` = `MirrorHold()` + `mirrorHoldCancelLag` (500ms) and `coResidentWaitHeadroom` = 8 × `deadline.LockPollInterval` (100ms). Derived from the run's deadlines, which the store reads off its `environ.Env` (`s.env.Deadlines()`) or takes as a `d deadline.Deadlines` parameter: under `deadline.Shipped()` (mirror hold `mirrorHoldBudget` = 1s) it is 1.5s + 800ms = 2.3s. A test shortens it by handing its runs a short hold (`suiteenv.WithHold(suiteenv.ContentionHold)`). It is the wait of every store lock acquisition (`acquireStoreLock`, `workspace_lock.go`), of the write-open backoff (`newLockHold`, `lock_hold.go`), of the chunk-store open `RecordPushedHead` runs (`pushed_head.go`), and a term of `commitLockWaiterBudget(d)` (`commit_lock.go`).
 
-#### 1.5 `newEngineOpenBackOff`
+#### 1.5 `newLockHold`
 
-`store.go`. `newHoldWait(stderr, workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) that does not return `backoff.Stop` also prints `lit: still waiting for <lock> after <d>; <holder account>` to the stderr the store was opened with (`holdWait.stderr`) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
+`lock_hold.go`. `newHoldWait(stderr, operatorNotices(), storageDir, lockPath, judgedByCoResidentHolder(), time.Now)` per connector, keyed by Dolt's `LOCK` (`DoltJournalLockPath(doltRootDir)`): `holdWait` (`lock_holder.go`) polls every `deadline.LockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the allowance its patience (`lockPatience`) gives. `judgedByCoResidentHolder` is `judgedByHolder` with the shipped `HolderWait` for an unstated holder; `judgedByHolder` gives the longest stand-still allowance a holder whose record still stands stated on the lock's arrival file (`holderStatement`, written as `<name> <heartbeat> <stand-still>`), and its unstated allowance when none did or the records could not be listed (the failure is `LockWait.ListErr`); a record stands from before its holder announces until it lets go; the hold states `lockHoldStatement(d, access)`: `d.HolderWait()`, and `holdHeartbeatInterval(d)` as its heartbeat when routine. `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) that does not return `backoff.Stop` also prints `lit: still waiting for <lock> after <d>; <holder account>` to the stderr the store was opened with (`holdWait.stderr`) once the schedule's grace has passed since `Reset`, then every interval; `operatorNotices()` is `lockWaitNoticeGrace` = 2s and `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` and `engineWriteRoutine` (`store.go`).
 
 #### 1.6 `wrapEngineOpenContention`
 
@@ -104,7 +104,7 @@ so the result satisfies both `errors.Is(err, ErrWorkspaceBusy)` and `errors.Is(e
 
 Call sites: `store.go` (eager write ping), `store.go` (reconnect ping), `store.go` (`ensureMasterDefaultBranch` inside Open), `store.go` (bootstrap CREATE DATABASE), `store.go` (bootstrap branch normalization).
 
-Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Open` fail with `nbs.ErrDatabaseLocked` in the chain (`engine_open_contract_test.go`) and bounded (< 10s under a 700ms budget, `engine_open_contract_test.go`). `OpenSync` under the same holder carries **both** `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` (`engine_open_contract_test.go`).
+Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Open` fail with `nbs.ErrDatabaseLocked` in the chain (`engine_open_contract_test.go`) and bounded (< 10s under a `suiteenv.ContentionHold` hold, `engine_open_contract_test.go`). `OpenSync` under the same holder carries **both** `ErrWorkspaceBusy` and `nbs.ErrDatabaseLocked` (`engine_open_contract_test.go`).
 
 #### 1.7 Other free helpers defined in store.go
 
@@ -186,7 +186,7 @@ Behavioral evidence:
 - A read open does not wait on a live write engine — it completes inside a 1-second context (`engine_serialization_test.go`).
 - A read open under a held commit lock serves reads (count = 1) inside a 30-second context (`read_open_lock_free_test.go`).
 - A read open on a workspace one migration behind brings it to registry max through `Open` (`read_open_lock_free_test.go`); one whose applied-version content drifted (`lane`/`resolution` dropped) is repaired the same way (`read_open_lock_free_test.go`).
-- A read open with a **pending migration** under a held journal lock fails with `ErrWorkspaceBusy` (the write open's contention refusal, budget shrunk to 700 ms in the test), and the same open succeeds — applying the migration — once the holder releases (`dolt_journal_hold_test.go`).
+- A read open with a **pending migration** under a held journal lock fails with `ErrWorkspaceBusy` (the write open's contention refusal, its runs handed `suiteenv.ContentionHold` as their hold), and the same open succeeds — applying the migration — once the holder releases (`dolt_journal_hold_test.go`).
 - A read open on a current schema creates no Dolt commit (`store_test.go`).
 - Under a held `LockDoltJournalExclusive`, a read open performs **no** journal crash-recovery I/O — the dirtied journal stays byte-identical; with the lock free the same open truncates it (`dolt_journal_hold_test.go`).
 - On an unreconcilable schema (`issues` with only an `id` column) `OpenForRead` fails with an error naming the missing `status` column (`store_test.go`).
@@ -200,7 +200,7 @@ Behavioral evidence:
 `store.go`:
 1. `root := filepath.Clean(doltRootDir)` (`store.go`).
 2. With no bootstrap lock, under the caller's shared workspace lock: `doltDatabaseExists(root)` runs `os.Lstat` on `root/links`, then `root/links/.dolt`. Both real directories → returns `(storage.Bootstrap{}, nil)`; nothing at either → `buildDatabaseOnce`, steps 3–7; another stat error → `check for a database: %w`; anything else, a symlink included → `check for a database: %s is not a directory` (`store.go`).
-3. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, no stand-still bound (`waitOutAnyStandStill`): it waits for as long as a builder holds the lock, and only the caller's context ends the wait, with `<ctx err> waiting for <lock>, <holders>` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
+3. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, no stand-still bound: the builder states `noStandStillBound` and the racer is `judgedByHolder(noStandStillBound)`, so it waits for as long as a builder holds the lock, and only the caller's context ends the wait, with `<ctx err> waiting for <lock>, <holders>` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
 4. Under the lock: `doltDatabaseExists(root)` again; present → returns `(storage.Bootstrap{}, nil)`, a failure → that error (`store.go`).
 5. `discardDeadStaging(staging)` with `staging` = `.links-bootstrap` beside the dolt root (`workspace_lock.go`): `os.Lstat` — present → `os.RemoveAll` (`remove a dead build's leftover: %w`); another stat error → `stat a build's path for a dead build's leftover: %w`. Then `buildDoltRoot`: `os.MkdirAll(staging, 0o755)` (`create bootstrap staging root: %w`); first pool `openDoltPool(staging, workspaceID, "", engineWrite)` closed inside a closure before the next open, running `CREATE DATABASE IF NOT EXISTS links` (failure → `create dolt database: %w`, then `wrapEngineOpenContention`); second pool `openDoltPool(staging, workspaceID, "links", engineWrite)`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
 6. `setAsideDatabaseWithoutDolt(root)`: `os.ReadDir(root/links)` — absent → nothing set aside; another error → `read a database directory with no .dolt before installing: %w`; empty → `os.Remove` (`remove an empty database directory before installing: %w`); otherwise `displaceDatabaseDir(root, "bootstrap")`: `evictSingleton`, `os.Rename` to `<root>.bootstrap-displaced-<unixnano>` (`set aside a database directory with no .dolt before building: %w`). A `.dolt` now inside the set-aside (restored during the build) → `restoreSetAside` and staging removed, returning `storage.Bootstrap{}`; an install failure after a set-aside runs `restoreSetAside` too (`move the database directory back from %s after a failed install (it is still there): %w`). Then `installDoltRoot(staging, root)`: `forgetReceivedRefs(root)`; then `os.Rename(staging, root)` when `dirExists(root)` is false, else `os.Rename(staging/links, root/links)` (`install bootstrapped database: %w`); then `os.RemoveAll(staging)` (`remove emptied bootstrap staging root: %w`) (`store.go`).
@@ -212,7 +212,7 @@ The two pools run strictly sequentially — the explicit close of the first is t
 
 `store.go`, through `openEngine(ctx, doltRootDir, workspaceID, access) (*sql.DB, func() error, error)`, which `reopenEngine` also uses after a re-root follow closed the engine (`reroot_follow.go`):
 - `openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)` (`store.go`);
-- `wrapEngineOpenContention(db.PingContext(ctx), doltRootDir)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release, returned as the holder release (`store.go`);
+- `wrapEngineOpenContention(db.PingContext(ctx), doltRootDir)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine's hold published its LOCK holder record via `recordLockHolder` with a no-op release the instant Dolt took `LOCK` (`lockHold.taken`, before it announces its arrival), and `lockHold.retire` is returned as the holder release (`store.go`), which `lockHold.end` also runs for an open that let `LOCK` go inside itself;
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
 A read engine opens Dolt read-only without trying the journal lock, so its ping never waits; being read-only costs a reader nothing because a read open never applies DDL (`store.go`).
@@ -223,7 +223,7 @@ A read engine opens Dolt read-only without trying the journal lock, so its ping 
 - `author := strings.TrimSpace(workspaceID)`; if empty → `"links"` (`store.go`);
 - `author = strings.ReplaceAll(author, "@", "_")` (`store.go`);
 - `embedded.Config{ Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true }` (`store.go`);
-- `if access == engineWrite { cfg.BackOff = newEngineOpenBackOff() }` (`store.go`);
+- for `engineWrite` and `engineWriteRoutine`, `cfg.BackOff = hold.wait`, the `lockHold`'s `holdWait` (`store.go`);
 - connector construction failure → `fmt.Errorf("open dolt: %w", err)` (`store.go`).
 
 **Dolt commit identity** therefore comes entirely from `workspaceID`: name = workspace id with `@`→`_`, email = `<name>@links.local`. `DisableSingletonCache: true` ties engine (and journal-lock) lifetime to the pool's lifetime.
@@ -239,7 +239,7 @@ A read engine opens Dolt read-only without trying the journal lock, so its ping 
 4. `wrapEngineOpenContention(next.PingContext(ctx), s.doltRootDir)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
 5. `s.resumeCheckedOut(ctx)` (`session_branch.go`): a fresh connection opens on the database's default branch, so when `checkout` or `checkoutNewAt` has recorded a branch (`s.checkedOut`), the new connection is switched to it with `DOLT_CHECKOUT`; failure → `"resume branch %q on the fresh connection: %w"`. Before any switch it does nothing.
 
-Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `coResidentHolderWait` (2.3s) against the commit-lock waiter budget of `coResidentHolderWait` + `rotationReserve()` (`store.go`). `reconnect` is the `connectionRotator` passed to every call of the transient-GC retry (`commit_lock.go`).
+Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `HolderWait()` (2.3s shipped) against the commit-lock waiter budget `commitLockWaiterBudget(d)` = `d.HolderWait()` + `rotationReserve(d)` (`store.go`). `reconnect` is the `connectionRotator` passed to every call of the transient-GC retry (`commit_lock.go`).
 
 #### 2.9 `Close() error`
 
@@ -320,9 +320,9 @@ Test evidence for one-commit-per-mutation: a combined transition+field `Apply` a
 
 `acquireCommitLock` (`commit_lock.go`): if `commitLockHeldSince(ctx)` finds the marker, returns the same ctx and a no-op release (re-entrant short-circuit); otherwise `acquireCommitLockAtPath(ctx, s.commitLockPath)` and returns `context.WithValue(ctx, commitLockContextKey{}, time.Now())`, the marker's value being when the hold began.
 
-`acquireCommitLockAtPath` (`commit_lock.go`): `acquireStoreLock(ctx, storageDir, lockPath, true /*exclusive*/, commitLockWaiterBudget())`, errors passed through `wrapCommitLockContention`.
+`acquireCommitLockAtPath` (`commit_lock.go`): `acquireStoreLock(ctx, stderr, storageDir, lockPath, true /*exclusive*/, commitLockWaiterBudget(d))`, errors passed through `wrapCommitLockContention`.
 
-Budget (`commit_lock.go`): `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()`, where `rotationReserve()` = `coResidentHolderWait` + `rotationCloseReserve` (1s) → 5.6s of unchanged holders.
+Budget (`commit_lock.go`): `commitLockWaiterBudget(d)` = `d.HolderWait()` + `rotationReserve(d)`, where `rotationReserve(d)` = `d.HolderWait()` + `d.EngineCloseReserve()` (1s shipped) → 5.6s shipped of unchanged holders.
 
 `wrapCommitLockContention` (`commit_lock.go`): when `errors.Is(err, ErrWorkspaceBusy)` returns
 ```
@@ -348,10 +348,10 @@ Test evidence:
 #### 3.4 Retry classification and budgets
 
 - `ErrTransientGCContention = errors.New("transient online-gc contention")` (`commit_lock.go`).
-`retryTransientGCContention(ctx, operation, rotate)` (`commit_lock.go`), straight-line, no sleep:
+`retryTransientGCContention(ctx, stderr, d, operation, rotate)` (`commit_lock.go`), straight-line, no sleep:
 - a ctx without the commit lock's marker is refused before the operation runs;
 - `classifyTransientGCError(operation(ctx))`; not `ErrTransientGCContention` (nil included) → returned as is;
-- if `time.Since(heldSince) + rotationReserve() + firstRun >= commitLockWaiterBudget()` → `exhaustedContentionError(err)`, no rotation (`heldSince` is when the commit lock was taken, from `commitLockHeldSince(ctx)`; `firstRun` projects the second run's cost);
+- if `time.Since(heldSince) + rotationReserve(d) + firstRun >= commitLockWaiterBudget(d)` → `exhaustedContentionError(err)`, no rotation (`heldSince` is when the commit lock was taken, from `commitLockHeldSince(ctx)`; `firstRun` projects the second run's cost);
 - print `lit: the store connection failed (<error>); reopening it and retrying once` to stderr;
 - `rotate(ctx)` — its error is returned immediately;
 - final: `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
@@ -375,7 +375,7 @@ Test evidence:
 - Exhausted GC-reset does **not** promote (`retry_test.go`).
 - A non-transient error is not retried — exactly 1 call (`retry_test.go`).
 - One rotation before the retry, none after the succeeding call (1 rotation for 2 calls) (`retry_test.go`).
-- A rotation that would carry the hold past `commitLockWaiterBudget()` is refused, with the open, the close, the projected second run and the hold spent before the call each weighted by a row; one that fits runs (`retry_test.go`).
+- A rotation that would carry the hold past `commitLockWaiterBudget(d)` is refused, with the open, the close, the projected second run and the hold spent before the call each weighted by a row; one that fits runs (`retry_test.go`).
 - A ctx without the commit lock's marker is refused before the operation runs (`retry_test.go`).
 - The rotation is announced on stderr, naming the failure (`retry_test.go`).
 - A failing rotator aborts the loop with its error and no re-attempt (`retry_test.go`).
@@ -4407,11 +4407,11 @@ All claims cite `file:line` in `/Users/bmf/code/links-issue-tracker`. Derived fr
 | Path validation | `validateDoltRootDir` rejects `strings.TrimSpace(doltRootDir) == ""` with error text `"dolt root dir is required"`, otherwise returns `filepath.Clean(doltRootDir)` | `internal/store/store.go` |
 | Workspace lock file path | `filepath.Join(filepath.Dir(filepath.Clean(databasePath)), ".links-workspace.lock")` — a **sibling** of the dolt dir | `internal/store/workspace_lock.go` |
 | Exclusive lock | `LockWorkspaceExclusive` → `acquireWorkspaceLock(ctx, doltRootDir, true, 0)` — **a zero wait, one attempt, no retry**; on `ErrWorkspaceBusy` wraps with `"another lit process is using this workspace; close other lit commands and retry: %w"`; once held, `forgetReceivedRefs` removes `<StorageDir>/received-refs.last` (`received_refs.go`: `ReceivedRefsPath`, `ReadReceivedRefs` — nil, nil when absent — and the atomic `WriteReceivedRefs`), and a removal failure other than absence releases the hold and returns `forget received-refs record before rotating the Dolt directory: %w` | `internal/store/workspace_lock.go` |
-| Shared lock | `acquireWorkspaceShared` → `acquireWorkspaceLock(ctx, doltRootDir, false, coResidentHolderWait)` (2.3s of unchanged holders, polled every 100ms); busy message: `"a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w"` | `internal/store/workspace_lock.go` |
+| Shared lock | `acquireWorkspaceShared` → `acquireWorkspaceLock(ctx, stderr, doltRootDir, false, d.HolderWait())` (2.3s shipped of unchanged holders, polled every 100ms); busy message: `"a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w"` | `internal/store/workspace_lock.go` |
 | Busy sentinel | `var ErrWorkspaceBusy = errors.New("workspace busy")` | `internal/store/workspace_lock.go` |
 | `dirExists` | `info, err := os.Stat(path); return err == nil && info.IsDir()` | `internal/store/store.go` |
 | Dolt pool shape | `sql.OpenDB(connector)` with `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)` | `internal/store/store.go` |
-| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` also sets `cfg.BackOff = newEngineOpenBackOff()` | `internal/store/store.go` |
+| Connector config | `embedded.Config{Directory: filepath.Clean(doltRootDir), CommitName: author, CommitEmail: fmt.Sprintf("%s@links.local", author), Database: database, DisableSingletonCache: true}`; author = trimmed workspaceID, `""`→`"links"`, `@`→`_`; `engineWrite` and `engineWriteRoutine` also set `cfg.BackOff = hold.wait` | `internal/store/store.go` |
 | Procedure call builder | `CALL <PROC>()` when no args, else `CALL <PROC>(?,?,…)`; `callIntProcedure` scans **one int64 status column** | `internal/store/sync.go` |
 | Snapshots dir | `dbsnapshot.DirFor(databaseDir)` = `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` | `internal/dbsnapshot/snapshot.go` |
 | Stamped-snapshot shape | `<all-digits>-<label>-<all-digits>` | `internal/store/migrate_snapshot.go` |
@@ -5008,7 +5008,7 @@ workspace → bootstrap → Dolt's own .dolt/noms/LOCK → commit → snapshot p
 
 A holder of an inner lock never waits on an outer one (`internal/store/doc.go`). Two locks sit outside the order: the sync-push lock, because every acquisition of it is a non-blocking probe so nothing ever waits on it (`internal/store/doc.go`); and the mirror liveness beacon, whose acquisitions all happen holding nothing (`internal/store/doc.go`).
 
-`internal/store/doc.go` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at `coResidentHolderWait` strictly inside every commit-lock waiter's budget (`commitLockWaiterBudget()`).
+`internal/store/doc.go` states one tolerated deviation: a GC-contention retry rotates the store's connection mid-mutation, re-acquiring Dolt's LOCK under the held commit lock, bounded at `HolderWait()` strictly inside every commit-lock waiter's budget (`commitLockWaiterBudget(d)`).
 
 `internal/store/doc.go` — ONE HOME: every lit-minted lock file sits at `dirname(databasePath)`, so a `lit snapshots restore` that rotates the dolt directory cannot move the lock out from under acquirers. Three stated exceptions: the snapshot producer beacon (inside `snapshots/`), the adopt-pending marker (inside the dolt root), and Dolt's own journal `LOCK`.
 
@@ -5035,7 +5035,7 @@ Literal filename: `.links-workspace.lock`, a **sibling** of the dolt root direct
 
 | Function | Mode | wait | poll | Total budget | On contention |
 |---|---|---|---|---|---|
-| `acquireWorkspaceShared` (`workspace_lock.go`) | shared | `coResidentHolderWait` (`store.go`) | `storeLockPollInterval` = 100ms (`store.go`) | 2.3s of unchanged holders (`holdWait`, `lock_holder.go`) | wrapped error, see below |
+| `acquireWorkspaceShared` (`workspace_lock.go`) | shared | `d.HolderWait()` (`internal/deadline/deadline.go`) | `deadline.LockPollInterval` = 100ms (`internal/deadline/deadline.go`) | 2.3s shipped of unchanged holders (`holdWait`, `lock_holder.go`) | wrapped error, see below |
 | `LockWorkspaceShared` (`workspace_lock.go`) | shared | same — delegates to `acquireWorkspaceShared` | same | same | same |
 | `LockWorkspaceExclusive` (`workspace_lock.go`) | exclusive | `0` (`workspace_lock.go`) | — | single non-blocking attempt | wrapped error, see below |
 
@@ -5085,15 +5085,15 @@ Literal filename: `.links-commit-flock.lock`, sibling of the dolt directory. Exp
 
 `commit_lock.go`:
 ```go
-func commitLockWaiterBudget() time.Duration {
-	return coResidentHolderWait + rotationReserve()
+func commitLockWaiterBudget(d deadline.Deadlines) time.Duration {
+	return d.HolderWait() + rotationReserve(d)
 }
 ```
-= 2.3s + (2.3s + 1s) = **5.6s** of unchanged holders, always **exclusive** (`commit_lock.go`). `commit_lock.go` states the sizing rationale: the ordinary holder is a mutation, the longest one a mutation that suffered a GC-contention rotation, and the budget must strictly exceed `rotationReserve()` so the rotation's re-open gives up before the peer waiting on the commit lock does; a snapshot copy, a restore or a retention prune holding longer fails a waiter naming it.
+= 2.3s + (2.3s + 1s) = **5.6s** shipped of unchanged holders, always **exclusive** (`commit_lock.go`). `commit_lock.go` states the sizing rationale: the ordinary holder is a mutation, the longest one a mutation that suffered a GC-contention rotation, and the budget must strictly exceed `rotationReserve(d)` so the rotation's re-open gives up before the peer waiting on the commit lock does; a snapshot copy, a restore or a retention prune holding longer fails a waiter naming it.
 
 `acquireCommitLockAtPath` (`commit_lock.go`):
 ```go
-release, err := acquireStoreLock(ctx, storageDir, lockPath, true, commitLockWaiterBudget())
+release, err := acquireStoreLock(ctx, stderr, storageDir, lockPath, true, commitLockWaiterBudget(d))
 if err != nil { return nil, wrapCommitLockContention(err) }
 ```
 
@@ -5101,7 +5101,7 @@ if err != nil { return nil, wrapCommitLockContention(err) }
 
 > `another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w`
 
-`LockCommitPath(ctx, lockPath)` (`commit_lock.go`) is the external entry for callers with no open Store (e.g. `lit snapshots new`/`restore`); it routes to the same `acquireCommitLockAtPath`.
+`LockCommitPath(ctx, stderr, d, databasePath)` (`commit_lock.go`) is the external entry for callers with no open Store (e.g. `lit snapshots new`/`restore`); it routes to the same `acquireCommitLockAtPath`.
 
 #### 4.3 Re-entrancy
 
@@ -5190,7 +5190,7 @@ Argument order is therefore always: `-Am <message> [--allow-empty] [--date <RFC3
 
 `retryTransientGCContention` (`commit_lock.go`) runs the operation at most twice, with one connection rotation between and no sleep:
 - `classifyTransientGCError(operation(ctx))`; anything but `ErrTransientGCContention` (`nil` included) is returned as is (`commit_lock.go`).
-- If `time.Since(heldSince) + rotationReserve() + firstRun >= commitLockWaiterBudget()`, no rotation: `exhaustedContentionError(err)`. `heldSince` is when the commit lock was taken (`commitLockHeldSince`, the lock's context marker; a ctx without it is refused before the operation runs), and `firstRun` projects the second run at the first run's cost (`commit_lock.go`).
+- If `time.Since(heldSince) + rotationReserve(d) + firstRun >= commitLockWaiterBudget(d)`, no rotation: `exhaustedContentionError(err)`. `heldSince` is when the commit lock was taken (`commitLockHeldSince`, the lock's context marker; a ctx without it is refused before the operation runs), and `firstRun` projects the second run at the first run's cost (`commit_lock.go`).
 - Prints `lit: the store connection failed (<error>); reopening it and retrying once` to stderr (`commit_lock.go`).
 - `rotate(ctx)` — the connection rotator (`s.reconnect`); a rotate error returns immediately (`commit_lock.go`).
 - Returns `exhaustedContentionError(classifyTransientGCError(operation(ctx)))`.
@@ -5232,8 +5232,8 @@ Classification predicates:
 #### 6.2 Mirror liveness beacon
 
 - Path (`workspace_lock.go`): `<dirname(databasePath)>/.links-sync-mirror.lock`.
-- Budget (`workspace_lock.go`): `coResidentHolderWait` (`store.go`), 2.3s of unchanged holders.
-- `HoldMirrorBeacon(ctx, databasePath)` (`workspace_lock.go`): `acquireStoreLock(ctx, storageDir, path, false /*shared*/, coResidentHolderWait)`. On `ErrWorkspaceBusy` it deliberately **does not propagate the sentinel** (`workspace_lock.go`), returning instead:
+- Budget (`workspace_lock.go`): `d.HolderWait()`, 2.3s shipped of unchanged holders.
+- `HoldMirrorBeacon(ctx, stderr, d, databasePath)` (`workspace_lock.go`): `acquireStoreLock(ctx, stderr, storageDir, path, false /*shared*/, d.HolderWait())`. On `ErrWorkspaceBusy` it deliberately **does not propagate the sentinel** (`workspace_lock.go`), returning instead:
   > `mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?)`
   with the beacon path interpolated.
 - `MirrorBeaconVerdict` (`workspace_lock.go`) is an `int` enum: `BeaconUnheld = 0`, `BeaconAnswered = 1`, `BeaconObstructed = 2` (`workspace_lock.go`). `String()` (`workspace_lock.go`) returns `"unheld"`, `"answered"`, `"obstructed"`, and for any other value `fmt.Sprintf("unnamed MirrorBeaconVerdict(%d)", int(v))`.
@@ -5246,16 +5246,16 @@ Classification predicates:
 #### 6.3 Dolt's own journal lock
 
 - Path (`workspace_lock.go`): `filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")` — i.e. `<databasePath>/<doltDatabaseName>/.dolt/noms/LOCK`. This is **Dolt's** file, not lit-minted, and is the ONE HOME exception stated at the mint site (`workspace_lock.go`).
-- Budget (`workspace_lock.go`): `coResidentHolderWait` (`store.go`) → **2.3s** of unchanged holders, polled every `storeLockPollInterval` = 100ms. Not a figure of its own: it is the same wait the write engine open gives the same holder.
-- `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go`):
+- Budget (`workspace_lock.go`): `d.HolderWait()` → **2.3s** shipped of unchanged holders, polled every `deadline.LockPollInterval` = 100ms. Not a figure of its own: it is the same wait the write engine open gives the same holder.
+- `LockDoltJournalExclusive(ctx, stderr, d, databasePath)` (`workspace_lock.go`):
   1. `requireInitializedWorkspace(databasePath)` **first**, before any acquisition (`workspace_lock.go`). It reads the workspace root, not the journal directory: on `os.ErrNotExist` it returns the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text begins:
      `lit workspace is not initialized`.
      Any other stat failure returns `stat database dir: %w`.
   2. `os.Stat(filepath.Dir(lockPath))` second (`workspace_lock.go`) — this helper contends on Dolt's lock and never mints Dolt's tree, so an absent noms directory is refused rather than created. Under an existing root that absence is a damaged or half-deleted Dolt tree, **not** an uninitialized repository, so it is never reported as the sentinel; every failure here returns `stat dolt journal dir: %w` and reaches the unclassified-fault default.
-  3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
+  3. `acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true /*exclusive*/, d.HolderWait())`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open; retry after it completes: %w` (`workspace_lock.go`).
-- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, read-only, without trying the journal lock; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`coResidentHolderWait`, 2.3s of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
+- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, read-only, without trying the journal lock; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`HolderWait()`, 2.3s shipped of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
 
 ---
 

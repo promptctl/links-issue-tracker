@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/litbuild"
 )
 
 // brackets wraps a namespace and token into a citation at runtime. Tests build
@@ -123,13 +125,15 @@ func TestRepoMarkersAreCanonical(t *testing.T) {
 	}
 }
 
+// repoRoot is the module's root, found by the module's one finder: the
+// checkout whose tracked files the gate scans. [LAW:one-source-of-truth]
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	out, err := runGit(".", "rev-parse", "--show-toplevel")
+	root, err := litbuild.ModuleRoot()
 	if err != nil {
-		t.Fatalf("locating repo root via git: %v", err)
+		t.Fatalf("find the module root: %v", err)
 	}
-	return strings.TrimSpace(out)
+	return root
 }
 
 func runGit(dir string, args ...string) (string, error) {

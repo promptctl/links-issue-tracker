@@ -12,6 +12,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -51,7 +52,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), runEnv(t), workspacetest.Resolved(t, runEnv(t), dir))
+	receiveOnce(ctx, workerRun(t, testStderr(t)), workspacetest.Resolved(t, runEnv(t), dir))
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -122,7 +123,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
+	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the
@@ -191,7 +192,7 @@ func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	}
 	clearMirrorPending(testStderr(t), ws)
 
-	release, err := store.HoldMirrorBeacon(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.HoldMirrorBeacon(context.Background(), testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("hold the mirror beacon: %v", err)
 	}

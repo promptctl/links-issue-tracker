@@ -506,7 +506,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 	}
 	scratchBranch := newReconcileScratch()
 	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
-	return nameLiftRefusal(retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
+	return nameLiftRefusal(retryTransientGCContention(ctx, s.stderr, s.env.Deadlines(), func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch, head)
 	}, s.reconnect), remote, branch)
 }

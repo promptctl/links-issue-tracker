@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -76,12 +75,12 @@ func shouldSyncAfterMutation(accessMode app.AccessMode, cadence config.SyncCaden
 // It first prints the sync-failure block an earlier receive left for this
 // checkout, if one is waiting: the receive has no terminal, and this is the
 // seam every command passes through. [LAW:single-enforcer]
-func maybeAutoSyncAfterCommand(ctx context.Context, stderr io.Writer, env environ.Env, accessMode app.AccessMode, ws workspace.Info) {
-	if autoSyncDisabled(env) {
+func maybeAutoSyncAfterCommand(ctx context.Context, inv Invocation, accessMode app.AccessMode, ws workspace.Info) {
+	if autoSyncDisabled(inv.Env) {
 		return
 	}
-	deliverPendingReceiveBlock(stderr, ws)
-	syncOnPolicy(ctx, stderr, env, accessMode, ws)
+	deliverPendingReceiveBlock(inv.Stderr, ws)
+	syncOnPolicy(ctx, inv, accessMode, ws)
 	// Compaction is gated on having WRITTEN, not on sync policy: only a
 	// mutation grows the store, and a workspace with no remote and no cadence
 	// is exactly the one with nothing else to collect it.
@@ -92,7 +91,7 @@ func maybeAutoSyncAfterCommand(ctx context.Context, stderr io.Writer, env enviro
 	// "nothing else collects this store" case, as the one workspace that
 	// silently loses its backstop. [LAW:decomposition]
 	if accessMode.Writes() {
-		maintainInline(ctx, stderr, env, ws)
+		maintainInline(ctx, inv.Stderr, inv.Env, ws)
 	}
 }
 
@@ -106,15 +105,15 @@ func maybeAutoSyncAfterCommand(ctx context.Context, stderr io.Writer, env enviro
 // after a command that already succeeded, so a broken config costs the mirror,
 // never the command. Saying so on stderr is what keeps it from being silent.
 // [LAW:no-silent-failure]
-func syncOnPolicy(ctx context.Context, stderr io.Writer, env environ.Env, accessMode app.AccessMode, ws workspace.Info) {
-	cfg, err := config.Load(env, ws.Project)
+func syncOnPolicy(ctx context.Context, inv Invocation, accessMode app.AccessMode, ws workspace.Info) {
+	cfg, err := config.Load(inv.Env, ws.Project)
 	if err != nil {
-		fmt.Fprintf(stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
+		fmt.Fprintf(inv.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
 	}
-	mirrorOnPolicy(ctx, stderr, env, accessMode, ws, cfg)
+	mirrorOnPolicy(ctx, inv, accessMode, ws, cfg)
 	if cfg.Sync.Receive {
-		scheduleReceive(ctx, stderr, env, ws)
+		scheduleReceive(ctx, inv, ws)
 	}
 }
 
@@ -123,24 +122,24 @@ func syncOnPolicy(ctx context.Context, stderr io.Writer, env environ.Env, access
 // (AccessWrite) is owed the mirror a write command's commit is owed, under the
 // same cadence. A mirror schedules no receive, so the chain ends at that
 // mirror. [LAW:single-enforcer] one cadence decision, whichever unit wrote.
-func mirrorAfterReceive(ctx context.Context, stderr io.Writer, env environ.Env, accessMode app.AccessMode, ws workspace.Info) {
-	if autoSyncDisabled(env) {
+func mirrorAfterReceive(ctx context.Context, inv Invocation, accessMode app.AccessMode, ws workspace.Info) {
+	if autoSyncDisabled(inv.Env) {
 		return
 	}
-	cfg, err := config.Load(env, ws.Project)
+	cfg, err := config.Load(inv.Env, ws.Project)
 	if err != nil {
-		fmt.Fprintf(stderr, "lit: the receive's push not scheduled, config unreadable: %v\n", err)
+		fmt.Fprintf(inv.Stderr, "lit: the receive's push not scheduled, config unreadable: %v\n", err)
 		return
 	}
-	mirrorOnPolicy(ctx, stderr, env, accessMode, ws, cfg)
+	mirrorOnPolicy(ctx, inv, accessMode, ws, cfg)
 }
 
 // mirrorOnPolicy owes the on-change mirror to a unit of work that wrote.
 // [LAW:dataflow-not-control-flow] the access mode and the cadence are the
 // values that decide; every caller runs it.
-func mirrorOnPolicy(ctx context.Context, stderr io.Writer, env environ.Env, accessMode app.AccessMode, ws workspace.Info, cfg config.Config) {
+func mirrorOnPolicy(ctx context.Context, inv Invocation, accessMode app.AccessMode, ws workspace.Info, cfg config.Config) {
 	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) {
-		ensureMirrorCoverage(ctx, stderr, env, ws)
+		ensureMirrorCoverage(ctx, inv, ws)
 	}
 }
 
@@ -170,7 +169,8 @@ func autoSyncDisabled(env environ.Env) bool {
 // the next mutation retries the spawn instead of trusting a mirror that never
 // launched — and only an owned claim is released, so a degraded claim read can
 // never remove another mutation's live claim.
-func ensureMirrorCoverage(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
+func ensureMirrorCoverage(ctx context.Context, inv Invocation, ws workspace.Info) {
+	stderr, env := inv.Stderr, inv.Env
 	// A recently confirmed remote-less workspace short-circuits before the
 	// claim: no remote means no coverage to owe, so no marker churn and no git
 	// subprocess per mutation — the debounce applies only to re-confirming
@@ -179,7 +179,7 @@ func ensureMirrorCoverage(ctx context.Context, stderr io.Writer, env environ.Env
 		return
 	}
 	ownsClaim := false
-	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, stderr, ws, time.Now())
+	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, stderr, env.Deadlines(), ws, time.Now())
 	switch {
 	case claimErr != nil:
 		// Coverage state unreadable: spawning is the safe side (a redundant
@@ -244,7 +244,7 @@ func ensureMirrorCoverage(ctx context.Context, stderr io.Writer, env environ.Env
 	if err := os.Remove(remoteAbsentMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(stderr, "lit: remote-absent marker not cleared: %v\n", err)
 	}
-	if err := spawnBackgroundMirror(ctx, stderr, env, ws, os.Getpid()); err != nil {
+	if err := spawnBackgroundMirror(ctx, inv, ws, spawningProcess()); err != nil {
 		releaseClaim()
 		fmt.Fprintf(stderr, "lit: on-change background push not started: %v\n", err)
 		completePushAttempt(ctx, stderr, env, ws, syncPushOutcome{}, fmt.Errorf("spawn on-change mirror: %w", err))

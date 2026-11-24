@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"go/types"
 	"slices"
 
 	"golang.org/x/tools/go/ssa"
@@ -57,11 +58,169 @@ func (s sources) all(yield func(program) bool) {
 }
 
 // spawnSite is a spawn the walk reached: in the function that spawns, by the
-// spawner it calls or stores into, running program.
+// spawner it calls or stores into, running program with args.
 type spawnSite struct {
 	in      *ssa.Function
 	spawner string
 	program spawnProgram
+	args    spawnArgs
+}
+
+// spawnArgs is the arguments a spawn passes its program after the program
+// itself: a value the subcommand is read from (argsValue), or arguments the
+// tool does not see (argsUnseen).
+type spawnArgs interface {
+	subcommand() subcommand
+}
+
+// argsValue is the []string a spawner takes as ...string after its program
+// (exec.Command's args).
+type argsValue struct{ v ssa.Value }
+
+// argsOf is the arguments of a call of a spawner of signature sig whose
+// parameter program is the program; after is the call's arguments past the
+// program's. They are read only when the spawner's last parameter,
+// right after the program, is ...string (exec.Command, exec.CommandContext):
+// that shape says they are the arguments after the program. Any other shape
+// (os.StartProcess's argv, which holds the program too) is unseen.
+func argsOf(sig *types.Signature, program int, after []ssa.Value) spawnArgs {
+	params := sig.Params()
+	if !sig.Variadic() || program+1 != params.Len()-1 || !types.Identical(params.At(program+1).Type(), types.NewSlice(types.Typ[types.String])) {
+		return argsUnseen{"the spawner takes them other than as ...string after the program"}
+	}
+	return argsValue{after[0]}
+}
+
+// argsUnseen is a spawn whose arguments the tool does not read; why says
+// how the spawner takes them.
+type argsUnseen struct{ why string }
+
+func (a argsUnseen) subcommand() subcommand { return subcommandUnresolved{a.why} }
+
+// subcommand is a spawn's first argument after its program, and what
+// follows it: subcommandNamed, subcommandNone or subcommandUnresolved.
+// [LAW:types-are-the-program] what a spawn asks its program to do is a value
+// a decision reads, not a name it matches.
+type subcommand interface{ subcommand() }
+
+// subcommandNamed is a first argument the spawn names as a constant, and
+// every argument after it.
+type subcommandNamed struct {
+	name  string
+	later []argument
+}
+
+// subcommandNone is a spawn that passes its program no arguments.
+type subcommandNone struct{}
+
+// subcommandUnresolved is a first argument the tool cannot resolve; why says
+// what the resolution stopped at.
+type subcommandUnresolved struct{ why string }
+
+func (subcommandNamed) subcommand()      {}
+func (subcommandNone) subcommand()       {}
+func (subcommandUnresolved) subcommand() {}
+
+// argument is one argument a spawn passes: argumentNamed, a constant, or
+// argumentUnresolved, any other value.
+type argument interface{ argument() }
+
+type argumentNamed struct{ text string }
+
+type argumentUnresolved struct{}
+
+func (argumentNamed) argument()      {}
+func (argumentUnresolved) argument() {}
+
+// subcommand reads the arguments a spawner was handed as ...string. Only the
+// shape a call with literal arguments compiles to is read: no arguments
+// (nil), or a full slice of an array that holds them, each element stored
+// once and the array and slice used for nothing else. Every other shape (a
+// slice built by append, a parameter, a slice something else may write) is
+// unresolved, which a decision reads as possibly anything.
+// [LAW:no-silent-failure] what the tool cannot read never reads as a
+// subcommand that does nothing.
+func (a argsValue) subcommand() subcommand {
+	if c, ok := a.v.(*ssa.Const); ok && c.IsNil() {
+		return subcommandNone{}
+	}
+	args, ok := literalArgs(a.v)
+	if !ok {
+		return subcommandUnresolved{"arguments that are not a list of literals"}
+	}
+	if len(args) == 0 {
+		return subcommandNone{}
+	}
+	first, ok := args[0].(argumentNamed)
+	if !ok {
+		return subcommandUnresolved{"a first argument that is not a constant"}
+	}
+	return subcommandNamed{name: first.text, later: args[1:]}
+}
+
+// literalArgs is every element of v, the full slice of an array whose every
+// element is stored once and that nothing but v reads or writes.
+func literalArgs(v ssa.Value) ([]argument, bool) {
+	s, ok := v.(*ssa.Slice)
+	if !ok || s.Low != nil || s.High != nil || s.Max != nil || !handedOnlyToTheSpawn(s) {
+		return nil, false
+	}
+	alloc, ok := s.X.(*ssa.Alloc)
+	if !ok {
+		return nil, false
+	}
+	arr, ok := alloc.Type().(*types.Pointer).Elem().Underlying().(*types.Array)
+	if !ok {
+		return nil, false
+	}
+	stored := make([][]ssa.Value, arr.Len())
+	for _, r := range *alloc.Referrers() {
+		if r == ssa.Instruction(s) {
+			continue
+		}
+		ia, ok := r.(*ssa.IndexAddr)
+		if !ok {
+			return nil, false
+		}
+		c, ok := ia.Index.(*ssa.Const)
+		if !ok {
+			return nil, false
+		}
+		for _, use := range *ia.Referrers() {
+			st, ok := use.(*ssa.Store)
+			if !ok || st.Addr != ia {
+				return nil, false
+			}
+			stored[c.Int64()] = append(stored[c.Int64()], st.Val)
+		}
+	}
+	args := make([]argument, len(stored))
+	for i, vals := range stored {
+		args[i] = argumentUnresolved{}
+		if len(vals) != 1 {
+			continue
+		}
+		if c, ok := vals[0].(*ssa.Const); ok && c.Value != nil && c.Value.Kind() == constant.String {
+			args[i] = argumentNamed{constant.StringVal(c.Value)}
+		}
+	}
+	return args, true
+}
+
+// handedOnlyToTheSpawn reports whether v's one use, debug information
+// aside, is a call: the spawn it is handed to.
+func handedOnlyToTheSpawn(v ssa.Value) bool {
+	uses := 0
+	for _, r := range *v.Referrers() {
+		if _, debug := r.(*ssa.DebugRef); debug {
+			continue
+		}
+		if _, call := r.(ssa.CallInstruction); !call {
+			return false
+		}
+		uses++
+	}
+	return uses == 1
 }
 
 // spawnProgram is a spawn's program: a value, resolved once the walk has
@@ -215,23 +374,70 @@ func (w *walker) arg0(v *ssa.UnOp) (string, bool) {
 
 // settle turns every spawn in the walk's reach, its binary's setup's
 // included, into touches, each resolved through every call site the walk
-// holds — the witness saying which program, or why it is unresolved.
+// holds — the witness saying which program, or why it is unresolved. Every
+// spawn is resolved once, first, because whether a CLI exists for an
+// unresolved program to be is a fact of the whole reach (cliFor).
 func (w *walker) settle(setupRunsCLI bool) {
+	var spawns []resolvedSpawn
 	for s := range w.spawns.all {
-		for p := range s.program.sources(w).all {
-			for t, what := range w.programTouches(p, setupRunsCLI) {
-				w.touch(t, s.in, func() string { return fmt.Sprintf("%s spawns %s", s.spawner, what) })
+		spawns = append(spawns, resolvedSpawn{s, s.program.sources(w), s.args.subcommand()})
+	}
+	cli := cliFor(setupRunsCLI, spawns, w.a.class)
+	for _, s := range spawns {
+		for p := range s.sources.all {
+			for t, what := range w.programTouches(p, setupRunsCLI, cli) {
+				w.touch(t, s.site.in, func() string { return fmt.Sprintf("%s spawns %s", s.site.spawner, what) })
 			}
 		}
 	}
 }
 
+// cliHost is why a CLI exists for a test to run in another process, or
+// that none does (exists false).
+type cliHost struct {
+	exists bool
+	how    string
+}
+
+// resolvedSpawn is a spawn with its program's sources and its subcommand
+// resolved.
+type resolvedSpawn struct {
+	site       spawnSite
+	sources    sources
+	subcommand subcommand
+}
+
+// cliFor decides whether a CLI exists for a test to run in another process.
+// One exists only through a setup that runs the CLI (the test binary is
+// one) or a named build: a spawn whose program the classification names as
+// the go tool, with a subcommand that builds (Classification.buildsGo). An
+// unresolved program is never a build: every reach that hands on a
+// configured program ($EDITOR) would then be a CLI run, and the line between
+// integration and end to end would mean nothing; it is another process
+// either way, so it is never unit.
+func cliFor(setupRunsCLI bool, spawns []resolvedSpawn, class *Classification) cliHost {
+	if setupRunsCLI {
+		return cliHost{exists: true, how: "the test binary, whose setup runs the CLI"}
+	}
+	for _, s := range spawns {
+		for p := range s.sources.all {
+			if n, ok := p.(programNamed); ok {
+				if with, builds := class.buildsGo(n.name, s.subcommand); builds {
+					return cliHost{exists: true, how: "a CLI the reach builds with " + with}
+				}
+			}
+		}
+	}
+	return cliHost{}
+}
+
 // programTouches is the one place a program becomes touches: git when it is
 // git; a CLI run when it is the test binary and the binary's setup runs the
 // CLI; another process otherwise. An unresolved program may be any program:
-// another process, and, where the setup runs the CLI, the test binary run as
-// the CLI, so it is charged both, the reading that errs furthest from unit.
-func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(Touch, string) bool) {
+// another process always, and a CLI run whenever a CLI exists for it to be
+// (cli). [LAW:no-silent-failure] a program the tool cannot name is never
+// read as touching nothing.
+func (w *walker) programTouches(p program, setupRunsCLI bool, cli cliHost) func(yield func(Touch, string) bool) {
 	return func(yield func(Touch, string) bool) {
 		switch p := p.(type) {
 		case programNamed:
@@ -247,10 +453,10 @@ func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(To
 			}
 			yield(Proc, fmt.Sprintf("%s, the test binary, whose setup does not reach the CLI: another process", p.name))
 		case programUnresolved:
-			if !yield(Proc, "an unresolved program ("+p.why+"): another process") || !setupRunsCLI {
+			if !yield(Proc, "an unresolved program ("+p.why+"): another process") || !cli.exists {
 				return
 			}
-			yield(CLI, "an unresolved program ("+p.why+"), which may be the test binary, whose setup runs the CLI")
+			yield(CLI, "an unresolved program ("+p.why+"), which may be "+cli.how)
 		}
 	}
 }

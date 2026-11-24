@@ -133,9 +133,10 @@ type Syncer interface {
 	// branch's history inside window before it returns, whichever of the two
 	// landed it, so no push leaves the remote past the bound with nobody
 	// asked to keep it. [LAW:no-ambient-temporal-coupling] The push runs on
-	// ctx; the bound runs on a deadline of its own taken from boundLifetime,
-	// so a push deadline the push nearly spent never cuts the bound, and a
-	// caller with one lifetime passes it twice. Result.Bound is the bound
+	// ctx; the bound runs on a deadline of its own, the history bound of the
+	// deadlines the store's environment carries, taken from boundLifetime, so
+	// a push deadline the push nearly spent never cuts the bound, and a caller
+	// with one lifetime passes it twice. Result.Bound is the bound
 	// kept and its account joins Result.Maintenance. Below the bound it
 	// reads the remote head's height and nothing else; once the height
 	// reaches it, it publishes a re-root of that head, runs the remote's GC,

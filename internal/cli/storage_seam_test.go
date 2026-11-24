@@ -127,33 +127,22 @@ var doltWorkspaceMachinery = map[string][]string{
 	// answer, which the CLI classifies through model.StateRequestError and
 	// its tests match by type.
 	"migration quarantine recovery": {"Unquarantine", "NoQuarantineError"},
-	// The detached mirror's clone-and-push machinery: the deadline each hold
-	// on the live store runs under, the deadline the push from the clone runs
-	// under with the lag its cut takes to unwind, and the ref write that
-	// carries a landed push's head back onto the live store. None of it can
-	// go through the contract because none of it is storage behavior: the
-	// deadlines are links of the store's sizing chains, pinned in-package by
-	// TestMirrorHoldBudgetExceedsObservedCloneCost,
-	// TestMirrorPushDeadlineExceedsObservedPushCost and
-	// TestCoResidentWaitIsSizedToTheMirrorHold, and the ref write opens the
+	// The detached mirror's clone-and-push machinery: the ref write that
+	// carries a landed push's head back onto the live store. It cannot go
+	// through the contract because it is not storage behavior: it opens the
 	// chunk store with no engine at all — all mirror machinery, deleted at S4
-	// with the rest.
-	//
-	// The cli reaches for the lag because the push-deadline regression tests
-	// assert where a cut push ENDS, which is the deadline plus that lag and
-	// not the deadline alone. Restating it as a bare 30s would be a second,
-	// unattributed copy of a measured figure, which a re-measurement in store
-	// would leave behind. [LAW:one-source-of-truth]
+	// with the rest. The deadlines that machinery runs under are no longer
+	// the store's: they are internal/deadline's, a leaf both layers import.
 	//
 	// PushedHeadRecord, ErrHoldCut and ErrReceivedRefsNotRecorded are
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
 	// way the ref write went, that a failure was the hold budget's cut, and
 	// that only the received-refs write failed — and travel with it.
-	// ReceiveDeadline is the receive's own deadline, declared in store
-	// beside the holds it bounds; the cli reads it rather than keep a second
-	// copy. HistoryBoundDeadline is the deadline the push verbs run a landed
-	// push's history bound under, derived from MirrorPushDeadline; the cli
-	// reads it to size the receive's wait on a mirror cycle's network work.
+	// The receive's own deadline is declared in store beside the holds it
+	// bounds; the cli reads it rather than keep a second copy. A landed push's
+	// history bound runs under Deadlines.HistoryBound, derived from the push
+	// deadline; the cli reads it to size the receive's wait on a mirror
+	// cycle's network work.
 	//
 	// LandFetchedHead is RecordPushedHead's counterpart for the receive, which
 	// fetches on a clone the same way the mirror pushes from one: it carries
@@ -195,9 +184,8 @@ var doltWorkspaceMachinery = map[string][]string{
 	"mirror clone and push": {
 		"MirrorRootOf", "MirrorRootEnvVar", "MirrorBase",
 		"SeedCloneMirrors", "SweepMirrorBasesUnder", "RemoveCloneMirrors",
-		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved", "HistoryBoundDeadline",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
-		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
+		"ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "TempTableFilesDir",
 		"FetchedHeadRecord", "FetchedHeadMoved", "FetchedHeadUnchanged", "FetchedHeadSuperseded",
 		"ReadTakenClone", "TakenClone",

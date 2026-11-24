@@ -210,7 +210,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// writes below the newer schema; upgrading lit is the way on.
 		guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
-		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, s.stderr, s.env.Deadlines(), func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect)
 	case storage.TakeLocal:

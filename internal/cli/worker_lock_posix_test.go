@@ -3,15 +3,21 @@
 package cli
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/process"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased pins the join's meaning:
@@ -47,65 +53,76 @@ func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
 	}
 }
 
-// workerOutlivedByChildEnv makes this test binary run as a detached worker
-// whose child outlives it (runWorkerOutlivedByChild).
-const workerOutlivedByChildEnv = "LIT_TEST_WORKER_OUTLIVED_BY_CHILD"
-
-// init runs this test binary as that worker when a test spawned it so, before
-// TestMain sets up a suite the worker never runs.
-func init() {
-	if storageDir := os.Getenv(workerOutlivedByChildEnv); storageDir != "" {
-		runWorkerOutlivedByChild(storageDir)
-	}
-}
-
-// runWorkerOutlivedByChild is a worker that starts a child it never waits for,
-// prints the child's pid and exits — the shape of a backgrounded owner-notify
-// hook.
-func runWorkerOutlivedByChild(storageDir string) {
-	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, Invocation, workerWorkspace, int) error {
-		child := exec.Command("sleep", "60")
-		if err := child.Start(); err != nil {
-			return err
-		}
-		fmt.Println(child.Process.Pid)
-		return nil
-	})
-	// Under an invocation, as Run runs every leaf: the leaf records its event.
-	// This is a child process with no test, so its invocation is the process's.
-	inv := Invocation{Dir: WorkingDirOf(os.Getwd()), Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
-	if _, err := recordLeaf(leaf, underInvocation(context.Background()), inv, struct{}{}, []string{"--store", storageDir}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	os.Exit(0)
-}
-
 // TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren pins that a worker's
-// hold is its own: a child the worker started and left running does not keep
-// the join waiting once the worker has exited.
+// hold is its own, in the production shape that needs it: a mirror whose push
+// fails runs the owner-notify hook, the hook backgrounds a notifier and
+// returns, and the mirror exits. The join then ends with the mirror, though
+// the notifier still runs.
 func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	t.Parallel()
-	storageDir := t.TempDir()
-	holds, err := holdWorkerLock(storageDir)
-	if err != nil {
-		t.Fatalf("holdWorkerLock() = %v", err)
-	}
-	worker := exec.Command(os.Args[0])
-	worker.Env = append(os.Environ(), workerOutlivedByChildEnv+"="+storageDir)
-	worker.ExtraFiles = holds
-	out, err := worker.Output()
-	_ = holds[0].Close()
-	if err != nil {
-		t.Fatalf("worker: %v\n%s", err, out)
-	}
-	childPID, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		t.Fatalf("worker printed %q, want the child's pid", out)
-	}
-	t.Cleanup(func() { _ = syscall.Kill(childPID, syscall.SIGKILL) })
+	maskGlobalConfig(t)
+	rig := setupMirrorDeadlineRepo(t)
 
-	if err := JoinDetachedWorkers(storageDir, 5*time.Second); err != nil {
-		t.Fatalf("JoinDetachedWorkers() with only the worker's child alive = %v; want nil", err)
+	// The notifier outlives the join's patience below, so a hold it inherited
+	// would keep the join waiting past it.
+	notifierPIDFile := filepath.Join(rig.base, "notifier.pid")
+	notifierLife := int((2 * suiteenv.StallBound).Seconds())
+	writeOwnerNotifyProjectConfig(t, rig.root, "[sync]\ncadence = 'on-push'\nreceive = false\n"+
+		ownerHookKey(fmt.Sprintf(`sleep %d >/dev/null 2>&1 & echo $! > %s`, notifierLife, shPath(notifierPIDFile))))
+	// The rig's unpushed commit goes nowhere, so the mirror's push fails and
+	// runs the hook.
+	runGit(t, rig.root, "remote", "set-url", "origin", filepath.Join(rig.base, "gone", "nowhere.git"))
+
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
+	notifier := func() (int, error) {
+		pidText, err := os.ReadFile(notifierPIDFile)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.Atoi(strings.TrimSpace(string(pidText)))
 	}
+	// Whatever the verdict, the notifier the hook started goes with the test.
+	t.Cleanup(func() {
+		pid, err := notifier()
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return // the hook never ran, so there is no notifier to end
+		case err != nil:
+			t.Errorf("read the notifier's pid to end it: %v", err)
+		default:
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				t.Errorf("end the notifier (pid %d): %v", pid, err)
+			}
+		}
+	})
+	// The spawner is this test process, which stays up, so the mirror is
+	// handed one that has exited, and waits for none. Its owner channel is on:
+	// the mirror's run is the one this test enables automatic sync for, and
+	// the one run it hands the real launcher.
+	mirror := workerRun(t, testStderr(t))
+	mirror = mirror.withEnv(mirror.Env.With(DisableAutoSyncEnvVar + "=0"))
+	mirror.Workers = LaunchWorkersAs(rig.lit)
+	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, exitedSpawner(t)); err != nil {
+		t.Fatalf("spawnBackgroundMirror: %v", err)
+	}
+	if err := JoinDetachedWorkers(ws.StorageDir, suiteenv.StallBound); err != nil {
+		t.Fatalf("JoinDetachedWorkers() with only the mirror's notifier alive = %v; want nil\n%s", err, workerLog(ws, mirrorLogName))
+	}
+	notifierPID, err := notifier()
+	if err != nil {
+		t.Fatalf("the mirror never ran the hook that backgrounds a notifier (%v), so the join proved nothing\n%s", err, workerLog(ws, mirrorLogName))
+	}
+	if !process.Alive(notifierPID) {
+		t.Fatalf("the notifier (pid %d) was gone when the join returned, so the join proved nothing about a child outliving its worker", notifierPID)
+	}
+}
+
+// workerLog is a worker's log in ws, headed by its name, or why it could not
+// be read, for a failure message.
+func workerLog(ws workspace.Info, name string) string {
+	log, err := os.ReadFile(filepath.Join(ws.StorageDir, name))
+	if err != nil {
+		return fmt.Sprintf("%s unreadable: %v", name, err)
+	}
+	return name + ":\n" + string(log)
 }

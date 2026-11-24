@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func newUndoStore(t *testing.T) (*Store, string) {
@@ -410,7 +411,7 @@ func TestListWritesTakesNoCommitLock(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}

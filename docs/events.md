@@ -287,6 +287,9 @@ command took without waiting has no entry.
 | `lock.wait.lock` | The lock's file name. |
 | `lock.wait.waited_ms` | How long the command kept finding the lock held: from its first attempt to the last poll that found the lock held. A wait that ended in `acquired` took the lock within one poll after. |
 | `lock.wait.progress_seen` | How many times the wait saw the holders in front of it make progress: each new holder taking the lock, and each heartbeat of a holder still working. A wait restarts its clock on each one, so a large number explains a long wait that ended in `acquired`. |
+| `lock.wait.stand_still_ms` | How long, at the wait's last poll, the command let the holders in front of it go without progress before failing. It is the allowance the holder stated on the lock under its own run's figures, so two commands waiting on one holder judge it alike; `0` for a command that refuses at once on contention. |
+| `lock.wait.stand_still_stated` | Whether a holder stated that allowance. `false` is a holder that states none, such as a foreign `dolt` or a lit older than the statement, judged by the allowance lit ships, or a command that refuses at once. A holder's statement counts only while its holder record stands, which is from the instant it took the lock until it lets go. |
+| `lock.wait.list_error` | The latest failure to list the lock's holder records during the wait, or null when every listing succeeded. A listing that failed shows no holder standing, so for that poll the holders in front are judged by the allowance lit ships. |
 | `lock.wait.outcome` | `acquired`; `stood_still`, when the holders in front showed no progress for the whole wait and the command failed with `workspace_busy`, naming them; `cancelled`, when the command's context ended first; or `failed`, when an attempt failed for another reason after the lock had been found held. |
 
 `lock.holds` has one entry for each time the command's write engine held
@@ -386,6 +389,17 @@ on stderr for each key, naming the key and the file that sets it.
 | `config.project` | Where the command's project config layer came from: `checkout:<path>`, the file a command run in a checkout reads (the path is `LIT_CONFIG_PROJECT_PATH`'s when it is set), `handed`, the layer a detached sync worker was handed by the command that spawned it, or `none`, a detached worker whose handoff could not be read. |
 | `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. A file that could not be read adds none. |
 | `config.unknown_keys_error` | Why a config file's keys could not be checked, one reason for each file that does not parse, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
+
+## What a detached sync worker records
+
+A detached sync worker (`lit __mirror-bg`) runs under the run facts the command
+that spawned it handed it: the deadlines its holds, waits and sync steps run
+under, the released-schema ceiling, and the raise policy.
+
+| Key | Meaning |
+| --- | --- |
+| `run_facts` | The facts the worker ran under, as `{"deadlines": {…}, "released_schema": {"max": …, "source": …, "bound": "released"}, "raise_policy": {"release": …}}`. Each deadline is in nanoseconds, under the name the handoff carries it by. |
+| `run_facts.source` | `handed`, facts the spawning command handed the worker, or `own`, the worker's own, when its handoff could not be read and it did no work. |
 
 ## What a schema-ahead refusal records
 

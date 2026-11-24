@@ -49,21 +49,21 @@ func TestAClassNamingNoTouchRefuses(t *testing.T) {
 
 func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 	for name, data := range map[string]string{
-		"an unknown field":          `{"packages": {}, "extra": 1}`,
-		"a bad default":             `{"packages": {"os": {"default": "disk"}}}`,
-		"a field as a default":      `{"packages": {"os/exec": {"default": "spawn:field"}}}`,
-		"a bad function":            `{"packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
-		"a cli without a .":         `{"cli": ["nowhere"], "packages": {}}`,
-		"a cli naming a path":       `{"cli": ["example.com/a.b/c"], "packages": {}}`,
+		"an unknown field":          `{"go_builders": [], "packages": {}, "extra": 1}`,
+		"a bad default":             `{"go_builders": [], "packages": {"os": {"default": "disk"}}}`,
+		"a field as a default":      `{"go_builders": [], "packages": {"os/exec": {"default": "spawn:field"}}}`,
+		"a bad function":            `{"go_builders": [], "packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
+		"a cli without a .":         `{"go_builders": [], "cli": ["nowhere"], "packages": {}}`,
+		"a cli naming a path":       `{"go_builders": [], "cli": ["example.com/a.b/c"], "packages": {}}`,
 		"not a json object":         `[]`,
-		"an unknown package key":    `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
-		"a bad module init":         `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
-		"a field as an init":        `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
-		"a spawn as an init":        `{"modules": {"example.com/m": {"init": "spawn:0"}}, "packages": {}}`,
-		"a spawn as a default":      `{"packages": {"os": {"default": "spawn:0"}}}`,
-		"a spawn as a package init": `{"packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
-		"arg0 as a default":         `{"packages": {"os": {"default": "program:arg0"}}}`,
-		"two programs":              `{"packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
+		"an unknown package key":    `{"go_builders": [], "packages": {"os": {"default": "fs", "notes": "x"}}}`,
+		"a bad module init":         `{"go_builders": [], "modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
+		"a field as an init":        `{"go_builders": [], "modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
+		"a spawn as an init":        `{"go_builders": [], "modules": {"example.com/m": {"init": "spawn:0"}}, "packages": {}}`,
+		"a spawn as a default":      `{"go_builders": [], "packages": {"os": {"default": "spawn:0"}}}`,
+		"a spawn as a package init": `{"go_builders": [], "packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
+		"arg0 as a default":         `{"go_builders": [], "packages": {"os": {"default": "program:arg0"}}}`,
+		"two programs":              `{"go_builders": [], "packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
 	} {
 		if _, err := parseClassification([]byte(data)); err == nil || !strings.HasPrefix(err.Error(), "classification file: ") {
 			t.Errorf("%s: parseClassification error = %v, want a classification file error", name, err)
@@ -84,7 +84,7 @@ func TestAClassificationFileRefusesWhatDecodingWouldDrop(t *testing.T) {
 		}
 	}
 	// The same key in two objects is two keys.
-	if _, err := parseClassification([]byte(`{"packages": {"os": {"default": "fs", "functions": {"Exit": "none"}}, "os/exec": {"default": "none", "functions": {"Exit": "none"}}}}`)); err != nil {
+	if _, err := parseClassification([]byte(`{"go_builders": [], "packages": {"os": {"default": "fs", "functions": {"Exit": "none"}}, "os/exec": {"default": "none", "functions": {"Exit": "none"}}}}`)); err != nil {
 		t.Errorf("parseClassification refused one key in two objects: %v", err)
 	}
 }
@@ -99,6 +99,7 @@ func TestACLINameSplitsAtTheLastDot(t *testing.T) {
 
 func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 	class, err := parseClassification([]byte(`{
+		"go_builders": [],
 		"git": ["git"],
 		"packages": {
 			"os": {"default": "fs", "functions": {"Getenv": "none", "Process": "proc", "Process.Pid": "none", "init": "none"}},
@@ -140,6 +141,7 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 
 func TestAnInitializerIsItsPackagesInitEntryElseItsModules(t *testing.T) {
 	class, err := parseClassification([]byte(`{
+		"go_builders": [],
 		"modules": {"example.com/m": {"init": "none"}, "std": {"init": "clock"}},
 		"packages": {
 			"os": {"default": "fs"},
@@ -165,7 +167,7 @@ func TestAnInitializerIsItsPackagesInitEntryElseItsModules(t *testing.T) {
 }
 
 func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
-	class, err := parseClassification([]byte(`{"git": ["git"], "packages": {}}`))
+	class, err := parseClassification([]byte(`{"go_builders": [], "git": ["git"], "packages": {}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +182,76 @@ func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
 		if got := class.isGit(name); got != want {
 			t.Errorf("isGit(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+func TestTheGoToolIsMatchedByNameOrPathBase(t *testing.T) {
+	class, err := parseClassification([]byte(`{"git": ["git"], "go_builders": ["go"], "packages": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := subcommandNamed{name: "build"}
+	for name, want := range map[string]bool{
+		"go":                   true,
+		"/usr/local/go/bin/go": true,
+		"gofmt":                false,
+		"git":                  false,
+		"/go/bin/staticcheck":  false,
+	} {
+		if _, got := class.buildsGo(name, build); got != want {
+			t.Errorf("buildsGo(%q, build) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestTheGoToolBuildsOnlyWithABuildSubcommand(t *testing.T) {
+	class, err := parseClassification([]byte(`{"go_builders": ["go"], "packages": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := func(args ...argument) subcommand {
+		return subcommandNamed{name: args[0].(argumentNamed).text, later: args[1:]}
+	}
+	arg := func(s string) argument { return argumentNamed{s} }
+	for _, tc := range []struct {
+		sub  subcommand
+		with string // "" when it builds nothing
+	}{
+		{named(arg("build"), arg("-o"), arg("x"), arg("./cmd")), `"go build"`},
+		{named(arg("run"), arg(".")), `"go run"`},
+		{named(arg("install"), arg("./...")), `"go install"`},
+		{named(arg("test"), arg("-c"), arg("-o"), arg("x.test")), `"go test -c"`},
+		{named(arg("test"), arg("--c=true")), `"go test --c=true"`},
+		{named(arg("test"), argumentUnresolved{}), `"go test" and an argument it cannot resolve`},
+		{subcommandUnresolved{"a parameter"}, `"go" and a subcommand it cannot resolve (a parameter)`},
+		{named(arg("-C"), arg("dir"), arg("build")), `"go" and its flag "-C" before the subcommand, which it does not read past`},
+		{named(arg("test"), arg("./...")), ""},
+		{named(arg("test"), arg("-count=1"), arg("-cpu=1")), ""},
+		{named(arg("list"), arg("-deps"), arg("./...")), ""},
+		{named(arg("env"), arg("GOMOD")), ""},
+		{named(arg("vet"), arg("./...")), ""},
+		{named(arg("version")), ""},
+		{subcommandNone{}, ""},
+	} {
+		with, builds := class.buildsGo("go", tc.sub)
+		if with != tc.with || builds != (tc.with != "") {
+			t.Errorf("buildsGo(go, %#v) = %q, %v; want %q", tc.sub, with, builds, tc.with)
+		}
+	}
+}
+
+func TestAClassificationWithoutGoBuildersRefuses(t *testing.T) {
+	// Left out, it would read as a suite that builds no CLI.
+	if _, err := parseClassification([]byte(`{"git": ["git"], "packages": {}}`)); err == nil || !strings.Contains(err.Error(), "go_builders is missing") {
+		t.Errorf("parseClassification error = %v, want one naming go_builders as missing", err)
+	}
+	// Written as [], it says nothing builds one.
+	class, err := parseClassification([]byte(`{"go_builders": [], "packages": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, builds := class.buildsGo("go", subcommandNamed{name: "build"}); builds {
+		t.Error(`buildsGo("go", build) under "go_builders": [] = true, want false`)
 	}
 }
 
@@ -214,6 +286,7 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
+		"go_builders": [],
 		"cli": ["example.com/app/main.Main"],
 		"modules": {"std": {"init": "none"}},
 		"packages": {
@@ -237,6 +310,7 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
+		"go_builders": [],
 		"cli": ["example.com/gone.Main", "example.com/app/main.Gone", "example.com/run.Main"],
 		"modules": {"example.com/unlinked": {"init": "none"}},
 		"packages": {

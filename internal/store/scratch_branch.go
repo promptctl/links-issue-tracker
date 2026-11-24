@@ -26,7 +26,7 @@ type scratchAttempt func(ctx context.Context, op retryOperation) error
 
 // retryInPlace is the attempt of a run that owns its own recovery.
 func (s *Store) retryInPlace(ctx context.Context, op retryOperation) error {
-	return retryTransientGCContention(ctx, s.stderr, op, s.reconnect)
+	return retryTransientGCContention(ctx, s.stderr, s.env.Deadlines(), op, s.reconnect)
 }
 
 // attemptOnce is the attempt of a run whose caller's retry owns its recovery.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 	"github.com/promptctl/primitives/filelock"
@@ -49,7 +50,7 @@ func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
 // endsWithTest ends it.
 func claimHeld(t *testing.T, ws workspace.Info, now time.Time) (mirrorPendingClaim, func()) {
 	t.Helper()
-	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, now)
+	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), runEnv(t).Deadlines(), ws, now)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	// The claimant dies (its hold evaporates); a separate answerer stands in.
 	releaseAnswer()
 
-	releaseBeacon, err := store.HoldMirrorBeacon(ctx, testStderr(t), ws.DatabasePath)
+	releaseBeacon, err := store.HoldMirrorBeacon(ctx, testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("hold mirror beacon as the live answerer: %v", err)
 	}

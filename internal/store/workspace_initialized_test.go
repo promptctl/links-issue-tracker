@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestUninitializedWorkspaceIsOneCondition drives every store entry point that
@@ -38,7 +40,7 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 			return err
 		}},
 		{"LockDoltJournalExclusive", func(ctx context.Context, doltRoot string) error {
-			release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
+			release, err := LockDoltJournalExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 			if err == nil {
 				_ = release()
 			}
@@ -114,7 +116,7 @@ func TestDamagedDoltTreeIsNotReportedAsUninitialized(t *testing.T) {
 		t.Fatalf("seed the workspace root: %v", err)
 	}
 
-	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), databasePath)
+	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), suiteenv.Deadlines(), databasePath)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockDoltJournalExclusive() with no noms directory succeeded; want a refusal that does not mint Dolt's tree")

@@ -8,17 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // A detached worker is a process of its own, so its event is its own — and,
 // started with its spawner's TRACEPARENT, in the spawner's trace, naming the
-// spawner's span as its parent. This starts a real worker (the suite's test
-// binary, TestMain) and reads its event off the events file, so a mirror push
+// spawner's span as its parent. This starts a real worker (realWorkers) and
+// reads its event off the events file, so a mirror push
 // that fails is tied back to the write that caused it. [LAW:nothing-unseen]
 func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.T) {
 	t.Parallel()
+	workers := realWorkers(t)
 	isolateEvents(t)
 	dir, _ := litRepoForCadence(t)
 	spawner := telemetry.Begin(telemetry.Event{})
@@ -28,14 +30,16 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 	if err != nil {
 		t.Fatalf("resolveWorkspace: %v", err)
 	}
-	// Parent pid 0: the worker has no spawner to wait out, and the spawner
-	// here is this test process, which stays up.
-	if err := spawnBackgroundMirror(ctx, stderr, envInTrace(runEnv(t), spawner), ws, 0); err != nil {
+	// The spawner here is this test process, which stays up, so the worker is
+	// handed one that has exited, and waits out nothing.
+	inv := workerRun(t, stderr).withEnv(envInTrace(runEnv(t), spawner))
+	inv.Workers = workers
+	if err := spawnBackgroundMirror(ctx, inv, ws, exitedSpawner(t)); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	spawnerEvent := spawner.Finish(telemetry.End{})
 
-	deadline := time.Now().Add(suiteStallDeadline)
+	deadline := time.Now().Add(suiteenv.StallBound)
 	for {
 		for _, ev := range eventsInFile(t) {
 			if ev.Event != "lit "+backgroundMirrorSubcommand {
@@ -53,7 +57,7 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the worker left no event within %s; events written: %v", suiteStallDeadline, eventsInFile(t))
+			t.Fatalf("the worker left no event within %s; events written: %v", suiteenv.StallBound, eventsInFile(t))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

@@ -18,9 +18,11 @@ import (
 )
 
 // dirInvocation is the invocation t runs lit with in dir. stdin is empty, as
-// /dev/null is to a `go test` process, and its environment is t's (runEnv).
+// /dev/null is to a `go test` process, its environment is t's (runEnv), whose
+// deadlines are the suite's, and its workers refuse every start
+// (refusedWorkers): a test that starts real ones sets them on the invocation.
 func dirInvocation(t testing.TB, dir string, stdout, stderr io.Writer, args []string) Invocation {
-	return Invocation{Dir: WorkingDirOf(dir, nil), Args: args, Env: runEnv(t), Stdin: strings.NewReader(""), Stdout: stdout, Stderr: stderr}
+	return Invocation{Dir: WorkingDirOf(dir, nil), Args: args, Env: runEnv(t), Stdin: strings.NewReader(""), Stdout: stdout, Stderr: stderr, Workers: refusedWorkers(t)}
 }
 
 // runEnvs holds each test's own environment entries, keyed by test name, so a
@@ -79,6 +81,14 @@ func runEnv(t testing.TB) environ.Env {
 // suiteenv.Of's. A test that sets entries of its own reads runEnv instead.
 func testEnv() environ.Env {
 	return suiteenv.Of(os.Environ())
+}
+
+// withFactParts is env with its run facts built from the suite's parts as
+// change leaves them, for a test whose subject is one fact.
+func withFactParts(env environ.Env, change func(*suiteenv.FactParts)) environ.Env {
+	parts := suiteenv.Parts()
+	change(&parts)
+	return env.WithFacts(parts.Facts())
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestAcquireCommitLockNeverEvictsLiveHolderByAge: the lock is held by flock,
@@ -21,9 +23,9 @@ import (
 func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
+	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
-	holderRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	holderRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("holder acquisition error = %v", err)
 	}
@@ -40,7 +42,7 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	}
 
 	// The contender's failed attempts must not have broken the holder's hold.
-	if _, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("probe after failed contender = %v, want ErrWorkspaceBusy (hold intact)", err)
 	}
 
@@ -74,7 +76,7 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	if err := os.Chtimes(lockPath, ancient, ancient); err != nil {
 		t.Fatalf("Chtimes(lock) error = %v", err)
 	}
-	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
+	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -92,7 +94,7 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("lock file should persist after release, stat err = %v", err)
 	}
-	probeRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)
+	probeRelease, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, suiteHolder(), refuseHeld)
 	if err != nil {
 		t.Fatalf("probe after release error = %v (lock should be free)", err)
 	}
@@ -388,5 +390,23 @@ func TestCommitWorkingSetOnceRendersStamp(t *testing.T) {
 	}
 	if message != "stamped provenance probe" {
 		t.Fatalf("stamped message = %q, want %q", message, stamp.Message)
+	}
+}
+
+// TestCommitLockWaiterOutlastsARotation pins the order the package's tolerated
+// lock inversion depends on: a mutation's GC-contention rotation re-opens
+// LOCK under the held commit lock, and a peer that took LOCK in the gap waits
+// on that commit lock. The re-open gives up after the run's holder wait plus
+// the old engine's close; the peer's wait must be strictly longer, or both
+// fail at once where the holder alone was meant to. Both derive from the
+// run's deadlines, so the order is checked for the shipped ones and the
+// suite's.
+func TestCommitLockWaiterOutlastsARotation(t *testing.T) {
+	t.Parallel()
+	for name, d := range map[string]deadline.Deadlines{"shipped": deadline.Shipped(), "suite": suiteenv.Deadlines()} {
+		if commitLockWaiterBudget(d) <= rotationReserve(d) {
+			t.Errorf("%s: commitLockWaiterBudget (%s) does not outlast rotationReserve (%s); a commit-lock waiter gives up before the holder's rotation does",
+				name, commitLockWaiterBudget(d), rotationReserve(d))
+		}
 	}
 }

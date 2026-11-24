@@ -511,23 +511,13 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 // proving the wrapper returns a loud failure on the deadline rather than
 // blocking on it.
 func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level
-	// adoptRemoteTicketsBlockingFn and adoptRemoteDeadline; parallel init
-	// paths reading them would race.
-	prevFn := adoptRemoteTicketsBlockingFn
-	prevDeadline := adoptRemoteDeadline
-	defer func() {
-		adoptRemoteTicketsBlockingFn = prevFn
-		adoptRemoteDeadline = prevDeadline
-	}()
-
+	t.Parallel()
 	// The stand-in prints while the run waits on it, then passes the deadline
 	// and outlives the run, printing again: the first line belongs on the run's
 	// stderr, the second must never reach it.
 	deadline := make(chan time.Time)
 	abandoned := make(chan struct{})
-	adoptRemoteDeadline = func() <-chan time.Time { return deadline }
-	adoptRemoteTicketsBlockingFn = func(ctx context.Context, stderr io.Writer, _ environ.Env, ws workspace.Info) initSyncOutcome {
+	adopt := func(ctx context.Context, stderr io.Writer, _ environ.Env, ws workspace.Info) initSyncOutcome {
 		fmt.Fprintln(stderr, "while the run waits")
 		close(deadline)
 		<-ctx.Done() // a fetch that never finishes until it is abandoned
@@ -537,7 +527,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)))
+	outcome := adoptUnderHardStop(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)), adopt, deadline)
 
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {

@@ -136,12 +136,12 @@ type LandedFetch struct {
 // receive asks again and lands over the live writer's ref.
 //
 // The hold is holdForRefWrite's: the workspace shared lock around Dolt's LOCK
-// and the commit lock. Its budget is the receive's own deadline, not the
-// mirror's hold budget: the landing's cost is proportional to how far the
+// and the commit lock. Its budget is the receive's own deadline
+// (deadline.Deadlines.Receive, read off env), not the mirror's hold: the landing's cost is proportional to how far the
 // remote moved — tens of milliseconds for the usual few commits, more after a
 // long absence — and a budget sized for a ref write would cut a large landing
 // on every attempt, so it would never converge. A landing that outlasts
-// coResidentHolderWait fails a contender naming the receive worker, which
+// HolderWait fails a contender naming the receive worker, which
 // is the ordinary account of a long hold.
 //
 // The clone's fetch pruned too, and pruned is what it pruned (its session's
@@ -197,13 +197,13 @@ func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, dol
 	}
 	cachePlan := planRemoteCacheLanding(ctx, env, mirrorBaseOf(mirrorRoot, root), MirrorBase(mirrorRoot, clone.root), remote)
 
-	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, env.Deadlines(), root)
 	if err != nil {
 		return LandedFetch{}, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	var cacheErr error
-	err = holdForRefWrite(ctx, stderr, root, engineWrite, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, env.Deadlines(), root, engineWrite, env.Deadlines().Receive(), func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
 		live, err := readRefHead(holdCtx, ddb, trackingRef)

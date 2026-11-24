@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestLocalHasTicketsDoesNotCreateStore proves the adopt gate can answer "is
@@ -193,7 +194,9 @@ func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	release, err := LockWorkspaceExclusive(ctx, testStderr(), root)
+	// The holder states a short allowance, so the refusal arrives one short
+	// holder wait in.
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Contention(), root)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
@@ -223,7 +226,9 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 		t.Fatalf("writeAdoptPendingMarker: %v", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, testStderr(), root)
+	// The holder states a short allowance, so the refusal arrives one short
+	// holder wait in.
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), suiteenv.Contention(), root)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}

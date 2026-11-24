@@ -183,6 +183,11 @@ type classificationFile struct {
 	// Git names the programs that are git, matched against a spawned
 	// program's name or the last element of its path.
 	Git []string `json:"git"`
+	// GoBuilders names the go tool, matched as git's are: a spawn of it with
+	// a build subcommand builds a CLI a test may run in another process. It
+	// must be present; [] says nothing builds one. [LAW:no-silent-failure] a
+	// key left out never reads as a suite that builds no CLI.
+	GoBuilders *[]string `json:"go_builders"`
 	// Modules classifies each module the measured builds link a package of,
 	// by what its packages' initializers can do: every one must have an
 	// entry, so a dependency added later cannot bring an initializer in
@@ -203,13 +208,15 @@ type packageClassEntry struct {
 }
 
 // Classification is the parsed data file: every outside function's class,
-// the CLI's entry points, and git's names. [LAW:one-source-of-truth] it is
-// the one home of what code outside the module can do.
+// the CLI's entry points, git's names, and the go tool's.
+// [LAW:one-source-of-truth] it is the one home of what code outside the
+// module can do.
 type Classification struct {
-	cli      map[funcName]bool
-	git      []string
-	modules  map[string]Effect       // each module's initializers, by module path
-	packages map[string]packageClass // by import path, or a path prefix ending "/..."
+	cli        map[funcName]bool
+	git        []string
+	goBuilders []string
+	modules    map[string]Effect       // each module's initializers, by module path
+	packages   map[string]packageClass // by import path, or a path prefix ending "/..."
 }
 
 type packageClass struct {
@@ -246,7 +253,10 @@ func parseClassification(data []byte) (*Classification, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("classification file: %w", err)
 	}
-	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, packages: map[string]packageClass{}}
+	if f.GoBuilders == nil {
+		return nil, fmt.Errorf("classification file: go_builders is missing or null: list the go tool's names, or [] if no test builds with it")
+	}
+	c := &Classification{cli: map[funcName]bool{}, git: f.Git, goBuilders: *f.GoBuilders, modules: map[string]Effect{}, packages: map[string]packageClass{}}
 	for path, e := range f.Modules {
 		init, err := parseEffect(e.Init)
 		if err != nil {
@@ -424,9 +434,60 @@ func (c *Classification) isArg0(pkg, name string) bool {
 func (c *Classification) isCLI(n funcName) bool { return c.cli[n] }
 
 // isGit reports whether a program named name is git.
-func (c *Classification) isGit(name string) bool {
-	base := name[strings.LastIndex(name, "/")+1:]
-	return slices.Contains(c.git, base)
+func (c *Classification) isGit(name string) bool { return namedAs(c.git, name) }
+
+// buildsGo reports whether a spawn of the program named name with sub
+// builds Go code, and with what, as a witness says it: the program is the go
+// tool, and sub is build, run, install, or test with -c. A subcommand the
+// tool cannot resolve, or a go flag before it (go -C dir build), which the
+// tool does not read past, counts as a build. [LAW:no-silent-failure] what
+// the tool cannot read is never read as building nothing.
+func (c *Classification) buildsGo(name string, sub subcommand) (string, bool) {
+	if !namedAs(c.goBuilders, name) {
+		return "", false
+	}
+	switch s := sub.(type) {
+	case subcommandUnresolved:
+		return fmt.Sprintf("%q and a subcommand it cannot resolve (%s)", name, s.why), true
+	case subcommandNamed:
+		if strings.HasPrefix(s.name, "-") {
+			return fmt.Sprintf("%q and its flag %q before the subcommand, which it does not read past", name, s.name), true
+		}
+		switch s.name {
+		case "build", "run", "install":
+			return fmt.Sprintf("%q", name+" "+s.name), true
+		case "test":
+			for _, a := range s.later {
+				switch a := a.(type) {
+				case argumentUnresolved:
+					return fmt.Sprintf("%q and an argument it cannot resolve", name+" test"), true
+				case argumentNamed:
+					if compilesTest(a.text) {
+						return fmt.Sprintf("%q", name+" test "+a.text), true
+					}
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// compilesTest reports whether a go test argument is its -c flag, in any
+// form the flag package takes: -c, --c, -c=v. Any value counts, -c=false
+// too, since the tool does not parse flag values.
+func compilesTest(arg string) bool {
+	f, ok := strings.CutPrefix(arg, "-")
+	if !ok {
+		return false
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(f, "-"), "=")
+	return name == "c"
+}
+
+// namedAs reports whether name, or the last element of its path, is one of
+// names.
+func namedAs(names []string, name string) bool {
+	return slices.Contains(names, name[strings.LastIndex(name, "/")+1:])
 }
 
 // splitInterfaceName splits a called-back interface's name, importpath.Name

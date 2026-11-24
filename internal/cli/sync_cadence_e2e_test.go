@@ -130,7 +130,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	// Malformed TOML, so config.Load returns an error rather than defaults.
 	ws := workspacetest.WithProject(workspacetest.Handed(t, runEnv(t), t.TempDir()), "this is = = not toml\n")
 
-	maybeAutoSyncAfterCommand(underInvocation(t.Context()), testStderr(t), runEnv(t), app.AccessWrite, ws)
+	maybeAutoSyncAfterCommand(underInvocation(t.Context()), workerRun(t, testStderr(t)), app.AccessWrite, ws)
 
 	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)
