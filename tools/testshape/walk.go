@@ -177,7 +177,7 @@ func (w *walker) visit(fn *ssa.Function) {
 			if callee.Signature.Recv() != nil {
 				arg++
 			}
-			sp := spawnSite{in: fn, spawner: w.a.owner(callee).name.String(), program: programValue{site.common.Args[arg]}}
+			sp := spawnSite{in: fn, spawner: w.a.owner(callee).name.String(), program: programValue{site.common.Args[arg]}, args: argsOf(callee.Signature, k.Arg, site.common.Args[arg+1:])}
 			w.spawns.add(sp, sp)
 		}
 		w.reach(callee, fn, staticCall{})
@@ -195,7 +195,7 @@ func (w *walker) visit(fn *ssa.Function) {
 		w.invoke(inv, fn)
 	}
 	for _, sf := range s.spawnFields {
-		sp := spawnSite{in: fn, spawner: sf.spawner, program: programValue{sf.program}}
+		sp := spawnSite{in: fn, spawner: sf.spawner, program: programValue{sf.program}, args: argsUnseen{"a field names the program, and the tool does not read the arguments"}}
 		w.spawns.add(sp, sp)
 	}
 }
@@ -220,7 +220,7 @@ func (w *walker) indirectly(fn, from *ssa.Function, how via) {
 	}
 	o := w.a.owner(fn)
 	if _, spawner := o.knows.(SpawnArg); spawner {
-		sp := spawnSite{in: from, spawner: o.name.String(), program: programUnknown{"the spawner is reached as a value"}}
+		sp := spawnSite{in: from, spawner: o.name.String(), program: programUnknown{"the spawner is reached as a value"}, args: argsUnseen{"the spawner is reached as a value"}}
 		w.spawns.add(sp, sp)
 	}
 }

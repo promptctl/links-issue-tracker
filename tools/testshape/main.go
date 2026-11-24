@@ -124,11 +124,17 @@
 //     the test binary and the binary's setup reaches the CLI; another
 //     process otherwise. An unresolved program may be any of them: another
 //     process always, and a CLI run whenever a CLI exists for the test to
-//     run. One exists only if the test binary is one (its setup reaches the
-//     CLI) or the test's reach, its setup's included, builds one: spawns a
-//     program the classification's go_builders names (the go tool), itself
-//     another process. The witness says which program, or why it is
-//     unresolved, and which CLI it may be.
+//     run. One exists for a test only through a setup that runs the CLI (the
+//     test binary is one) or a named build in the test's reach, its setup's
+//     included: a spawn of a program the classification's go_builders names
+//     (the go tool, a key the file must have) with a build subcommand —
+//     build, run, install, or test with -c — itself another process. The
+//     subcommand is read from the arguments a spawner takes as ...string
+//     after the program, when they are literals; a subcommand it cannot
+//     resolve, or a go flag before it, counts as a build. An unresolved
+//     program is never a build: it is another process, so never unit, and a
+//     CLI run only where a CLI exists. The witness says which program, or
+//     why it is unresolved, and which CLI it may be.
 //
 // REFUSALS. A measure that measured nothing, or would mismeasure, names
 // each cause and prints no table:
@@ -140,9 +146,10 @@
 //     binary does not declare; a package of no module of the suite (every
 //     go.mod outside testdata, as ./... walks); a package whose test binary
 //     declares tests and that the stream has no result for.
-//   - The classification: an entry naming a package or member the suite does
-//     not load, a module no measured build links, or a CLI entry point
-//     outside the suite's modules (delete it); a module a measured build
+//   - The classification: a file without go_builders; an entry naming a
+//     package or member the suite does not load, a module no measured build
+//     links, or a CLI entry point outside the suite's modules (delete it); a
+//     module a measured build
 //     links with no entry; a class its member cannot have (a spawn argument
 //     its function lacks, a program's source whose result is not a string).
 //     These stop the run before any measuring.
