@@ -95,6 +95,19 @@ func (f Facts) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// UnmarshalJSON reads f through Parse, so Facts decoded anywhere, as a field
+// of a larger value included, are built by the one constructor and refused as
+// Parse refuses them, never decoded to a zero or partial Facts.
+// [LAW:single-enforcer]
+func (f *Facts) UnmarshalJSON(data []byte) error {
+	parsed, err := Parse(data)
+	if err != nil {
+		return err
+	}
+	*f = parsed
+	return nil
+}
+
 // Parse reads the run facts MarshalJSON wrote, refusing bytes that carry none
 // and any fact or field they leave out, then builds them through Of. It is the
 // one way handed facts become a run's. [LAW:parse-dont-validate]

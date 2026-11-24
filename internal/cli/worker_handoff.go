@@ -46,9 +46,10 @@ type workerHandoff struct {
 // it leaves out, so a handoff that decodes is a run's whole.
 // [LAW:parse-dont-validate] [LAW:single-enforcer]
 func decodeHandoff(r io.Reader) (workerHandoff, error) {
-	// The outer Facts shadows the handoff's own, so the decoder hands Parse
-	// the facts' bytes — none at all when the key is missing — and builds
-	// nothing itself.
+	// Facts decode only through Parse (Facts.UnmarshalJSON), but a decoder
+	// calls that only for a key that is there. The outer Facts shadows the
+	// handoff's own, so Parse is handed the facts' bytes — none at all when
+	// the key is missing — and refuses that too.
 	var wire struct {
 		workerHandoff
 		Facts json.RawMessage `json:"facts"`

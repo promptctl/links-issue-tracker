@@ -43,6 +43,10 @@ func TestHandedFactsReadBackWhole(t *testing.T) {
 		if err != nil || got != facts {
 			t.Errorf("Parse(%s) = %+v, %v; want %+v", data, got, err, facts)
 		}
+		var decoded Facts
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded != facts {
+			t.Errorf("json.Unmarshal(%s) = %+v, %v; want %+v", data, decoded, err, facts)
+		}
 	}
 }
 
@@ -52,6 +56,15 @@ func TestParseRefusesNoFacts(t *testing.T) {
 	for _, data := range []string{"", "{}"} {
 		if _, err := Parse([]byte(data)); err == nil {
 			t.Errorf("Parse(%q) succeeded; want it refused", data)
+		}
+	}
+	// Decoding Facts as a field reads it through Parse too.
+	for _, data := range []string{`{"facts":{}}`, `{"facts":null}`} {
+		var into struct {
+			Facts Facts `json:"facts"`
+		}
+		if err := json.Unmarshal([]byte(data), &into); err == nil {
+			t.Errorf("json.Unmarshal(%s) succeeded with %+v; want it refused as Parse refuses it", data, into.Facts)
 		}
 	}
 }
