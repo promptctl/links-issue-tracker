@@ -326,7 +326,7 @@ func (r mirrorRun) wait(t *testing.T) mirrorResult {
 // knobs a test turns on the mirror runs it starts: the push deadline they run
 // under and the git shim they resolve git through.
 //
-// The mirror runs as lit itself (suiteLit), a process of its own, the shape
+// The mirror runs as lit itself (realLit), a process of its own, the shape
 // production gives it: Dolt resolves git through the process PATH, so the
 // shim reaches that process and no other test. The push deadline reaches it
 // as production's does, in the handoff its spawner hands it.
@@ -334,6 +334,9 @@ func (r mirrorRun) wait(t *testing.T) mirrorResult {
 type mirrorRig struct {
 	t                   *testing.T
 	base, root, gitPath string
+	// lit is the real lit the mirror runs as, built before the rig times
+	// anything.
+	lit string
 	// pushDeadline is the mirror runs' push deadline; zero runs them under
 	// the production one.
 	pushDeadline time.Duration
@@ -379,10 +382,6 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 			return ctx.Err()
 		}
 	}
-	lit, err := suiteLitPath()
-	if err != nil {
-		return err
-	}
 	env := runEnv(r.t)
 	if r.gitShim != "" {
 		env = env.With("PATH=" + r.gitShim + string(os.PathListSeparator) + env.Get("PATH"))
@@ -391,7 +390,7 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 	if r.pushDeadline != 0 {
 		deadlines.MirrorPush = r.pushDeadline
 	}
-	cmd := exec.CommandContext(ctx, lit, args...)
+	cmd := exec.CommandContext(ctx, r.lit, args...)
 	cmd.Dir, cmd.Env = r.root, env.List()
 	cmd.Stdin = strings.NewReader(workerHandoffStdinUnder(r.t, r.root, deadlines))
 	cmd.Stdout, cmd.Stderr = out, out
@@ -404,13 +403,16 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 // setupMirrorDeadlineRepo seeds the shared field topology of the mirror
 // deadline tests: a workspace with a real git+file remote, lit initialized,
 // the remote's dolt ref established with real git, and one real unpushed
-// commit so a mirror cycle has work to reach the wedged subprocess.
+// commit so a mirror cycle has work to reach the wedged subprocess. The real
+// lit the mirror runs as is built first, before the rig or its test times
+// anything (realLit).
 func setupMirrorDeadlineRepo(t *testing.T) *mirrorRig {
 	t.Helper()
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not available")
 	}
+	lit := realLit(t)
 
 	base := t.TempDir()
 	root := filepath.Join(base, "workspace")
@@ -432,7 +434,7 @@ func setupMirrorDeadlineRepo(t *testing.T) *mirrorRig {
 	runGit(t, root, "push", "-u", "origin", "HEAD")
 	setRunEnv(t, "HOME", base)
 
-	rig := &mirrorRig{t: t, base: base, root: root, gitPath: gitPath}
+	rig := &mirrorRig{t: t, base: base, root: root, gitPath: gitPath, lit: lit}
 	if out, err := rig.run(60*time.Second, "init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out.String())
 	}

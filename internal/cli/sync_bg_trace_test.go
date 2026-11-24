@@ -14,7 +14,7 @@ import (
 
 // A detached worker is a process of its own, so its event is its own — and,
 // started with its spawner's TRACEPARENT, in the spawner's trace, naming the
-// spawner's span as its parent. This starts a real worker (suiteLit) and
+// spawner's span as its parent. This starts a real worker (useRealWorkers) and
 // reads its event off the events file, so a mirror push
 // that fails is tied back to the write that caused it. [LAW:nothing-unseen]
 func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.T) {
