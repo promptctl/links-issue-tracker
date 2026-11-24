@@ -177,7 +177,9 @@ func TestStampNext(t *testing.T) {
 					event.CreatedAt = event.CreatedAt.In(zone)
 					seen[i] = event
 				}
-				got := stamp.Next(c.now.In(zone), NewestInstant(seen)).Time()
+				// The clock's reading is UTC, as storage.Clock gives it; the
+				// history is what may arrive in another zone.
+				got := stamp.Next(c.now, NewestInstant(seen)).Time()
 				if !got.Equal(c.want) {
 					t.Fatalf("stamp.Next = %s, want %s", got, c.want)
 				}

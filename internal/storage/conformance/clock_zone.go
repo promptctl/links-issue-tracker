@@ -47,7 +47,7 @@ func aClockReadInAnotherZoneRecordsUTC(t *testing.T, ctx context.Context, st sto
 		}
 	}
 	if len(related) != 1 {
-		t.Fatalf("detail holds %d related-to edges, want the one added: %+v", len(detail.Relations), detail.Relations)
+		t.Fatalf("detail holds %d related-to edges, want the one added: %+v", len(related), detail.Relations)
 	}
 	closedAt := detail.Issue.ClosedAtValue()
 	if closedAt == nil {

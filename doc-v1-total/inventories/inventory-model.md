@@ -238,7 +238,8 @@ The one transition for all three leaf variants.
 
 ### `stamp.Instant` and `stamp.Next(now, newest time.Time) Instant` — `internal/model/stamp/stamp.go`
 The instant a write is stamped at, built by `Next`: `now` when it is past
-`newest`, else `newest` plus one nanosecond, in UTC either way. `Time()` reads
+`newest`, else `newest` plus one nanosecond put in UTC. `now` is a clock
+reading, already UTC (`storage.Clock.Now`), and is taken as given. `Time()` reads
 it where a write records it, and panics on an Instant `Next` did not build (the
 zero value). `Ahead(t)` is how far it is past `t`. Every writer of a write's
 instant takes one: `Apply`, `Retain`, `StatusChange.Write`, `Issue.Stamped`, and
@@ -281,7 +282,7 @@ Helpers: `cloneTime` (`status_states.go`), `cloneString`
   `TestAllOfProgressAndActions` (`lifecycle_test.go`) and
   `TestAllOfProgressIncludesNonStatusLeafPrimitives`.
 - `AllOf` is not a `StatusPrimitive`, so `Apply` cannot be handed one
-  (`all_of.go`; pinned by `TestAllOfIsNotActionable`, `lifecycle_test.go`).
+  (`all_of.go`; pinned by `TestAllOfIsNotAStatusPrimitive`, `lifecycle_test.go`).
 
 ## 1.10 Retention axis — `retention.go`
 

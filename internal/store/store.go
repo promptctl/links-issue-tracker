@@ -1853,7 +1853,7 @@ func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEven
 		}
 		return w, nil
 	case model.RetentionAction:
-		w, err := planRetentionTransition(issue, actor, reason, a, at)
+		w, err := s.planRetentionTransition(issue, actor, reason, a, at)
 		if err != nil {
 			return nil, err
 		}
@@ -1922,11 +1922,7 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 // field write. A noop plan records that the target state and claimant already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
-	at            stamp.Instant
-	action        model.ActionName
-	reason        string
-	actor         string
-	changes       []model.FieldChange
+	event         model.IssueEvent
 	post          model.Issue
 	noop          bool
 	claimHandover *claims.Handover
@@ -1955,11 +1951,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 		return transitionWrite{noop: true, post: issue}, nil
 	}
 	return transitionWrite{
-		at:            at,
-		action:        action.Name(),
-		reason:        reason,
-		actor:         actor,
-		changes:       write.Changes,
+		event:         s.newEvent(write.Issue.ID, string(action.Name()), reason, actor, at, write.Changes),
 		post:          write.Issue,
 		claimHandover: write.Handover,
 	}, nil
@@ -1993,7 +1985,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 		post.StatusValue(), post.AssigneeValue().Raw(), model.StampText(post.UpdatedAt), nullableTime(post.ClosedAtValue()), nullableResolution(post.ResolutionValue()), nullableStringPtr(post.RedirectTargetValue()), post.ID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
-	return s.recordEvent(ctx, tx, post.ID, string(w.action), w.reason, w.actor, w.at, w.changes)
+	return insertEventTx(ctx, tx, w.event)
 }
 
 // retentionWrite is a fully-planned retention transition, the retention-axis
@@ -2003,16 +1995,11 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 // the history format is the same encoding the columns store. applyTx is the
 // write half: one UPDATE plus the event.
 type retentionWrite struct {
-	issueID model.ID
-	at      stamp.Instant
 	// nextArchived/nextDeleted are the pair Retain produced, as the
 	// retentionColumns projection the columns store.
 	nextArchived any
 	nextDeleted  any
-	action       model.ActionName
-	reason       string
-	actor        string
-	changes      []model.FieldChange
+	event        model.IssueEvent
 	post         model.Issue
 }
 
@@ -2032,9 +2019,8 @@ func (w retentionWrite) isNoop() bool { return false }
 // [LAW:single-enforcer]
 //
 // [LAW:effects-at-boundaries] The instant arrives as an argument because this
-// is the compute half: it decides nothing about when, so it reads no clock and
-// stays testable with no store at all.
-func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, at stamp.Instant) (retentionWrite, error) {
+// is the compute half: it decides nothing about when, so it reads no clock.
+func (s *Store) planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, at stamp.Instant) (retentionWrite, error) {
 	next, err := model.Retain(issue.Retention(), action, at)
 	if err != nil {
 		return retentionWrite{}, err
@@ -2044,14 +2030,9 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 	nextArchived, nextDeleted := retentionColumns(post)
 	changes := model.RetentionChanges(issue.Retention(), next)
 	return retentionWrite{
-		issueID:      issue.ID,
-		at:           at,
 		nextArchived: nextArchived,
 		nextDeleted:  nextDeleted,
-		action:       action.Name(),
-		reason:       reason,
-		actor:        actor,
-		changes:      changes,
+		event:        s.newEvent(issue.ID, string(action.Name()), reason, actor, at, changes),
 		post:         post,
 	}, nil
 }
@@ -2061,10 +2042,10 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 // retention write restates no status column. [LAW:one-source-of-truth]
 func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-		model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
+		model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.post.ID); err != nil {
 		return fmt.Errorf("update issue retention: %w", err)
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.at, w.changes)
+	return insertEventTx(ctx, tx, w.event)
 }
 
 // currentRetentionTx reads the live retention state of issueID inside tx, for

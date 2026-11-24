@@ -670,7 +670,7 @@ Evidence: a start attempted amid another Apply's plan reads waits on its hold ra
 
 `store.go`. Type switch on `model.Action`:
 - `model.StatusAction` → `s.planStatusTransition(...)`;
-- `model.RetentionAction` → `planRetentionTransition(...)` (a free function, no store);
+- `model.RetentionAction` → `s.planRetentionTransition(...)`;
 - anything else → **panic** `fmt.Sprintf("illegal Action value %T", action)` (`store.go`).
 
 `lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`, `handover() *claims.Handover` (nil for every write but a status transition whose plan set one).
@@ -683,12 +683,12 @@ Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
-`transitionWrite` fields (`store.go`): `at stamp.Instant; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (the write's handover, left nil on a no-op). Every column the write sets is read off `post`. Methods at `store.go`.
+`transitionWrite` fields (`store.go`): `event model.IssueEvent; post model.Issue; noop bool; claimHandover *claims.Handover` (the write's handover, left nil on a no-op). Every column the write sets is read off `post`, and the event is minted at plan time, so the stamp is carried once in each record and nowhere else. Methods at `store.go`.
 
 `planStatusTransition(issue, history, at, actor, reason, action) (transitionWrite, error)` (`store.go`):
 1. `plan := claims.PlanStatus(issue, history, action, s.attribution)` → the plan or the rejection.
 2. **No-op rule**: `write, records := plan.Write(at)`; `!records` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
-3. Otherwise `post: write.Issue`, `changes: write.Changes`, `claimHandover: write.Handover`: the post-state carries `at`, the write's stamp, as its `UpdatedAt` and a close's `closed_at`, and the change rows are read off it — `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`, each when it moved.
+3. Otherwise `event: s.newEvent(id, action name, reason, actor, at, write.Changes)`, `post: write.Issue`, `claimHandover: write.Handover`: the post-state carries `at`, the write's stamp, as its `UpdatedAt` and a close's `closed_at`, and the change rows are read off it — `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`, each when it moved.
 
 Evidence: each of the six non-identity (from→to) pairs records exactly one event carrying the action's own name (`store_test.go`); a same-state `Start` with a new assignee records one `start` event with the calling actor and **no** status change row, and persists the new assignee (`store_test.go`); a same-state, same-assignee `Start` records zero events and does not bump `UpdatedAt` (`store_test.go`).
 
@@ -701,24 +701,24 @@ Evidence: each of the six non-identity (from→to) pairs records exactly one eve
 UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?
 ```
 bound from `w.post`: its status, assignee, `UpdatedAt` (`model.StampText`), and close time, resolution and redirect target through `nullableTime`, `nullableResolution` and `nullableStringPtr`, and id. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
-3. `s.recordEvent(...)` with the action name, reason, actor, `w.changes`, and `w.at` as the event's instant (`store.go`).
+3. `insertEventTx(ctx, tx, w.event)` (`store.go`).
 
 The UPDATE touches only the status-axis columns — a transition restates no retention column (`store.go`).
 
 #### 6.6 `retentionWrite` and `planRetentionTransition`
 
-`retentionWrite` fields (`store.go`): `issueID string; at stamp.Instant; nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
+`retentionWrite` fields (`store.go`): `nextArchived, nextDeleted any; event model.IssueEvent; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
 
-`planRetentionTransition(issue, actor, reason, action, at stamp.Instant)` (`store.go`):
+`(s *Store) planRetentionTransition(issue, actor, reason, action, at stamp.Instant)` (`store.go`):
 - `model.Retain(issue.Retention(), action, at)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
 - `post := issue.Stamped(at); post.SetRetention(next)`;
-- change rows: `model.RetentionChanges(issue.Retention(), next)`.
+- change rows: `model.RetentionChanges(issue.Retention(), next)`, recorded on the event `s.newEvent` mints at `at`.
 
 `retentionWrite.applyTx` (`store.go`):
 ```sql
 UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?
 ```
-bound `model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.issueID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
+bound `model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.post.ID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `insertEventTx(ctx, tx, w.event)` (`store.go`).
 
 Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 

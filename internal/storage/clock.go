@@ -30,7 +30,7 @@ type Clock func() time.Time
 // Now is the clock's reading, in UTC whatever zone the function it wraps
 // reads in. A reading is one of the three sources of an instant an engine
 // records, and each has one place that gives it the contract's form: this, for
-// a clock reading; stamp.Next, for a write's stamp; the store's read parser,
+// a clock reading; stamp.Next, for a stamp stepped past history; the store's read parser,
 // for stored text. So no writer of a reading normalizes it again.
 // [LAW:single-enforcer]
 func (c Clock) Now() time.Time { return c().UTC() }

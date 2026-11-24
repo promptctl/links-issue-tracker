@@ -393,9 +393,9 @@ func TestAllOfProgressAndActions(t *testing.T) {
 	}
 }
 
-// Containers are structurally non-actionable: the model dispatch boundary
-// relies on this to route them to the epic-aware rejection instead.
-func TestAllOfIsNotActionable(t *testing.T) {
+// A container is not a StatusPrimitive: the model dispatch boundary
+// relies on this to route it to the epic-aware rejection instead.
+func TestAllOfIsNotAStatusPrimitive(t *testing.T) {
 	var container Lifecycle = AllOf{Members: []Lifecycle{NewStatus(Open, nil, nil, nil)}}
 	if _, ok := container.(StatusPrimitive); ok {
 		t.Fatal("AllOf satisfies StatusPrimitive, which Apply takes; containers must not be actionable — their state derives from children")

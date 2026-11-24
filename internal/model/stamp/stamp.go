@@ -27,13 +27,15 @@ type Instant struct {
 // event stamped at the same instant, which the id tie-break orders
 // arbitrarily.
 //
-// The stamp is in UTC whichever instant it follows, the one form an instant a
-// write records takes.
+// The stamp is in UTC, the one form an instant a write records takes. now is
+// a clock reading, which storage.Clock already gives in UTC, so the clock arm
+// takes it as it is; newest is read out of history, which Next does not
+// trust to be in UTC, so the history arm puts it there.
 // [LAW:single-enforcer] the one statement of the rule both engines stamp by,
-// and the one place its result takes that form.
+// and the one place a stamp stepped past history takes that form.
 func Next(now, newest time.Time) Instant {
 	if newest.Before(now) {
-		return Instant{at: now.UTC(), built: true}
+		return Instant{at: now, built: true}
 	}
 	return Instant{at: newest.Add(time.Nanosecond).UTC(), built: true}
 }
