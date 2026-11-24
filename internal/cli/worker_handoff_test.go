@@ -168,7 +168,7 @@ func TestAHandoffWithoutItsRunFactsIsRefused(t *testing.T) {
 	}{
 		{"a deadline of zero", func(_, figures map[string]json.RawMessage) { figures["receive"] = json.RawMessage("0") }, "the receive deadline must be positive"},
 		{"a deadline missing", func(_, figures map[string]json.RawMessage) { delete(figures, "push_proof") }, "the push proof deadline must be positive"},
-		{"no deadlines", func(fields, _ map[string]json.RawMessage) { delete(fields, "deadlines") }, "deadline must be positive"},
+		{"no deadlines", func(fields, _ map[string]json.RawMessage) { delete(fields, "deadlines") }, "carries no deadlines"},
 		{"no released-schema ceiling", func(fields, _ map[string]json.RawMessage) { delete(fields, "released_schema") }, "carries no released-schema ceiling"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

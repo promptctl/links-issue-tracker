@@ -136,15 +136,20 @@ func handedWorkerWorkspace(env environ.Env, loc workspace.Location, stdin io.Rea
 }
 
 // handedWorkspace is the workspace the handoff on stdin builds, and env under
-// the run facts it carries. A handoff whose deadlines are missing or not
-// positive does not decode (deadline.Deadlines.UnmarshalJSON), and one that
-// carries no released-schema ceiling is refused: every ceiling names its bound,
-// so a missing one is no ceiling at all, not a ceiling of 0.
+// the run facts it carries. A handoff whose deadlines are present with a
+// figure missing or not positive does not decode (deadline.Deadlines.
+// UnmarshalJSON); one with no deadlines at all decodes to the zero value,
+// which no run can read, and is refused here. One that carries no
+// released-schema ceiling is refused too: every ceiling names its bound, so a
+// missing one is no ceiling at all, not a ceiling of 0.
 // [LAW:parse-dont-validate]
 func handedWorkspace(env environ.Env, loc workspace.Location, stdin io.Reader) (workspace.Info, environ.Env, error) {
 	var handoff workerHandoff
 	if err := json.NewDecoder(stdin).Decode(&handoff); err != nil {
 		return workspace.Info{}, environ.Env{}, fmt.Errorf("read the launcher's handoff: %w", err)
+	}
+	if handoff.Deadlines.IsZero() {
+		return workspace.Info{}, environ.Env{}, errors.New("read the launcher's handoff: it carries no deadlines")
 	}
 	if handoff.ReleasedSchema.Bound == "" {
 		return workspace.Info{}, environ.Env{}, errors.New("read the launcher's handoff: it carries no released-schema ceiling")
