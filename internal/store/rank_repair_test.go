@@ -432,8 +432,8 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetIssue(%s) error = %v", id, err)
 		}
-		if stamped := issue.UpdatedAt.Equal(fixedAt); stamped != (id == dependent) {
-			t.Fatalf("issue %s updated_at = %s; the repair stamps the ticket it moved and no other", id, issue.UpdatedAt)
+		if issue.UpdatedAt.Equal(fixedAt) {
+			t.Fatalf("issue %s updated_at = %s, the repair's clock; a rank repair reorders the backlog and stamps no ticket", id, issue.UpdatedAt)
 		}
 		if id == dependent {
 			continue

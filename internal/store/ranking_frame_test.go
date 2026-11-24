@@ -630,8 +630,8 @@ func TestRankToEdgeReportsAnUnmovableIssue(t *testing.T) {
 		}
 	}
 
-	// A no-op writes nothing at all — not the same rank back, which would bump
-	// updated_at and land a commit for a move that did not happen.
+	// A no-op writes nothing at all — not the same rank back, which would land
+	// a commit for a move that did not happen.
 	after := currentRanks(t, ctx, st, all)
 	for id, r := range before {
 		if after[id] != r {
@@ -714,7 +714,7 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 
 	var writeErr error
 	if err := st.withMutation(ctx, "write-rank-under-lock-test", func(ctx context.Context, tx *sql.Tx) error {
-		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz", "2026-09-11T00:00:01.000000000Z")
+		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz")
 		return nil
 	}); err != nil {
 		t.Fatalf("withMutation error = %v", err)
@@ -1490,90 +1490,35 @@ func storedKeys(t *testing.T, ctx context.Context, st *Store) map[model.ID]strin
 	return keys
 }
 
-// TestRankSetStampsOnlyTheIssuesItNamed pins whose clock a rank set moves. The
-// named issue that changed place is updated now; a frame-mate the stack merely
-// displaced keeps its order among the unnamed and keeps its updated_at, which
-// is what says how long a ticket has sat untouched.
-func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
+// TestRankSetCountsTouchedByPlaceAndNotByKey pins that a rank set's Touched
+// count follows an issue's place in the frame and not whether its key changed.
+// Joining D below A and B gives the set a key past the frame's top, so A and B
+// take new keys while standing exactly where they stood, and only D moved.
+func TestRankSetCountsTouchedByPlaceAndNotByKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st.clock = func() time.Time { return created }
-
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "frame", IssueType: "epic"})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	issues := makeChildrenOf(t, ctx, st, epic.ID, "A", "B", "C")
-	a, b, c := issues[0], issues[1], issues[2]
-
-	ranked := created.Add(time.Hour)
-	st.clock = func() time.Time { return ranked }
-	if _, err := st.RankSet(ctx, []model.ID{c.ID, a.ID}); err != nil {
-		t.Fatalf("RankSet(C, A) error = %v", err)
-	}
-
-	for _, want := range []struct {
-		issue model.Issue
-		at    time.Time
-		why   string
-	}{
-		{c, ranked, "it was named and moved to the top"},
-		{a, ranked, "it was named and moved below C"},
-		{b, b.UpdatedAt, "it was not named; the stack only displaced it"},
-	} {
-		got, err := st.GetIssue(ctx, want.issue.ID)
-		if err != nil {
-			t.Fatalf("GetIssue(%s) error = %v", want.issue.ID, err)
-		}
-		if !got.UpdatedAt.Equal(want.at) {
-			t.Errorf("%s updated_at = %s, want %s: %s", got.Title, got.UpdatedAt, want.at, want.why)
-		}
-	}
-}
-
-// TestRankSetStampsByPlaceAndNotByKey pins that a stamp follows an issue's place
-// in the frame and not whether its key changed. Joining D below A and B gives the
-// set a key past the frame's top, so A and B take new keys while standing exactly
-// where they stood, and only D moved.
-func TestRankSetStampsByPlaceAndNotByKey(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st.clock = func() time.Time { return created }
 
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "frame", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	issues := makeChildrenOf(t, ctx, st, epic.ID, "A", "B", "C", "D")
-	a, b, c, d := issues[0], issues[1], issues[2], issues[3]
+	a, b, d := issues[0], issues[1], issues[3]
 
-	ranked := created.Add(time.Hour)
-	st.clock = func() time.Time { return ranked }
-	if _, err := st.RankSet(ctx, []model.ID{a.ID, b.ID, d.ID}); err != nil {
+	var accounts []RankSetAccount
+	heard := WithRankObserver(ctx, RankObserver{
+		Wrote:           func(int) {},
+		Respaced:        func(Respace) {},
+		ReadParentEdges: func(int) {},
+		Ancestry:        func(storage.AncestryShape) {},
+		RankSet:         func(account RankSetAccount) { accounts = append(accounts, account) },
+	})
+	if _, err := st.RankSet(heard, []model.ID{a.ID, b.ID, d.ID}); err != nil {
 		t.Fatalf("RankSet(A, B, D) error = %v", err)
 	}
-
-	for _, want := range []struct {
-		issue model.Issue
-		at    time.Time
-		why   string
-	}{
-		{a, a.UpdatedAt, "it stands where it stood"},
-		{b, b.UpdatedAt, "it stands where it stood"},
-		{c, c.UpdatedAt, "it was not named"},
-		{d, ranked, "it was named and moved above C"},
-	} {
-		got, err := st.GetIssue(ctx, want.issue.ID)
-		if err != nil {
-			t.Fatalf("GetIssue(%s) error = %v", want.issue.ID, err)
-		}
-		if !got.UpdatedAt.Equal(want.at) {
-			t.Errorf("%s updated_at = %s, want %s: %s", got.Title, got.UpdatedAt, want.at, want.why)
-		}
+	if len(accounts) != 1 || accounts[0].Named != 3 || accounts[0].Touched != 1 {
+		t.Fatalf("RankSet(A, B, D) accounts = %+v; want one naming 3 that touched 1: A and B stand where they stood, and only D moved", accounts)
 	}
 }
 

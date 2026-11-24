@@ -598,7 +598,8 @@ func (c StatusChange) Write(at stamp.Instant) (Issue, []FieldChange) {
 }
 
 // Stamped is the issue as a write stamped at at records it: at is its
-// updated_at. Every write that moves an issue's row sets updated_at here.
+// updated_at. Every write that moves an existing issue's row sets updated_at
+// here; a rank move is not such a write and leaves it alone.
 // [LAW:single-enforcer]
 func (i Issue) Stamped(at stamp.Instant) Issue {
 	i.UpdatedAt = at.Time()

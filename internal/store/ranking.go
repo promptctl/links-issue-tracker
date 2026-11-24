@@ -618,11 +618,11 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id model.ID) error {
 // writeRanksTx's UPDATE, which every key write in the store's rank paths runs,
 // so "a rank never lands on a deleted issue" has one enforcement site, and it
 // holds even if the read is ever removed or reordered. [LAW:single-enforcer]
-func writeRankTx(ctx context.Context, tx *sql.Tx, id model.ID, newRank, now string) error {
+func writeRankTx(ctx context.Context, tx *sql.Tx, id model.ID, newRank string) error {
 	if err := requireLiveTx(ctx, tx, id); err != nil {
 		return err
 	}
-	return writeRanksTx(ctx, tx, []rankWrite{{id: id, rank: newRank, touched: true}}, now)
+	return writeRanksTx(ctx, tx, []rankWrite{{id: id, rank: newRank}})
 }
 
 // RankToTop moves an issue to the top of its own frame.
@@ -679,7 +679,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID model.ID, placement stor
 			return storage.RankEnd{}, err
 		}
 		// An issue already holding its frame's edge has nowhere to go. Writing
-		// its own rank back would bump updated_at and report a promotion that
+		// its own rank back would land a commit and report a promotion that
 		// never happened; the caller is told instead. [LAW:no-silent-failure]
 		end := storage.RankEnd{Frame: f, Moved: holderID != issueID}
 		if !end.Moved {
@@ -689,7 +689,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID model.ID, placement stor
 		if err != nil {
 			return storage.RankEnd{}, fmt.Errorf("rank to %s: %w", edge.name, err)
 		}
-		if err := writeRankTx(ctx, tx, issueID, keys[0], model.StampText(s.clock.Now())); err != nil {
+		if err := writeRankTx(ctx, tx, issueID, keys[0]); err != nil {
 			return storage.RankEnd{}, err
 		}
 		return end, smoothRanksIfNeededTx(ctx, tx, keys[0])
@@ -779,7 +779,8 @@ func (s *Store) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetRes
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
 		// An order that has arrived writes nothing: its issues stand where they
-		// were asked to, and a stamp would say otherwise.
+		// were asked to, and a write would land a commit for a move that did
+		// not happen.
 		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id model.ID) bool { return row.id == id }) {
 			hear(ctx, func() { observer.RankSet(account) })
 			return result, nil
@@ -811,22 +812,19 @@ func (s *Store) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetRes
 		// Each named issue takes its slot's key. Which of them moved is one
 		// question with one answer, its place in the frame before and after: a
 		// key handed round can leave an issue where it stood, and an issue can
-		// move on the key it already held. Only a moved issue is stamped, because
-		// updated_at says how long a ticket has sat untouched.
-		// [LAW:single-enforcer]
+		// move on the key it already held. [LAW:single-enforcer]
 		var writes []rankWrite
-		now := model.StampText(s.clock.Now())
 		for i, id := range ranked {
 			stood, inHead := position[id]
 			moved := !inHead || stood != i
 			if moved || slots[i] != held[id] {
-				writes = append(writes, rankWrite{id: id, rank: slots[i], touched: moved})
+				writes = append(writes, rankWrite{id: id, rank: slots[i]})
 				if moved {
 					account.Touched++
 				}
 			}
 		}
-		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
+		if err := writeRanksTx(ctx, tx, writes); err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
 		for _, key := range minted {
@@ -906,13 +904,10 @@ func rankSetLeadingRun(head []rankedIssue, ranked []model.ID) []rankedIssue {
 	return head
 }
 
-// rankWrite is one issue's new key, and whether the write is an update to that
-// issue — which a named issue's move is and a key rewritten under an issue that
-// stays put is not.
+// rankWrite is one issue's new key.
 type rankWrite struct {
-	id      model.ID
-	rank    string
-	touched bool
+	id   model.ID
+	rank string
 }
 
 // writeRanksTx hands each issue the key its write names, one statement per id
@@ -920,13 +915,16 @@ type rankWrite struct {
 //
 // A respace or a large rank set rewrites many keys at once, so the keys are
 // written as a chunked CASE rather than a statement per issue: the cost of the
-// write grows by round trips per chunk, never per row. updated_at rides in the
-// same statement: a touched issue takes now, and an untouched one is handed
-// NULL, which COALESCE turns back into the stamp it already held. Every key
-// write a rank verb, a respace, or the inversion repair makes goes through
-// here, so the liveness predicate on the UPDATE is the one enforcement of "a
-// rank never lands on a deleted issue" (see writeRankTx).
-func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now string) error {
+// write grows by round trips per chunk, never per row. Every key write a rank
+// verb, a respace, or the inversion repair makes goes through here, so the
+// liveness predicate on the UPDATE is the one enforcement of "a rank never
+// lands on a deleted issue" (see writeRankTx).
+//
+// The statement writes the key and nothing else. A rank move reorders the
+// backlog; it is not work on the ticket, and updated_at says how long the work
+// has sat untouched, so its one setter is a write's stamp (model.Issue.Stamped).
+// [LAW:single-enforcer]
+func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite) error {
 	byID := make(map[model.ID]rankWrite, len(writes))
 	ids := make([]model.ID, len(writes))
 	longest := 0
@@ -937,21 +935,17 @@ func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now strin
 	}
 	observer := rankObserverFrom(ctx)
 	hear(ctx, func() { observer.Wrote(longest) })
-	stampOf := map[bool]any{true: now, false: nil}
 	for _, chunk := range idChunks(ids) {
 		keys := make([]any, 0, 2*len(chunk))
-		stamps := make([]any, 0, 2*len(chunk))
 		inArgs := make([]any, 0, len(chunk))
 		for _, id := range chunk {
 			inArgs = append(inArgs, id)
 			keys = append(keys, id, byID[id].rank)
-			stamps = append(stamps, id, stampOf[byID[id].touched])
 		}
 		whens := strings.Repeat("WHEN ? THEN ? ", len(chunk))
-		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END,
-			updated_at = COALESCE(CASE id %s END, updated_at)
-			WHERE deleted_at IS NULL AND id IN (%s)`, whens, whens, placeholders(len(chunk)))
-		if _, err := tx.ExecContext(ctx, query, slices.Concat(keys, stamps, inArgs)...); err != nil {
+		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END
+			WHERE deleted_at IS NULL AND id IN (%s)`, whens, placeholders(len(chunk)))
+		if _, err := tx.ExecContext(ctx, query, slices.Concat(keys, inArgs)...); err != nil {
 			return fmt.Errorf("rewrite the keys of %v: %w", chunk, err)
 		}
 	}
@@ -1162,8 +1156,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID model.ID) (stor
 		if err != nil {
 			return storage.RankMove{}, fmt.Errorf("rank-above: %w", err)
 		}
-		now := model.StampText(s.clock.Now())
-		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
+		if err := writeRankTx(ctx, tx, move.MovedID, newRank); err != nil {
 			return storage.RankMove{}, err
 		}
 		return move, smoothRanksIfNeededTx(ctx, tx, newRank)
@@ -1194,8 +1187,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID model.ID) (stor
 		if err != nil {
 			return storage.RankMove{}, fmt.Errorf("rank-below: %w", err)
 		}
-		now := model.StampText(s.clock.Now())
-		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
+		if err := writeRankTx(ctx, tx, move.MovedID, newRank); err != nil {
 			return storage.RankMove{}, err
 		}
 		return move, smoothRanksIfNeededTx(ctx, tx, newRank)
@@ -1300,14 +1292,13 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if whole {
 		rows = every
 	}
-	// A respace is not an update to anyone, so no write in it is touched.
 	var writes []rankWrite
 	for i, item := range rows {
 		if keys[i] != item.rank {
 			writes = append(writes, rankWrite{id: item.id, rank: keys[i]})
 		}
 	}
-	if err := writeRanksTx(ctx, tx, writes, ""); err != nil {
+	if err := writeRanksTx(ctx, tx, writes); err != nil {
 		return fmt.Errorf("smooth: %w", err)
 	}
 	respace := Respace{Rows: len(rows), Rewritten: len(writes), LongestKey: longestKey(keys), Ceiling: rank.Ceiling(triggerRank)}
@@ -1566,16 +1557,15 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
-		now := model.StampText(s.clock.Now())
 		writes := make([]rankWrite, len(rewrites))
 		moved := 0
 		for i, rewrite := range rewrites {
-			writes[i] = rankWrite{id: rewrite.id, rank: rewrite.newRank, touched: !rewrite.respaced}
+			writes[i] = rankWrite{id: rewrite.id, rank: rewrite.newRank}
 			if !rewrite.respaced {
 				moved++
 			}
 		}
-		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
+		if err := writeRanksTx(ctx, tx, writes); err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
 		// Smoothing runs once the repair is fully applied, never interleaved

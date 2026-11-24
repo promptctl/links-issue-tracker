@@ -169,6 +169,8 @@ var cases = []engineCase{
 	{"an_assignee_no_filter_can_select_is_refused", anAssigneeNoFilterCanSelectIsRefused},
 	{"apply_status_transition", applyStatusTransition},
 	{"a_close_records_the_instant_its_write_is_stamped", aCloseRecordsTheInstantItsWriteIsStamped},
+	{"a_clock_read_in_another_zone_records_utc", aClockReadInAnotherZoneRecordsUTC},
+	{"a_rank_move_leaves_updated_at_alone", aRankMoveLeavesUpdatedAtAlone},
 	{"apply_missing_issue_is_not_found", applyMissingIssue},
 	{"apply_to_container_is_refused", applyToContainer},
 	{"apply_to_frozen_names_the_thaw", applyToFrozenNamesTheThaw},

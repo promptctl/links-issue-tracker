@@ -1873,7 +1873,7 @@ func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEven
 
 // phaseWrite is a planned phase move. The phase is derived from the issue's
 // history (model.PhaseOf), so the move's whole record is its event; the row
-// moves only updated_at, at the event's instant. Issue.PlanPhase refuses a
+// moves only updated_at, to the stamped post-move issue's. Issue.PlanPhase refuses a
 // ticket that is not in progress, and the plan reads the ticket under the hold
 // its write lands in, so the status it planned against is the status written on.
 type phaseWrite struct {
@@ -1888,7 +1888,7 @@ func (w phaseWrite) handover() *claims.Handover { return nil }
 
 func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ?`,
-		model.StampText(w.event.CreatedAt), w.event.IssueID); err != nil {
+		model.StampText(w.post.UpdatedAt), w.post.ID); err != nil {
 		return fmt.Errorf("update issue for phase move: %w", err)
 	}
 	return insertEventTx(ctx, tx, w.event)

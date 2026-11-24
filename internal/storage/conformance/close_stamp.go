@@ -14,7 +14,8 @@ import (
 // taking the clock's reading. The close time, the row's updated_at and the
 // close event's created_at are one instant all the same, the stamp, and each
 // reads back in UTC, the contract's one form. The clock reads in a zone that
-// is not UTC, so the form is the engine's doing and not the clock's.
+// is not UTC, so the stamp gives the form even when it steps past the
+// clock's reading.
 func aCloseRecordsTheInstantItsWriteIsStamped(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	offset := time.FixedZone("UTC-5", -5*60*60)
 	clk.Pin(laterInstant.In(offset))
