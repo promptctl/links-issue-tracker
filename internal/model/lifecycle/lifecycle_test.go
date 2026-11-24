@@ -35,30 +35,44 @@ func TestNewStatusClosedAtBelongsOnlyToClosed(t *testing.T) {
 }
 
 // TestApplyTargetStateMatrix exercises every (from, action) pair in the 3x4
-// matrix. Each cell asserts the post-state matches the action's target state —
-// same-state cells (start@InProgress, done@Closed, close@Closed, reopen@Open)
-// are no-ops that preserve the receiver. Every cell that moves into Closed is
-// stamped with exactly the instant Apply was handed, location included. There
-// are no rejection cells: every cell here is a legal call, and Apply cannot
-// fail by construction.
+// matrix. Each cell asserts the post-state matches the action's target state,
+// and the close time the post-state carries: none outside Closed, the instant
+// Apply was handed, location included, on a move into Closed, and the
+// receiver's own on a same-state cell (done@Closed, close@Closed), which is a
+// no-op. There are no rejection cells: every cell here is a legal call, and
+// Apply cannot fail by construction.
 func TestApplyTargetStateMatrix(t *testing.T) {
-	allActions := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
-	for _, from := range []State{Open, InProgress, Closed} {
-		for _, action := range allActions {
-			target := action.Target()
-			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
-				next := NewStatus(from, nil, nil, nil).Apply(action, applyAt)
-				if got := next.State(); got != target {
-					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, got, target)
-				}
-				if target != Closed || from == Closed {
-					return
-				}
-				if closedAt := next.(StatusPrimitive).ClosedAt(); closedAt == nil || !closedAt.Equal(applyAt) || closedAt.Location() != time.UTC {
-					t.Fatalf("Apply(%s on %s).ClosedAt() = %v, want %v — the instant Apply was handed", action.Name(), from, closedAt, applyAt)
-				}
-			})
-		}
+	receiverClosedAt := time.Unix(1_700_000_000, 0).UTC()
+	handed, receivers := &applyAt, &receiverClosedAt
+	cells := []struct {
+		from         State
+		action       StatusAction
+		wantClosedAt *time.Time
+	}{
+		{Open, Start{}, nil},
+		{Open, Done{}, handed},
+		{Open, Close{Outcome: Wontfix{}}, handed},
+		{Open, Reopen{}, nil},
+		{InProgress, Start{}, nil},
+		{InProgress, Done{}, handed},
+		{InProgress, Close{Outcome: Wontfix{}}, handed},
+		{InProgress, Reopen{}, nil},
+		{Closed, Start{}, nil},
+		{Closed, Done{}, receivers},
+		{Closed, Close{Outcome: Wontfix{}}, receivers},
+		{Closed, Reopen{}, nil},
+	}
+	for _, cell := range cells {
+		t.Run(string(cell.from)+"_"+string(cell.action.Name()), func(t *testing.T) {
+			next := NewStatus(cell.from, &receiverClosedAt, nil, nil).Apply(cell.action, applyAt)
+			if got, want := next.State(), cell.action.Target(); got != want {
+				t.Fatalf("Apply(%s on %s).State() = %q, want %q", cell.action.Name(), cell.from, got, want)
+			}
+			closedAt := next.(StatusPrimitive).ClosedAt()
+			if !timePtrEqual(closedAt, cell.wantClosedAt) || (closedAt != nil && closedAt.Location() != time.UTC) {
+				t.Fatalf("Apply(%s on %s).ClosedAt() = %v, want %v in UTC", cell.action.Name(), cell.from, closedAt, cell.wantClosedAt)
+			}
+		})
 	}
 }
 
