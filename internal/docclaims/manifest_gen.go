@@ -238,6 +238,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "over ceiling", Src: "over ceiling"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "pre-push hook", Src: "pre-push hook"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "pruned snapshots", Src: "pruned snapshots"},
+	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "read the launcher's handoff: it carries no deadlines", Src: "read the launcher's handoff: it carries no deadlines"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "read the launcher's handoff: it carries no released-schema ceiling", Src: "read the launcher's handoff: it carries no released-schema ceiling"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "recover [--mapping <file>]", Src: "usage: lit lifeboat recover [--mapping <file>]"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "restore (--latest | --path <export.json>) [--force]", Src: "usage: lit backup restore (--latest | --path <export.json>) [--force]"},
