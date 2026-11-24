@@ -207,6 +207,7 @@ var cases = []engineCase{
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
 	{"a_container_lists_before_everything_inside_it", aContainerListsBeforeEverythingInsideIt},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
+	{"a_close_is_stamped_with_its_writes_instant", aCloseIsStampedWithItsWritesInstant},
 	{"follow_ups_link_both_ways", followUpsLinkBothWays},
 	{"a_purge_removes_the_issue_and_everything_it_owns", aPurgeRemovesTheIssueAndEverythingItOwns},
 	{"a_purge_refuses_a_container_that_holds_tickets", aPurgeRefusesAContainerThatHoldsTickets},

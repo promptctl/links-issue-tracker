@@ -13,6 +13,7 @@ package lifecycle
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type State string
@@ -122,10 +123,12 @@ type Container interface {
 // Apply is total: StatusAction's Target names a real state, a same-state call
 // returns the receiver, so there is no error to return. The actor/reason of a
 // transition are event provenance owned by the store's write boundary — the
-// machine computes the next state and nothing else. [LAW:effects-at-boundaries]
+// machine computes the next state and nothing else. at is the instant of the
+// transition, as Retain takes it: a close records it as its close time.
+// [LAW:effects-at-boundaries]
 type Actionable interface {
 	Lifecycle
-	Apply(action StatusAction) Lifecycle
+	Apply(action StatusAction, at time.Time) Lifecycle
 }
 
 // Walk visits the lifecycle tree depth-first. Recursion is the substrate;

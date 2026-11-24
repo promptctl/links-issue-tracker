@@ -473,7 +473,7 @@ var _ Refusal = FrozenIssueError{}
 // invariants (unhydrated lifecycle, container, frozen retention, a start whose
 // assignee no filter could select) — the leaf itself cannot fail, since
 // StatusAction makes an unsupported action unrepresentable.
-func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
+func (i Issue) Apply(action lifecycle.StatusAction, at time.Time) (Issue, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
 		return Issue{}, err
@@ -521,7 +521,7 @@ func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	if !ok {
 		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name().Verb())
 	}
-	i.replaceLifecycle(actionable.Apply(action))
+	i.replaceLifecycle(actionable.Apply(action, at))
 	return i, nil
 }
 

@@ -53,8 +53,8 @@ func (openState) Resolution() *Resolution {
 func (openState) RedirectTarget() *string {
 	return nil
 }
-func (o openState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(o, action)
+func (o openState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(o, action, at)
 }
 
 type inProgressState struct{}
@@ -70,8 +70,8 @@ func (inProgressState) Resolution() *Resolution {
 func (inProgressState) RedirectTarget() *string {
 	return nil
 }
-func (s inProgressState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(s, action)
+func (s inProgressState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(s, action, at)
 }
 
 type closedState struct {
@@ -105,8 +105,8 @@ func (c closedState) Resolution() *Resolution {
 func (c closedState) RedirectTarget() *string {
 	return cloneString(c.redirectTarget)
 }
-func (c closedState) Apply(action StatusAction) Lifecycle {
-	return applyStatusAction(c, action)
+func (c closedState) Apply(action StatusAction, at time.Time) Lifecycle {
+	return applyStatusAction(c, action, at)
 }
 
 // NewStatus builds the leaf variant for state, attaching closedAt, resolution,
@@ -144,15 +144,16 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 // It cannot fail: Target is total over StatusAction.
 // [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
 // this function maintains no parallel table.
-func applyStatusAction(current Lifecycle, action StatusAction) Lifecycle {
+// [LAW:effects-at-boundaries] The close instant is a parameter, not a clock
+// read: the write boundary that stamps the event hands over that same instant.
+func applyStatusAction(current Lifecycle, action StatusAction, at time.Time) Lifecycle {
 	target := action.Target()
 	if current.State() == target {
 		return current
 	}
 	switch target {
 	case Closed:
-		now := time.Now().UTC()
-		return closedState{closedAt: &now, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
+		return closedState{closedAt: &at, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
 	case InProgress:
 		return inProgressState{}
 	default:

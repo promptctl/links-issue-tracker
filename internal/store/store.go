@@ -1951,8 +1951,10 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// because it is exactly what recordEvent will stamp on the event this plan
 	// is deciding whether to write. Whether it is owed at all is
 	// claims.StatusPlan's to say, where the memory engine and the hold gate
-	// read it too. [LAW:one-source-of-truth]
-	plan, err := claims.PlanStatus(issue, history, action, s.attribution)
+	// read it too. [LAW:one-source-of-truth] The plan is handed at, the write's
+	// one stamped instant, so a close's closed_at is this write's updated_at by
+	// construction rather than a second clock reading.
+	plan, err := claims.PlanStatus(issue, history, action, s.attribution, at)
 	if err != nil {
 		return transitionWrite{}, err
 	}

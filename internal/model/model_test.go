@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// applyAt is the instant every Issue.Apply in this package's tests is handed.
+var applyAt = time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+
 func hydratedIssue(t *testing.T, issue Issue, status State) Issue {
 	t.Helper()
 	hydrated, err := HydrateStatus(issue, StatusView{Value: status})
@@ -26,7 +29,7 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 		t.Fatalf("HydrateAllOf() error = %v", err)
 	}
 	for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
-		if _, err := container.Apply(action); err == nil {
+		if _, err := container.Apply(action, applyAt); err == nil {
 			t.Fatalf("Apply(%s on epic) error = nil, want container rejection", action.Name())
 		}
 	}
@@ -48,7 +51,7 @@ func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 		for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
 			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 			leaf.SetRetention(tc.retention)
-			_, err := leaf.Apply(action)
+			_, err := leaf.Apply(action, applyAt)
 			var frozen FrozenIssueError
 			if !errors.As(err, &frozen) {
 				t.Fatalf("Apply(%s on %T) error = %v, want FrozenIssueError", action.Name(), tc.retention, err)
@@ -78,7 +81,7 @@ func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
 	}
 	container.SetRetention(Archived{At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)})
 	var containerErr ContainerActionError
-	if _, err := container.Apply(Done{}); !errors.As(err, &containerErr) {
+	if _, err := container.Apply(Done{}, applyAt); !errors.As(err, &containerErr) {
 		t.Fatalf("Apply(done on archived epic) error = %v, want ContainerActionError", err)
 	}
 }
@@ -93,7 +96,7 @@ func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
 		for _, action := range matrix {
 			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
 				leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, from)
-				next, err := leaf.Apply(action)
+				next, err := leaf.Apply(action, applyAt)
 				if err != nil {
 					t.Fatalf("Apply(%s on %s) error = %v, want success", action.Name(), from, err)
 				}
@@ -111,7 +114,7 @@ func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
 func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 
-	_, err := leaf.Apply(Start{Assignee: "Doe, J"})
+	_, err := leaf.Apply(Start{Assignee: "Doe, J"}, applyAt)
 	var refused ValidationError
 	if !errors.As(err, &refused) {
 		t.Fatalf("Apply(start by %q) error = %v; want a ValidationError", "Doe, J", err)
@@ -119,7 +122,7 @@ func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 	if !strings.Contains(err.Error(), "a start assigns the issue to whoever starts it") {
 		t.Errorf("Apply(start by %q) error = %q; want it to say the start is what assigns", "Doe, J", err)
 	}
-	if _, err := leaf.Apply(Start{Assignee: "Doe J"}); err != nil {
+	if _, err := leaf.Apply(Start{Assignee: "Doe J"}, applyAt); err != nil {
 		t.Errorf("Apply(start by %q) error = %v; want success", "Doe J", err)
 	}
 }
@@ -130,7 +133,7 @@ func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 // Issue.ResolutionValue(); the neutral Done records none.
 func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
-	closed, err := leaf.Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	closed, err := leaf.Apply(Close{Outcome: Duplicate{Of: "links-abc1"}}, applyAt)
 	if err != nil {
 		t.Fatalf("Apply(close duplicate) error = %v", err)
 	}
@@ -139,7 +142,7 @@ func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
 	}
 
-	done, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).Apply(Done{})
+	done, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).Apply(Done{}, applyAt)
 	if err != nil {
 		t.Fatalf("Apply(done) error = %v", err)
 	}

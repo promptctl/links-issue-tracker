@@ -145,7 +145,11 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	// cannot see: its lane may have been taken through a sibling since, and
 	// only the lane read below can tell.
 	self := ownAttribution(ap)
-	records, err := landable(prior, action, self)
+	// One reading of the clock serves the gate: the instant the plan runs at
+	// is the instant the holder's activity is measured from.
+	// [LAW:one-source-of-truth]
+	now := time.Now()
+	records, err := landable(prior, action, self, now)
 	if err != nil {
 		return nil, holdReading{}, "", err
 	}
@@ -192,7 +196,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	takeover := ""
 	if relation == laneHeldForeign {
 		// relationOf answers laneHeldForeign for a Held standing and nothing else.
-		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, time.Now())
+		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, now)
 		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, crossingOf(action.Name()), take); err != nil {
 			return nil, holdReading{}, "", err
 		}
@@ -203,14 +207,14 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 // landable runs the issue's own refusal of action on the state the gate read —
 // Issue.PlanPhase for a phase move, claims.PlanStatus for a status action, the
 // same plans both engines run inside Apply — and reports whether the
-// transition records anything when taken by self.
-func landable(prior ticketState, action model.Action, self model.Attribution) (records bool, err error) {
+// transition records anything when taken by self at now.
+func landable(prior ticketState, action model.Action, self model.Attribution, now time.Time) (records bool, err error) {
 	switch action := action.(type) {
 	case model.SetPhase:
 		move, err := prior.issue.PlanPhase(prior.events, action.Phase)
 		return move.Changed(), err
 	case model.StatusAction:
-		plan, err := claims.PlanStatus(prior.issue, prior.events, action, self)
+		plan, err := claims.PlanStatus(prior.issue, prior.events, action, self, now)
 		if err != nil {
 			return false, err
 		}
