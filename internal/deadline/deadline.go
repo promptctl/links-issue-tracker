@@ -9,6 +9,7 @@ package deadline
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -251,14 +252,14 @@ type Figures struct {
 	// mirrorHoldCancelLag later, and HoldCeiling is the number that follows
 	// from that. Every co-resident waiter's patience (HolderWait) derives from
 	// it.
-	MirrorHold time.Duration `json:"mirror_hold"`
+	MirrorHold time.Duration `json:"mirror_hold" figure:"mirror hold deadline"`
 	// MirrorPush is the deadline the background mirror's push runs under: the
 	// clone engine's open and the push from it. The close after them takes no
 	// ctx and is not bounded by it. The push traverses the network with no
 	// inherent bound, so the bound is imposed by the actor that owns it. It
 	// holds nothing on the live store; it exists so a stalled transport cannot
 	// wedge the single-flight mirror forever. HistoryBound derives from it.
-	MirrorPush time.Duration `json:"mirror_push"`
+	MirrorPush time.Duration `json:"mirror_push" figure:"mirror push deadline"`
 	// Receive bounds the automatic receive — the remote check and the fetch
 	// its detached worker runs when the receive debounce lapses — so an
 	// offline or slow remote cannot keep the worker running indefinitely. A
@@ -267,23 +268,23 @@ type Figures struct {
 	// the live store is held for the clone's copy (under MirrorHold) and for
 	// the landing of the fetch, whose cost is proportional to how far the
 	// remote moved and which only this deadline bounds.
-	Receive time.Duration `json:"receive"`
+	Receive time.Duration `json:"receive" figure:"receive deadline"`
 	// PushProof bounds a landed push's proof against the remote: one `git
 	// ls-remote`, which crosses the network, and one local `git cat-file`.
-	PushProof time.Duration `json:"push_proof"`
+	PushProof time.Duration `json:"push_proof" figure:"push proof deadline"`
 	// Compaction bounds one compaction pass, the backstop a writing command
 	// runs after it has spawned its mirror: a term in the spawner's tail, which
 	// the worker's wait for its spawner derives from.
-	Compaction time.Duration `json:"compaction"`
+	Compaction time.Duration `json:"compaction" figure:"compaction deadline"`
 	// ReRootHold bounds a re-root's work under the live store's hold of
 	// Dolt's LOCK and the commit lock: a landed push's history bound, and a
 	// follow of a remote that re-rooted.
-	ReRootHold time.Duration `json:"re_root_hold"`
+	ReRootHold time.Duration `json:"re_root_hold" figure:"re-root hold deadline"`
 	// EngineCloseReserve is what a GC-contention rotation sets aside, under
 	// the commit lock, for the previous engine's close, which takes no context
 	// and so no deadline: a term of every commit-lock holder's allowance
 	// (the store's commitLockWaiterBudget).
-	EngineCloseReserve time.Duration `json:"engine_close_reserve"`
+	EngineCloseReserve time.Duration `json:"engine_close_reserve" figure:"engine close reserve"`
 }
 
 // Deadlines is the set of deadlines one run's background sync work runs
@@ -301,22 +302,17 @@ type Figures struct {
 type Deadlines struct{ f Figures }
 
 // Of is the deadlines f gives, or why f gives none: a figure that is not
-// positive, named. [LAW:parse-dont-validate]
+// positive, named by its figure tag. Every field of Figures is a figure, read
+// off the struct itself, so a figure added to Figures is checked with no
+// second list to forget it in. [LAW:parse-dont-validate]
+// [LAW:one-source-of-truth]
 func Of(f Figures) (Deadlines, error) {
-	for _, figure := range []struct {
-		name  string
-		value time.Duration
-	}{
-		{"mirror hold deadline", f.MirrorHold},
-		{"mirror push deadline", f.MirrorPush},
-		{"receive deadline", f.Receive},
-		{"push proof deadline", f.PushProof},
-		{"compaction deadline", f.Compaction},
-		{"re-root hold deadline", f.ReRootHold},
-		{"engine close reserve", f.EngineCloseReserve},
-	} {
-		if figure.value <= 0 {
-			return Deadlines{}, fmt.Errorf("the %s must be positive, got %s", figure.name, figure.value)
+	figures := reflect.ValueOf(f)
+	for i := range figures.NumField() {
+		field := figures.Type().Field(i)
+		value := figures.Field(i).Interface().(time.Duration)
+		if value <= 0 {
+			return Deadlines{}, fmt.Errorf("the %s must be positive, got %s", field.Tag.Get("figure"), value)
 		}
 	}
 	return Deadlines{f: f}, nil
@@ -324,8 +320,16 @@ func Of(f Figures) (Deadlines, error) {
 
 // Shipped is the deadlines lit ships with, each derived above from what it
 // bounds. [LAW:one-source-of-truth]
+//
+// Built through Of like every Deadlines, so a shipped figure that is not
+// positive fails the first read of it, loudly, rather than run every hold
+// under a zero deadline. [LAW:single-enforcer] [LAW:no-silent-failure]
 func Shipped() Deadlines {
-	return Deadlines{f: Figures{MirrorHold: mirrorHoldBudget, MirrorPush: mirrorPushDeadline, Receive: receiveDeadline, PushProof: pushProofDeadline, Compaction: compactionDeadline, ReRootHold: reRootHoldDeadline, EngineCloseReserve: engineCloseReserve}}
+	d, err := Of(Figures{MirrorHold: mirrorHoldBudget, MirrorPush: mirrorPushDeadline, Receive: receiveDeadline, PushProof: pushProofDeadline, Compaction: compactionDeadline, ReRootHold: reRootHoldDeadline, EngineCloseReserve: engineCloseReserve})
+	if err != nil {
+		panic("deadline: the shipped deadlines are not deadlines: " + err.Error())
+	}
+	return d
 }
 
 // IsZero reports whether d is the zero Deadlines, which Of never builds.

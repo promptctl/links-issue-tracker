@@ -2,6 +2,7 @@ package deadline
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -116,7 +117,7 @@ func TestOfRefusesAFigureThatIsNotPositive(t *testing.T) {
 	if _, err := Of(whole); err != nil {
 		t.Fatalf("Of(the shipped figures) = %v", err)
 	}
-	for name, unset := range map[string]func(*Figures){
+	unsets := map[string]func(*Figures){
 		"mirror hold deadline":  func(f *Figures) { f.MirrorHold = 0 },
 		"mirror push deadline":  func(f *Figures) { f.MirrorPush = -time.Second },
 		"receive deadline":      func(f *Figures) { f.Receive = 0 },
@@ -124,7 +125,11 @@ func TestOfRefusesAFigureThatIsNotPositive(t *testing.T) {
 		"compaction deadline":   func(f *Figures) { f.Compaction = 0 },
 		"re-root hold deadline": func(f *Figures) { f.ReRootHold = 0 },
 		"engine close reserve":  func(f *Figures) { f.EngineCloseReserve = 0 },
-	} {
+	}
+	if fields := reflect.TypeFor[Figures]().NumField(); len(unsets) != fields {
+		t.Fatalf("this test unsets %d figures of the %d Figures has; each must be refused by its name", len(unsets), fields)
+	}
+	for name, unset := range unsets {
 		f := whole
 		unset(&f)
 		if _, err := Of(f); err == nil || !strings.Contains(err.Error(), "the "+name+" must be positive") {
