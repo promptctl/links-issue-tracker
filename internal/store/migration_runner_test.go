@@ -75,7 +75,7 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	// Seed a row so we can prove adoption preserves data (does not re-run baseline).
 	if err := first.ExecRawForTest(ctx,
 		`INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at)
-		 VALUES ('keep-me','Keep','', 'open', 0, 'task', 'misc', '', 'M', '2026-01-01', '2026-01-01')`,
+		 VALUES ('keep-me','Keep','', 'open', 0, 'task', 'misc', '', 'M', '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z')`,
 	); err != nil {
 		t.Fatalf("seed row error = %v", err)
 	}

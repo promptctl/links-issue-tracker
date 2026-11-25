@@ -33,7 +33,7 @@ type Purge struct {
 }
 
 // PurgeKey is a purge record's identity: the issue id and its birth instant
-// spelled in UTC RFC3339Nano, one spelling per instant, which is also what the
+// spelled as StampText spells it, one spelling per instant, which is also what the
 // store's primary key holds. [LAW:one-source-of-truth] every union, delta and
 // primary key compares records through Key.
 type PurgeKey struct {
@@ -43,7 +43,7 @@ type PurgeKey struct {
 
 // Key is the record's PurgeKey.
 func (p Purge) Key() PurgeKey {
-	return PurgeKey{IssueID: p.IssueID, IssueCreatedAt: p.IssueCreatedAt.UTC().Format(time.RFC3339Nano)}
+	return PurgeKey{IssueID: p.IssueID, IssueCreatedAt: StampText(p.IssueCreatedAt)}
 }
 
 // Names reports whether this record purged that ticket: the same id, born at

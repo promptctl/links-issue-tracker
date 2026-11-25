@@ -194,7 +194,7 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 	}
 	for _, stmt := range []string{
 		fmt.Sprintf("INSERT INTO goose_db_version (version_id, is_applied) VALUES (%d, 1)", ahead),
-		fmt.Sprintf("INSERT INTO meta (meta_key, meta_value) VALUES ('min_writer_schema', '%d')", ahead),
+		fmt.Sprintf("INSERT INTO meta (meta_key, meta_value) VALUES ('min_writer_schema', '%d') ON DUPLICATE KEY UPDATE meta_value = '%d'", ahead, ahead),
 	} {
 		if err := raw.ExecRawForTest(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)

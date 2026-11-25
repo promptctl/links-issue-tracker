@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -29,7 +31,7 @@ func TestFixIntegrityStampsItsCommitLabel(t *testing.T) {
 	// leave the row this repair deletes.
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'related-to', ?, 'seed')`,
-		issue.ID, issue.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		issue.ID, issue.ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("seed self related-to row error = %v", err)
 	}
 	// Committed before the repair runs, or the seed and its deletion cancel out
@@ -73,6 +75,56 @@ func TestFixIntegrityStampsItsCommitLabel(t *testing.T) {
 	}
 	if message != "fix integrity" {
 		t.Fatalf("repair commit message = %q, want %q", message, "fix integrity")
+	}
+}
+
+// An export written by an older release spells a closed_at/archived_at/
+// deleted_at change the trimmed way, and restoring it must store the one
+// spelling, not be refused by the column's CHECK and roll the whole restore
+// back.
+func TestRestoringAnOlderReleasesExportRespellsItsTimestampChanges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	source := openIssueStore(t, ctx)
+	issue, err := source.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Old"), Lane: storage.SharedLane, Topic: "restore", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	dump, err := source.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	for i, f := range model.TimestampFields() {
+		field := f.Name()
+		dump.Events = append(dump.Events, model.IssueEvent{
+			ID: model.ID(fmt.Sprintf("evt-older-%d", i)), IssueID: issue.ID, Action: "close",
+			CreatedAt: time.Date(2026, time.January, 1, 0, 0, 7, 500000000, time.UTC),
+			Changes:   []model.FieldChange{{Field: field, From: "", To: "2026-01-01T00:00:07.5Z"}},
+		})
+	}
+
+	target := openIssueStore(t, ctx)
+	if _, err := target.ReplaceFromExport(ctx, dump); err != nil {
+		t.Fatalf("ReplaceFromExport() error = %v", err)
+	}
+	rows, err := target.db.QueryContext(ctx, `SELECT field, to_value FROM issue_event_changes WHERE event_id LIKE 'evt-older-%' ORDER BY field`)
+	if err != nil {
+		t.Fatalf("read restored changes: %v", err)
+	}
+	defer rows.Close()
+	restored := 0
+	for rows.Next() {
+		var field, value string
+		if err := rows.Scan(&field, &value); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if want := "2026-01-01T00:00:07.500000000Z"; value != want {
+			t.Errorf("restored %s to_value = %q, want %q", field, value, want)
+		}
+		restored++
+	}
+	if restored != len(model.TimestampFields()) {
+		t.Errorf("restored %d timestamp changes, want %d", restored, len(model.TimestampFields()))
 	}
 }
 

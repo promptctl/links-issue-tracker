@@ -68,6 +68,23 @@ the one to resolve.
   survivor exists. A stash write records every row's value,
   null included, so a value cleared at one version stays cleared.
 
+### What "a store valid at vN" covers: stored timestamps
+
+A stamp is an instant, and its valid spelling is UTC (`storage.Clock`
+normalizes every stamp to UTC). Up to v11 the store spelled it with
+`time.RFC3339Nano`, which trims trailing zeros; v12 spells it with
+`model.StampText`, UTC with exactly nine fractional digits, so text order is
+instant order, and guards every timestamp column of the store's data with a CHECK. Rule 1 holds
+over every store whose stamps are in the UTC `Z` spelling: v12's Down returns
+exactly the trimmed text `time.RFC3339Nano` wrote, whole second included.
+
+A stamp spelled with a numeric offset (`+02:00`) names the same instant as its
+UTC spelling but is outside that domain. v12's Up rewrites it to UTC, which
+preserves the instant and loses the offset's spelling; Down cannot bring the
+offset back. Nothing in lit writes one, and `model.ParseStamp` already
+returns every stamp in UTC. A value that is no timestamp is not in any domain:
+v12's Up refuses it, naming the CHECK, rather than carry it forward.
+
 ### How it is proven
 
 - **Round-trip gate.** `TestEveryMigrationRoundTripsLosslessly` replaces

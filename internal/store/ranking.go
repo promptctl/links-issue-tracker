@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
@@ -690,7 +689,7 @@ func (s *Store) rankToEdge(ctx context.Context, issueID model.ID, placement stor
 		if err != nil {
 			return storage.RankEnd{}, fmt.Errorf("rank to %s: %w", edge.name, err)
 		}
-		if err := writeRankTx(ctx, tx, issueID, keys[0], s.clock.Now().Format(time.RFC3339Nano)); err != nil {
+		if err := writeRankTx(ctx, tx, issueID, keys[0], model.StampText(s.clock.Now())); err != nil {
 			return storage.RankEnd{}, err
 		}
 		return end, smoothRanksIfNeededTx(ctx, tx, keys[0])
@@ -816,7 +815,7 @@ func (s *Store) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetRes
 		// updated_at says how long a ticket has sat untouched.
 		// [LAW:single-enforcer]
 		var writes []rankWrite
-		now := s.clock.Now().Format(time.RFC3339Nano)
+		now := model.StampText(s.clock.Now())
 		for i, id := range ranked {
 			stood, inHead := position[id]
 			moved := !inHead || stood != i
@@ -1163,7 +1162,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID model.ID) (stor
 		if err != nil {
 			return storage.RankMove{}, fmt.Errorf("rank-above: %w", err)
 		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
+		now := model.StampText(s.clock.Now())
 		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
 			return storage.RankMove{}, err
 		}
@@ -1195,7 +1194,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID model.ID) (stor
 		if err != nil {
 			return storage.RankMove{}, fmt.Errorf("rank-below: %w", err)
 		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
+		now := model.StampText(s.clock.Now())
 		if err := writeRankTx(ctx, tx, move.MovedID, newRank, now); err != nil {
 			return storage.RankMove{}, err
 		}
@@ -1567,7 +1566,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
+		now := model.StampText(s.clock.Now())
 		writes := make([]rankWrite, len(rewrites))
 		moved := 0
 		for i, rewrite := range rewrites {

@@ -101,16 +101,29 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		declared string
-		want     int64
+		// noRow removes the row the registry's own migrations left, so the store
+		// declares nothing anywhere.
+		noRow bool
+		want  int64
 	}{
-		"none declared":       {"", 0},
-		"one this binary has": {fmt.Sprint(registryMax), registryMax},
-		"an older one it has": {"7", 7},
+		// The newer migration declares nothing of its own, so the store keeps
+		// the declaration the registry's own migrations left in it: the
+		// timestamps migration declares its own version.
+		"the registry's own declaration kept": {"", false, timestampsMigrationVersion},
+		"none declared anywhere":              {"", true, 0},
+		"one this binary has":                 {fmt.Sprint(registryMax), false, registryMax},
+		"an older one it has":                 {"7", false, 7},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			doltRoot := migratedDoltDir(t)
+			if tc.noRow {
+				withStore(t, ctx, doltRoot, func(st *Store) {
+					mustExec(t, ctx, st, `DELETE FROM meta WHERE meta_key = 'min_writer_schema'`)
+					mustCommit(t, ctx, st, "test: a store that declares no minimum writer schema")
+				})
+			}
 			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
 			withStore(t, ctx, doltRoot, func(st *Store) {
 				want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: tc.want}

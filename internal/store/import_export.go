@@ -544,7 +544,7 @@ const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt
 func issueRowValues(issue model.Issue) []any {
 	var closedAt any
 	if value := issue.ClosedAtValue(); value != nil {
-		closedAt = value.Format(time.RFC3339Nano)
+		closedAt = model.StampText(*value)
 	}
 	// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
 	// decision; the import path inherits it instead of inventing its own
@@ -561,7 +561,7 @@ func issueRowValues(issue model.Issue) []any {
 	return []any{
 		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, status, priority,
 		issue.IssueType, issueid.NormalizeSlug(issue.Topic.Raw()), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp.Raw()),
-		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
+		model.StampText(issue.CreatedAt), model.StampText(issue.UpdatedAt), closedAt,
 		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
 		archivedCol, deletedCol,
 	}
@@ -576,7 +576,7 @@ func insertIssueTx(ctx context.Context, tx *sql.Tx, issue model.Issue) error {
 
 func insertCommentTx(ctx context.Context, tx *sql.Tx, comment model.Comment) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-		comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
+		comment.ID, comment.IssueID, comment.Body, model.StampText(comment.CreatedAt), comment.CreatedBy); err != nil {
 		return fmt.Errorf("restore comment %s: %w", comment.ID, err)
 	}
 	return nil
@@ -584,7 +584,7 @@ func insertCommentTx(ctx context.Context, tx *sql.Tx, comment model.Comment) err
 
 func insertLabelTx(ctx context.Context, tx *sql.Tx, label model.Label) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
-		label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
+		label.IssueID, label.Name, model.StampText(label.CreatedAt), label.CreatedBy); err != nil {
 		return fmt.Errorf("insert label %s:%s: %w", label.IssueID, label.Name, err)
 	}
 	return nil
@@ -616,13 +616,22 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) erro
 		actionArg = event.Action
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
+		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, model.StampText(event.CreatedAt),
 		nullableString(event.Attribution.Stream().Raw()), nullableString(event.Attribution.Workspace())); err != nil {
 		return fmt.Errorf("insert issue event %s: %w", event.ID, err)
 	}
 	for _, change := range event.Changes {
 		if strings.TrimSpace(change.Field) == "" {
 			return fmt.Errorf("issue event %s: field name cannot be empty", event.ID)
+		}
+		// Every change passes here, a live mutation's (already spelled by
+		// model.TimestampChange) and a restored export's alike. An export an
+		// older release wrote spells its timestamp values the trimmed way, and
+		// this is where they are respelled, or refused if no instant.
+		// [LAW:single-enforcer]
+		change, err := change.Stamped()
+		if err != nil {
+			return fmt.Errorf("issue event %s: %w", event.ID, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
 			event.ID, change.Field, nullableString(change.From), nullableString(change.To)); err != nil {

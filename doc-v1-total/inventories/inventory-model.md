@@ -745,7 +745,7 @@ the Go field name when the tag name is empty. Pinned by
   identity, the birth spelled once per instant, and what the store's primary
   key holds.
 - `(Purge).Key() PurgeKey` — `purge.go`: `IssueID` and
-  `IssueCreatedAt.UTC().Format(time.RFC3339Nano)`, so one instant in two
+  `StampText(IssueCreatedAt)`, so one instant in two
   offsets is one key. Pinned by `TestPurgeKeyIsOneSpellingPerInstant`
   (`purge_test.go`), which also holds `UnionPurges` of the two spellings to one
   record.
@@ -1681,8 +1681,8 @@ Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go`),
   `incoming` is empty, returns `base` unchanged (nil stays nil); otherwise
   returns a new slice = base plus incoming values not already present in base.
 - `ParseTimestamp(value string) (time.Time, error)` — `query.go`: trims the
-  value and parses it as `time.RFC3339` (fractional seconds included); failure →
-  `model.ValidationError{"timestamp must be RFC3339, got %q"}` quoting the
+  value and parses it with `model.ParseStamp` (RFC3339, fractional seconds included, UTC year 0000 to 9999); failure →
+  `model.ValidationError{"timestamp must be RFC3339 and fall in the years 0000 to 9999 UTC, got %q"}` quoting the
   trimmed value. The `updated` term and `lit ls --updated-after`/`--updated-before`
   all read through it.
 - `ParseLimit(limit int) (int, error)` — `query.go`: negative →

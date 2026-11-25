@@ -298,9 +298,11 @@ func tokenize(input string) ([]string, error) {
 // one timestamp rule and one refusal for breaking it. [LAW:single-enforcer]
 func ParseTimestamp(value string) (time.Time, error) {
 	value = strings.TrimSpace(value)
-	parsed, err := time.Parse(time.RFC3339, value)
+	// The bound is compared as the store's stamp text, so it has to be an
+	// instant a stamp can spell. [LAW:parse-dont-validate]
+	parsed, err := model.ParseStamp(value)
 	if err != nil {
-		return time.Time{}, model.ValidationError{Message: fmt.Sprintf("timestamp must be RFC3339, got %q", value)}
+		return time.Time{}, model.ValidationError{Message: fmt.Sprintf("timestamp must be RFC3339 and fall in the years 0000 to 9999 UTC, got %q", value)}
 	}
 	return parsed, nil
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-const seedStamp = "2026-10-31T00:00:00Z"
+const seedStamp = "2026-10-31T00:00:00.000000000Z"
 
 // seedInsert writes rows straight into table in chunks, so a test can stand on a
 // store of thousands of rows for a second's work where filing them takes minutes.

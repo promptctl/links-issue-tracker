@@ -62,8 +62,8 @@ type SameEntity struct {
 // instant read as two would fuse silently.
 // [LAW:no-silent-failure]
 func Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision) {
-	// Equal, not ==: created_at round-trips through RFC3339Nano, so two encodings
-	// of one instant may differ in offset while naming the same moment.
+	// Equal, not ==: two values of one instant may carry different locations
+	// while naming the same moment.
 	if !ours.CreatedAt.Equal(theirs.CreatedAt) {
 		return SameEntity{}, &Collision{IssueID: ours.ID, Ours: ours, Theirs: theirs}
 	}

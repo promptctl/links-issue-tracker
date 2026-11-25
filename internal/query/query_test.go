@@ -114,6 +114,20 @@ func TestQueryRefusalsAreValidationErrors(t *testing.T) {
 
 // TestQueryLimitRejectsNonInteger pins that a garbage limit is a loud error, not
 // a silent fall-through to the uncapped default. [LAW:no-silent-failure]
+// An updated bound is compared as stamp text, so one whose UTC instant a stamp
+// cannot spell is refused where it enters, not bound to a width that sorts it
+// before the instants it follows.
+func TestParseTimestampRefusesABoundOutsideTheStampYears(t *testing.T) {
+	_, err := ParseTimestamp("9999-12-31T23:00:00-05:00")
+	var validation model.ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("ParseTimestamp error = %v (%T), want a model.ValidationError", err, err)
+	}
+	if _, err := ParseTimestamp("2026-11-24T10:00:07.5+02:00"); err != nil {
+		t.Errorf("ParseTimestamp of an ordinary offset instant error = %v", err)
+	}
+}
+
 func TestQueryLimitRejectsNonInteger(t *testing.T) {
 	if _, err := Parse(`limit:lots`); err == nil {
 		t.Fatal("expected error for non-integer limit")

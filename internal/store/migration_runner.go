@@ -1145,7 +1145,7 @@ type migrationProbe func(ctx context.Context, db *sql.DB) (map[string]any, error
 
 // migrationProbes holds the probe of each migration that has one, by version.
 // A migration whose effect needs no reading has none.
-var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
+var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge, 12: probeTimestampSpelling}
 
 // probeOutcome is what one step's probe read, or why it could not; zero when
 // the step's migration has no probe.
@@ -1458,7 +1458,7 @@ func (s *Store) recordQuarantine(ctx context.Context, q *QuarantineBlockError) e
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)`,
-		q.Version, q.Name, q.ErrorText, time.Now().UTC().Format(time.RFC3339Nano),
+		q.Version, q.Name, q.ErrorText, model.StampText(time.Now()),
 	)
 	if err != nil {
 		return fmt.Errorf("record quarantine for v%d: %w", q.Version, err)

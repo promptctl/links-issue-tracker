@@ -254,7 +254,7 @@ func TestADependencyCycleThroughAContainerIsReported(t *testing.T) {
 	epic, task, _, _ := twoEpics(t, ctx, st)
 	sibling := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: epic.ID})
 	for _, edge := range [][2]model.ID{{task.ID, sibling.ID}, {epic.ID, task.ID}, {sibling.ID, epic.ID}} {
-		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`, edge[0], edge[1], "2026-01-01T00:00:00Z"); err != nil {
+		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`, edge[0], edge[1], "2026-01-01T00:00:00.000000000Z"); err != nil {
 			t.Fatalf("plant %s blocked by %s: %v", edge[0], edge[1], err)
 		}
 	}

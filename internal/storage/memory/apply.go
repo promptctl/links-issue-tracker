@@ -263,9 +263,7 @@ func statusChanges(before, after model.Issue) []model.FieldChange {
 		changes = append(changes, model.FieldChange{Field: "status", From: before.StatusValue(), To: after.StatusValue()})
 	}
 	if !timesEqual(before.ClosedAtValue(), after.ClosedAtValue()) {
-		changes = append(changes, model.FieldChange{
-			Field: "closed_at", From: formatTime(before.ClosedAtValue()), To: formatTime(after.ClosedAtValue()),
-		})
+		changes = append(changes, model.TimestampChange(model.ClosedAtField, before.ClosedAtValue(), after.ClosedAtValue()))
 	}
 	if !resolutionsEqual(before.ResolutionValue(), after.ResolutionValue()) {
 		changes = append(changes, model.FieldChange{
@@ -291,10 +289,10 @@ func retentionChanges(before, after model.Retention) []model.FieldChange {
 	nextArchived, nextDeleted := model.RetentionTimestamps(after)
 	var changes []model.FieldChange
 	if !timesEqual(priorArchived, nextArchived) {
-		changes = append(changes, model.FieldChange{Field: "archived_at", From: formatTime(priorArchived), To: formatTime(nextArchived)})
+		changes = append(changes, model.TimestampChange(model.ArchivedAtField, priorArchived, nextArchived))
 	}
 	if !timesEqual(priorDeleted, nextDeleted) {
-		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatTime(priorDeleted), To: formatTime(nextDeleted)})
+		changes = append(changes, model.TimestampChange(model.DeletedAtField, priorDeleted, nextDeleted))
 	}
 	return changes
 }

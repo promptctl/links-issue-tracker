@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // TestRedirectTargetMigrationBackfill exercises 00004's Up backfill and Down
@@ -35,7 +37,7 @@ func TestRedirectTargetMigrationBackfill(t *testing.T) {
 		t.Fatalf("DownTo(3) error = %v", err)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := model.StampText(time.Now())
 	closed := now
 	seedIssue := func(id, status string, closedAt, resolution any) {
 		t.Helper()
@@ -138,7 +140,7 @@ func TestRedirectTargetMigrationDownToleratesExistingManualEdge(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := model.StampText(time.Now())
 	if _, err := st.db.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at)
 		VALUES ('t-canon', 'canonical', '', 'open', 0, 'task', 'redirect', '', 'a', '', ?, ?)`, now, now); err != nil {
 		t.Fatalf("seed canonical: %v", err)

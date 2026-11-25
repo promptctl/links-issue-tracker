@@ -1020,6 +1020,11 @@ type v1ExportHistory struct {
 // row's content so that merging two v1 exports never produces duplicate IDs
 // for different events. Identical rows produce the same ID (safe dedup); rows
 // with any differing field produce a distinct ID (safe merge).
+//
+// [LAW:one-source-of-truth] exception: the timestamp is hashed as
+// time.RFC3339Nano, not StampText. A v1 history already imported holds ids
+// derived from that spelling, and hashing another would give the same event a
+// second id on the next merge. TestV1EventIDIsFrozen pins one known id.
 func v1EventID(issueID ID, action, fromStatus, toStatus, createdBy string, createdAt time.Time) ID {
 	key := strings.Join([]string{issueID.Raw(), action, fromStatus, toStatus, createdBy, createdAt.Format(time.RFC3339Nano)}, "|")
 	sum := sha256.Sum256([]byte(key))

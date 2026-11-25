@@ -59,7 +59,7 @@ Input normalization on the issue insert (`import_export.go`), values worth pinni
 | `priority` | `CanonicalPriority` — any int ≠ 1 coerces to 0, **never rejects**, so a legacy out-of-range priority cannot fail a restore |
 | `topic` | slug-normalized, then `COALESCE(NULLIF(?, ''), 'misc')` — an empty result becomes the literal `misc` |
 | `issue_type` | verbatim — no parse gate on this path |
-| timestamps | RFC3339Nano strings |
+| timestamps | fixed-width UTC strings (`model.StampText`) |
 | `archived_at`/`deleted_at` | projected from sealed retention; both-set is unrepresentable |
 
 Events replay attribution **verbatim from the dump** — the restoring checkout never substitutes its own; `Attribution.UnmarshalJSON` has already collapsed half pairs (`import_export.go`). Unknown top-level keys in the export JSON are silently ignored (`syncfile.go`).

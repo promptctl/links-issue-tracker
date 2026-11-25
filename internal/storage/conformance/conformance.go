@@ -132,15 +132,17 @@ func (c *clock) read() time.Time {
 const prefix = "conf"
 
 // earlierInstant and laterInstant are the pair every case that pins time uses,
-// and their SPELLING is why this exact pair: RFC3339Nano trims trailing zeros,
-// so the earlier instant renders as the shorter string, and at the character
-// where that string ends the other is still going — "Z" (0x5A) outranks any
-// digit. ".12Z" therefore sorts after ".123456789Z" while denoting an instant
-// three milliseconds before it.
+// and their SPELLING is why this exact pair: time.RFC3339Nano trims trailing
+// zeros, so the earlier instant renders as the shorter string, and at the
+// character where that string ends the other is still going — "Z" (0x5A)
+// outranks any digit. ".12Z" therefore sorts after ".123456789Z" while denoting
+// an instant three milliseconds before it.
 //
-// An engine that round-trips a stamp through text and then compares the text
-// orders this pair backwards. That is not hypothetical: the Dolt engine keeps
-// created_at in a varchar. An engine holding a real instant passes without
+// An engine that round-trips a stamp through text in that spelling and then
+// compares the text orders this pair backwards. That is not hypothetical: the
+// Dolt engine held created_at that way, and now writes a fixed-width spelling
+// (model.StampText) so its text order is the instants' order; these cases are
+// what keeps it so. An engine holding a real instant passes without
 // noticing there was anything to get wrong. Left to a live nanosecond clock the
 // collision arises about once in ten million pairs, which is why no case can
 // state it without the contract's clock seam.
@@ -188,6 +190,7 @@ var cases = []engineCase{
 	{"list_sorts_status_by_derived_state", listSortsStatusByDerivedState},
 	{"stamps_come_from_the_clock_the_engine_was_given", stampsComeFromTheClock},
 	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
+	{"list_updated_range_compares_instants", listUpdatedRangeComparesInstants},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"relations_and_comments_are_totally_ordered", relationsAndCommentsAreTotallyOrdered},
 	{"adjacency_holds_what_its_edges_name", adjacencyHoldsWhatItsEdgesName},
@@ -1065,10 +1068,10 @@ func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Conte
 	}
 }
 
-// A stamp is held past the history by instant. The Dolt engine stores an
-// instant as trimmed RFC3339Nano text, where "...05Z" outranks the later
-// "...05.5Z", so a stamp read off that column's sort lands behind the event it
-// was planned against. The case writes that pair into one family, then writes
+// A stamp is held past the history by instant. Under a spelling that trims
+// trailing zeros "...05Z" outranks the later "...05.5Z", so a stamp read off
+// that column's sort lands behind the event it was planned against. The case
+// writes that pair into one family, then writes
 // on a slow clock three ways: a create under the parent, an edit under it, and
 // an edit of an issue with no parent, whose family is itself.
 func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -1633,6 +1636,41 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 	assertIssueIDs(t, "sorted by updated_at descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at", Desc: true}}}),
 		[]model.ID{older.ID, newer.ID})
+}
+
+// listUpdatedRangeComparesInstants states that the updated-at bounds compare
+// the instant a stamp denotes, over the same pair [listOrdersTimestampsByInstant]
+// sorts: a bound between the two instants takes exactly one of them, and a bound
+// equal to an instant takes it, the range being closed at both ends.
+//
+// Each of the pair is filed under its own epic stamped by the live clock, for
+// the reason that case gives, and the listings are narrowed to the pair.
+func listUpdatedRangeComparesInstants(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	laterEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("later's epic"), Lane: storage.SharedLane, Topic: "clock", IssueType: model.TypeEpic})
+	earlierEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("earlier's epic"), Lane: storage.SharedLane, Topic: "clock", IssueType: model.TypeEpic})
+	clk.Pin(laterInstant)
+	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("updated later"), Lane: storage.SharedLane, Topic: "clock", ParentID: laterEpic.ID})
+	clk.Pin(earlierInstant)
+	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("updated earlier"), Lane: storage.SharedLane, Topic: "clock", ParentID: earlierEpic.ID})
+
+	between := earlierInstant.Add(time.Millisecond)
+	pair := []model.ID{earlier.ID, later.ID}
+	for _, tc := range []struct {
+		name   string
+		filter storage.ListIssuesFilter
+		want   []model.ID
+	}{
+		{"after a bound between them", storage.ListIssuesFilter{UpdatedAfter: &between}, []model.ID{later.ID}},
+		{"before a bound between them", storage.ListIssuesFilter{UpdatedBefore: &between}, []model.ID{earlier.ID}},
+		{"after the earlier instant itself", storage.ListIssuesFilter{UpdatedAfter: &earlierInstant}, []model.ID{earlier.ID, later.ID}},
+		{"before the later instant itself", storage.ListIssuesFilter{UpdatedBefore: &laterInstant}, []model.ID{earlier.ID, later.ID}},
+		{"after the later instant itself", storage.ListIssuesFilter{UpdatedAfter: &laterInstant}, []model.ID{later.ID}},
+		{"before the earlier instant itself", storage.ListIssuesFilter{UpdatedBefore: &earlierInstant}, []model.ID{earlier.ID}},
+	} {
+		tc.filter.IDs = pair
+		tc.filter.SortBy = []storage.SortSpec{{Field: "updated_at"}}
+		assertIssueIDs(t, tc.name, mustList(t, ctx, st, tc.filter), tc.want)
+	}
 }
 
 // eventsAreTotallyOrdered pins the history ordering to (created_at, id), and

@@ -875,7 +875,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-				issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp.Raw()), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
+				issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp.Raw()), model.StampText(issue.CreatedAt), model.StampText(issue.UpdatedAt), archivedCol, deletedCol); err != nil {
 				return fmt.Errorf("insert issue: %w", err)
 			}
 			if parentID != "" {
@@ -1015,11 +1015,11 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")
-		args = append(args, filter.UpdatedAfter.UTC().Format(time.RFC3339Nano))
+		args = append(args, model.StampText(*filter.UpdatedAfter))
 	}
 	if filter.UpdatedBefore != nil {
 		where = append(where, "i.updated_at <= ?")
-		args = append(args, filter.UpdatedBefore.UTC().Format(time.RFC3339Nano))
+		args = append(args, model.StampText(*filter.UpdatedBefore))
 	}
 	if filter.HasComments != nil {
 		if *filter.HasComments {
@@ -1599,7 +1599,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 	issue, event := s.stampEdit(w.issue, at, w.reason, w.actor, w.changes)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
-		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
+		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, model.StampText(issue.UpdatedAt), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	// [LAW:dataflow-not-control-flow] The label rows are always moved; a set
@@ -1779,7 +1779,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 	now := s.clock.Now()
 	comment := model.Comment{ID: model.ID("cmt-" + uuid.NewString()), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
 	if err := s.withMutation(ctx, "add comment", func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, model.StampText(comment.CreatedAt), comment.CreatedBy); err != nil {
 			return fmt.Errorf("insert comment: %w", err)
 		}
 		return nil
@@ -1887,7 +1887,7 @@ func (w phaseWrite) handover() *claims.Handover { return nil }
 
 func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ?`,
-		w.event.CreatedAt.Format(time.RFC3339Nano), w.event.IssueID); err != nil {
+		model.StampText(w.event.CreatedAt), w.event.IssueID); err != nil {
 		return fmt.Errorf("update issue for phase move: %w", err)
 	}
 	return insertEventTx(ctx, tx, w.event)
@@ -1965,7 +1965,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	now := at
 	var closedAtArg any
 	if value := updated.ClosedAtValue(); value != nil {
-		closedAtArg = value.Format(time.RFC3339Nano)
+		closedAtArg = model.StampText(*value)
 	}
 	// The close outcome traveled through the state machine into the closed leaf,
 	// so the post-transition resolution is read back off the updated issue — no
@@ -2000,7 +2000,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	priorClosedAt := issue.ClosedAtValue()
 	newClosedAt := updated.ClosedAtValue()
 	if !timesEqual(priorClosedAt, newClosedAt) {
-		changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
+		changes = append(changes, model.TimestampChange(model.ClosedAtField, priorClosedAt, newClosedAt))
 	}
 	priorResolution := issue.ResolutionValue()
 	if !resolutionsEqual(priorResolution, postResolution) {
@@ -2053,7 +2053,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
-		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID); err != nil {
+		w.toStatus, w.postAssignee, model.StampText(w.now), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
@@ -2109,10 +2109,10 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 	nextArchived, nextDeleted := retentionColumns(post)
 	var changes []model.FieldChange
 	if !timesEqual(priorArchivedAt, nextArchivedAt) {
-		changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(nextArchivedAt)})
+		changes = append(changes, model.TimestampChange(model.ArchivedAtField, priorArchivedAt, nextArchivedAt))
 	}
 	if !timesEqual(priorDeletedAt, nextDeletedAt) {
-		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
+		changes = append(changes, model.TimestampChange(model.DeletedAtField, priorDeletedAt, nextDeletedAt))
 	}
 	return retentionWrite{
 		issueID:      issue.ID,
@@ -2132,7 +2132,7 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 // retention write restates no status column. [LAW:one-source-of-truth]
 func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-		w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
+		model.StampText(w.now), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
 		return fmt.Errorf("update issue retention: %w", err)
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
@@ -2419,8 +2419,8 @@ func (s *Store) listComments(ctx context.Context, issueID model.ID) ([]model.Com
 }
 
 // queryComments reads the comments that from — the FROM clause onward —
-// selects, in storage.CommentOrdering. The order is taken in Go, not in SQL: created_at is
-// a varchar, and ORDER BY on it sorts a stamp by its spelling. The column list
+// selects, in storage.CommentOrdering. The order is taken in Go, not in SQL, so
+// the contract's rule is the one both engines sort by. The column list
 // lives here beside the Scan that reads it by position, so no caller can name
 // the columns in an order the Scan does not expect.
 func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) ([]model.Comment, error) {
@@ -2502,7 +2502,7 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID model.ID) ([]mode
 // newestInLaneFamily is the newest instant in issueID's lane family's history,
 // the instant a write to issueID is stamped past.
 func (s *Store) newestInLaneFamily(ctx context.Context, issueID model.ID) (time.Time, error) {
-	selection, args, err := s.laneFamilyEvents(ctx, `e.created_at`, issueID)
+	selection, args, err := s.laneFamilyEvents(ctx, `MAX(e.created_at)`, issueID)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -2517,17 +2517,18 @@ func (s *Store) newestInLaneFamily(ctx context.Context, issueID model.ID) (time.
 // under parentID: the instant a create filed there is stamped past. No issue
 // is filed under the empty parent.
 func (s *Store) newestFiledUnder(ctx context.Context, parentID model.ID) (time.Time, error) {
-	newest, err := s.newestInstant(ctx, filedUnderEvents(`e.created_at`), parentID, string(model.RelParentChild))
+	newest, err := s.newestInstant(ctx, filedUnderEvents(`MAX(e.created_at)`), parentID, string(model.RelParentChild))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read the newest instant filed under %q: %w", parentID, err)
 	}
 	return newest, nil
 }
 
-// newestInstant is the latest of the event stamps selection reads, the zero
-// time for none. It has to read them all: created_at is a varchar, so SQL MAX
-// sorts a stamp by its spelling, and "...05Z" outranks the later "...05.5Z".
-// Each is parsed and compared here, as an instant.
+// newestInstant is the latest of the stamps selection reads, the zero time for
+// none. Each row of selection is one branch's MAX(created_at): the store
+// spells a stamp so that its text order is its instant's order, so the branch
+// needs no history read to find its newest. A branch with no events yields NULL,
+// and the branches are combined here, as instants.
 func (s *Store) newestInstant(ctx context.Context, selection string, args ...any) (time.Time, error) {
 	rows, err := s.db.QueryContext(ctx, selection, args...)
 	if err != nil {
@@ -2536,11 +2537,14 @@ func (s *Store) newestInstant(ctx context.Context, selection string, args ...any
 	defer rows.Close()
 	var newest time.Time
 	for rows.Next() {
-		var stamp string
+		var stamp sql.NullString
 		if err := rows.Scan(&stamp); err != nil {
 			return time.Time{}, err
 		}
-		instant, err := scanTime(stamp)
+		if !stamp.Valid {
+			continue
+		}
+		instant, err := scanTime(stamp.String)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -2657,9 +2661,8 @@ func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) 
 	// gets the guarantee, and none of them grows its own. [LAW:single-enforcer]
 	//
 	// id groups an event's change rows together for the collapse below. It is
-	// NOT the event order the contract asks for — created_at is a varchar here,
-	// so ordering events in SQL would sort each stamp by its spelling. The
-	// events are ordered after hydration instead, where they are instants.
+	// NOT the event order the contract asks for. The events are ordered after
+	// hydration instead, by the contract's own comparison, where they are instants.
 	// The sort names the result's columns, not e's and c's, so it orders a
 	// UNION as a whole rather than binding to its last branch.
 	q += " ORDER BY id ASC, field ASC"
@@ -2721,11 +2724,8 @@ func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) 
 		return nil, err
 	}
 	// The contract's history order, applied to hydrated values rather than to
-	// the column: created_at is stored as RFC3339Nano text, and text comparison
-	// puts ".12Z" — three milliseconds EARLIER — after ".123456789Z", because
-	// the trimmed encoding runs out at a character where "Z" outranks a digit.
-	// A SQL sort on that column therefore disagrees with any engine holding a
-	// real instant.
+	// the column, so the rule is written once and the memory engine, which holds
+	// real instants and no text, sorts by it too.
 	//
 	// [LAW:one-source-of-truth] The comparison is the contract's, not this
 	// engine's: storage.EventOrdering is what the memory engine sorts by too,
@@ -2964,15 +2964,14 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 	return issueRow{Issue: issue, Status: statusView}, nil
 }
 
-// scanTime parses an RFC3339Nano timestamp returned by a SQL row scan.
-// [LAW:single-enforcer] All RFC3339Nano-typed timestamp columns parse through
-// here so the format binding lives in one place; changing the wire format is
-// one edit, not 12.
+// scanTime parses a stored timestamp returned by a SQL row scan.
+// [LAW:single-enforcer] Every timestamp column parses through model.ParseStamp,
+// so the spelling the store holds is bound in one place.
 func scanTime(value string) (time.Time, error) {
-	return time.Parse(time.RFC3339Nano, value)
+	return model.ParseStamp(value)
 }
 
-// scanNullableTime parses a nullable RFC3339Nano timestamp column: SQL NULL is
+// scanNullableTime parses a nullable timestamp column: SQL NULL is
 // the absent state (nil), anything else must parse.
 func scanNullableTime(value sql.NullString) (*time.Time, error) {
 	if !value.Valid {
@@ -3175,7 +3174,7 @@ func nullableTime(value *time.Time) any {
 	if value == nil {
 		return nil
 	}
-	return value.Format(time.RFC3339Nano)
+	return model.StampText(*value)
 }
 
 // retentionColumns projects an issue's Retention into the two physical
@@ -3206,15 +3205,6 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
-}
-
-// formatNullableTime renders a *time.Time for storage in a FieldChange's
-// from/to value: nil → "" (SQL NULL via nullableString), non-nil → RFC3339Nano.
-func formatNullableTime(value *time.Time) string {
-	if value == nil {
-		return ""
-	}
-	return value.Format(time.RFC3339Nano)
 }
 
 // timesEqual compares two *time.Time pointers by value (both nil is equal,
@@ -3250,7 +3240,7 @@ func resolutionsEqual(a, b *model.Resolution) bool {
 }
 
 // formatNullableString renders an optional string for a FieldChange's from/to
-// value: nil → "" (SQL NULL via nullableString), matching formatNullableTime.
+// value: nil → "" (SQL NULL via nullableString), as model.TimestampChange does.
 func formatNullableString(value *string) string {
 	if value == nil {
 		return ""

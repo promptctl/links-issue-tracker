@@ -1,0 +1,76 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
+
+// timestampColumn is one column the stamp CHECKs of migration v12 guard. scope
+// restricts it to the rows that hold a timestamp ("" for all of them): a change
+// row's from/to value is a timestamp only for the fields v12 names.
+type timestampColumn struct {
+	table, column, scope string
+}
+
+// checkName is the name v12 gives the column's CHECK, and names it in the
+// refusal of an unspelled value.
+func (c timestampColumn) checkName() string {
+	return c.table + "_" + c.column + "_stamp"
+}
+
+// rows is the predicate selecting the column's timestamps, and nothing else:
+// not a NULL, and not the empty value an older import could leave in a change
+// row for an absent one, which v12 spells NULL.
+func (c timestampColumn) rows() string {
+	scope := "TRUE"
+	if c.scope != "" {
+		scope = c.scope
+	}
+	return "(" + scope + ") AND " + c.column + " IS NOT NULL AND " + c.column + " <> ''"
+}
+
+// v12TimestampColumns is the record of what migration v12 respells and
+// guards, frozen with it: the probe reads it against a store at v11, so a column
+// or field a later migration guards is not here. What the schema guards now is
+// read from the schema, by TestEveryTimestampColumnOfTheStoreIsGuardedByItsCheck.
+// [LAW:one-source-of-truth]
+func v12TimestampColumns() []timestampColumn {
+	const scope = "field IN ('closed_at','archived_at','deleted_at')"
+	return []timestampColumn{
+		{"issues", "created_at", ""},
+		{"issues", "updated_at", ""},
+		{"issues", "closed_at", ""},
+		{"issues", "archived_at", ""},
+		{"issues", "deleted_at", ""},
+		{"comments", "created_at", ""},
+		{"issue_events", "created_at", ""},
+		{"labels", "created_at", ""},
+		{"relations", "created_at", ""},
+		{"plan_reviews", "created_at", ""},
+		{"purges", "issue_created_at", ""},
+		{"purges", "purged_at", ""},
+		{"issue_event_changes", "from_value", scope},
+		{"issue_event_changes", "to_value", scope},
+	}
+}
+
+// probeTimestampSpelling reads what v12 does: every timestamp not already in
+// the stored spelling is one it respells, and an offset spelling is the one
+// thing it destroys, since the instant is kept in UTC and the offset is not.
+func probeTimestampSpelling(ctx context.Context, db *sql.DB) (map[string]any, error) {
+	var respelled, offsets int
+	for _, c := range v12TimestampColumns() {
+		var inColumn, withOffset int
+		if err := db.QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COALESCE(SUM(CHAR_LENGTH(%[1]s) <> %[3]d OR RIGHT(%[1]s,1) <> 'Z'),0), COALESCE(SUM(RIGHT(%[1]s,1) <> 'Z'),0) FROM %[2]s WHERE %[4]s`,
+			c.column, c.table, len(model.StampLayout), c.rows())).Scan(&inColumn, &withOffset); err != nil {
+			return nil, fmt.Errorf("count %s.%s spellings: %w", c.table, c.column, err)
+		}
+		respelled += inColumn
+		offsets += withOffset
+	}
+	return map[string]any{"migration.v12_stamps_respelled": respelled, "migration.v12_offsets_to_utc": offsets}, nil
+}

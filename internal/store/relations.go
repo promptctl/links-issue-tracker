@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -244,8 +243,8 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []mo
 }
 
 // queryRelations reads the relations that from — the FROM clause onward —
-// selects, in storage.RelationOrdering. The order is taken in Go, not in SQL: created_at
-// is a varchar, and ORDER BY on it sorts a stamp by its spelling. The column
+// selects, in storage.RelationOrdering. The order is taken in Go, not in SQL, so
+// the contract's rule is the one both engines sort by. The column
 // list lives here beside the Scan that reads it by position, so no caller can
 // name src and dst the other way round and read every edge reversed.
 func queryRelations(ctx context.Context, q rowQueryer, from string, args ...any) ([]model.Relation, error) {
@@ -463,7 +462,7 @@ func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID model.ID) (model.Issue
 // caller's responsibility; this is the raw write.
 // [LAW:one-source-of-truth] The relations INSERT statement lives only here.
 func insertRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, model.StampText(rel.CreatedAt), rel.CreatedBy); err != nil {
 		return fmt.Errorf("insert relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)
 	}
 	return nil
