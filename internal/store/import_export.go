@@ -624,8 +624,11 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) erro
 		if strings.TrimSpace(change.Field) == "" {
 			return fmt.Errorf("issue event %s: field name cannot be empty", event.ID)
 		}
-		// A restored event may come from an export an older release wrote, whose
-		// timestamp values are spelled the trimmed way. [LAW:single-enforcer]
+		// Every change passes here, a live mutation's (already spelled by
+		// model.TimestampChange) and a restored export's alike. An export an
+		// older release wrote spells its timestamp values the trimmed way, and
+		// this is where they are respelled, or refused if no instant.
+		// [LAW:single-enforcer]
 		change, err := change.Stamped()
 		if err != nil {
 			return fmt.Errorf("issue event %s: %w", event.ID, err)

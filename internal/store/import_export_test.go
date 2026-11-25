@@ -94,7 +94,8 @@ func TestRestoringAnOlderReleasesExportRespellsItsTimestampChanges(t *testing.T)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
-	for i, field := range model.TimestampChangeFields() {
+	for i, f := range model.TimestampFields() {
+		field := f.Name()
 		dump.Events = append(dump.Events, model.IssueEvent{
 			ID: model.ID(fmt.Sprintf("evt-older-%d", i)), IssueID: issue.ID, Action: "close",
 			CreatedAt: time.Date(2026, time.January, 1, 0, 0, 7, 500000000, time.UTC),
@@ -122,8 +123,8 @@ func TestRestoringAnOlderReleasesExportRespellsItsTimestampChanges(t *testing.T)
 		}
 		restored++
 	}
-	if restored != len(model.TimestampChangeFields()) {
-		t.Errorf("restored %d timestamp changes, want %d", restored, len(model.TimestampChangeFields()))
+	if restored != len(model.TimestampFields()) {
+		t.Errorf("restored %d timestamp changes, want %d", restored, len(model.TimestampFields()))
 	}
 }
 

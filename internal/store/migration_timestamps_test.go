@@ -108,8 +108,57 @@ func TestEveryTimestampColumnRefusesWhatIsNotTheStoredSpelling(t *testing.T) {
 			"2026-01-01T00:00:00.000000000+01:00",
 			"2026-01-01T00:00:00.000000000Z\n",
 			"2026-13-45T25:61:61.000000000Z",
+			"2026-02-30T10:00:00.000000000Z",
 		} {
 			assertColumnSetRefused(t, st, c, value)
+		}
+	}
+}
+
+// The list of columns the tests and the probe walk is read off the schema, not
+// trusted: every *_at column of the store's data is one of them, and each
+// carries the CHECK its name promises. A migration that adds a timestamp column
+// without its CHECK fails here, naming the column. migration_quarantine is
+// lit's bookkeeping, created outside goose, not the store's data.
+func TestEveryTimestampColumnOfTheStoreIsGuardedByItsCheck(t *testing.T) {
+	ctx := context.Background()
+	st := v12Seeded(t)
+	listed := map[string]bool{}
+	for _, c := range timestampColumns() {
+		// A change row's value is a timestamp only for some fields; it is no
+		// *_at column, and its CHECK is looked up below.
+		if c.scope == "" {
+			listed[c.table+"."+c.column] = true
+		}
+	}
+	rows, err := st.db.QueryContext(ctx, `SELECT table_name, column_name FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND column_name LIKE '%\_at' AND table_name <> 'migration_quarantine'`)
+	if err != nil {
+		t.Fatalf("read the schema's timestamp columns: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, column string
+		if err := rows.Scan(&table, &column); err != nil {
+			t.Fatal(err)
+		}
+		if !listed[table+"."+column] {
+			t.Errorf("%s.%s is a timestamp column no CHECK guards: add it to timestampColumns and give it a %s_%s_stamp CHECK", table, column, table, column)
+		}
+		delete(listed, table+"."+column)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for column := range listed {
+		t.Errorf("timestampColumns lists %s, which the schema does not have", column)
+	}
+	for _, c := range timestampColumns() {
+		var name string
+		if err := st.db.QueryRowContext(ctx, `SELECT constraint_name FROM information_schema.table_constraints
+			WHERE table_schema = DATABASE() AND table_name = ? AND constraint_name = ? AND constraint_type = 'CHECK'`,
+			c.table, c.checkName()).Scan(&name); err != nil {
+			t.Errorf("%s.%s has no CHECK named %s: %v", c.table, c.column, c.checkName(), err)
 		}
 	}
 }
@@ -148,6 +197,7 @@ func TestTimestampsMigrationRefusesWhatItCannotRespellFaithfully(t *testing.T) {
 		{"an offset of 99 minutes", `UPDATE comments SET created_at = '2026-01-01T10:00:00+05:99' WHERE id = 'seed-c1'`, "comments_created_at_stamp"},
 		{"a trailing newline", "UPDATE comments SET created_at = CONCAT('2026-01-01T10:00:00Z', CHAR(10)) WHERE id = 'seed-c1'", "comments_created_at_stamp"},
 		{"a day that does not exist, in a column that may be NULL", `UPDATE issues SET closed_at = '2026-02-30T10:00:00+01:00' WHERE id = 'seed-t2'`, "issues_closed_at_stamp"},
+		{"a day that does not exist, spelled the stored way", `UPDATE issues SET closed_at = '2026-02-30T10:00:00.000000000Z' WHERE id = 'seed-t2'`, "issues_closed_at_stamp"},
 		// The engine itself refuses the conversion, so no constraint is named.
 		{"an instant past year 9999 in UTC, in a column that may be NULL", `UPDATE issues SET closed_at = '9999-12-31T23:30:00-01:00' WHERE id = 'seed-t2'`, "outside of datetime"},
 		{"a value in a change row of a timestamp field", `UPDATE issue_event_changes SET to_value = '2026-01-04T05:00:00+25:00' WHERE event_id = 'seed-e1' AND field = 'closed_at'`, "issue_event_changes_to_value_stamp"},

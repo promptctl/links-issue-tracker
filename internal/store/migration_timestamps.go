@@ -12,7 +12,7 @@ import (
 // timestampColumn is one column the stamp CHECKs of migration v12 guard. scope
 // restricts it to the rows that hold a timestamp ("" for all of them): a change
 // row's from/to value is a timestamp only for the fields
-// model.TimestampChangeFields names.
+// model.TimestampFields names.
 type timestampColumn struct {
 	table, column, scope string
 }
@@ -23,13 +23,15 @@ func (c timestampColumn) checkName() string {
 	return c.table + "_" + c.column + "_stamp"
 }
 
-// rows is the predicate selecting the column's timestamps, and nothing else.
+// rows is the predicate selecting the column's timestamps, and nothing else:
+// not a NULL, and not the empty value an older import could leave for an
+// absent one, which v12 spells NULL.
 func (c timestampColumn) rows() string {
 	scope := "TRUE"
 	if c.scope != "" {
 		scope = c.scope
 	}
-	return "(" + scope + ") AND " + c.column + " IS NOT NULL"
+	return "(" + scope + ") AND " + c.column + " IS NOT NULL AND " + c.column + " <> ''"
 }
 
 // timestampColumns is every column the stored spelling binds. The migration
@@ -37,7 +39,8 @@ func (c timestampColumn) rows() string {
 // [LAW:one-source-of-truth]
 func timestampColumns() []timestampColumn {
 	changeFields := make([]string, 0, 3)
-	for _, field := range model.TimestampChangeFields() {
+	for _, f := range model.TimestampFields() {
+		field := f.Name()
 		changeFields = append(changeFields, "'"+field+"'")
 	}
 	scope := "field IN (" + strings.Join(changeFields, ",") + ")"

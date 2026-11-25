@@ -115,7 +115,7 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 - `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go`).
 - `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go`).
 - `nullableStringPtr(*string) any` — nil → `NULL` (`store.go`).
-- `model.TimestampChange(field, from, to *time.Time)` (`internal/model/stamp.go`) — the change row of a timestamp field: each side `""` for nil, else the stored spelling.
+- `model.TimestampChange(field model.TimestampField, from, to *time.Time)` (`internal/model/stamp.go`) — the change row of a timestamp field: each side `""` for nil, else the stored spelling.
 - `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go`).
 - `formatNullableString(*string) string` — nil → `""` (`store.go`).
 - `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go`).
@@ -413,7 +413,7 @@ INSERT INTO issues(
     id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 ```
-   Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `issue.Plan`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `nullableString(issue.FollowsUp)`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
+   Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `issue.Plan`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `nullableString(issue.FollowsUp)`, `model.StampText(issue.CreatedAt)`, `model.StampText(issue.UpdatedAt)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
 7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: createdBy}` and routes it through `insertRelationTx` (`store.go`; `internal/store/relations.go`).
 8. `writeLabelsTx(ctx, tx, issue.ID, nil, issue.Labels, createdBy, now)` — every label is new, so each is inserted (`store.go`; `internal/store/labels.go`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go`) — action `"created"`, reason `"issue created"`, actor `"links"`.
@@ -438,7 +438,7 @@ Defaults, restated as a table for every column the create path touches:
 | `assignee` | trimmed input via `AssigneeValue()` |
 | `item_rank` | `nextRankForPlacement` |
 | `lane` | trimmed input |
-| `created_at`/`updated_at` | same `time.Now().UTC()` RFC3339Nano |
+| `created_at`/`updated_at` | same `time.Now().UTC()` `model.StampText` |
 | `closed_at` | literal `NULL` |
 | `archived_at`/`deleted_at` | `retentionColumns` of a Live issue → both `NULL` |
 | `resolution`/`redirect_target` | not written |
@@ -569,7 +569,7 @@ WHERE clauses, appended in this exact order:
 | `len(filter.IssueTypes) > 0` | `i.issue_type IN (?...)` | `store.go` |
 | `len(filter.ExcludeIssueTypes) > 0` | `i.issue_type NOT IN (?...)` | `store.go` |
 | `len(filter.Assignees) > 0` (blank entries skipped; clause omitted if all blank) | `i.assignee IN (?...)` | `store.go` |
-| `filter.UpdatedAfter != nil` | `i.updated_at >= ?` bound with `.UTC().Format(time.RFC3339Nano)` | `store.go` |
+| `filter.UpdatedAfter != nil` | `i.updated_at >= ?` bound with `model.StampText` | `store.go` |
 | `filter.UpdatedBefore != nil` | `i.updated_at <= ?` same formatting | `store.go` |
 | `filter.HasComments != nil`, true | `EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go` |
 | `filter.HasComments != nil`, false | `NOT EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go` |
@@ -696,7 +696,7 @@ Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 3. `fromStatus := issue.StatusValue()`, `toStatus := updated.StatusValue()` (`store.go`).
 4. **No-op rule**: `toStatus == fromStatus && postAssignee == priorAssignee` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
 5. `now := time.Now().UTC()` (`store.go`).
-6. `closedAtArg` = `updated.ClosedAtValue().Format(time.RFC3339Nano)` when non-nil, else nil (`store.go`).
+6. `closedAtArg` = `model.StampText(*updated.ClosedAtValue())` when non-nil, else nil (`store.go`).
 7. `resolutionArg` = `string(*updated.ResolutionValue())` when non-nil, else nil (`store.go`).
 8. `redirectTargetArg` = `*updated.RedirectTargetValue()` when non-nil, else nil (`store.go`). Its integrity is deliberately **not** validated here (`store.go`).
 9. Change rows, in this order (`store.go`):
@@ -717,7 +717,7 @@ Evidence: each of the six non-identity (from→to) pairs records exactly one eve
 ```sql
 UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?
 ```
-bound `w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID`. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
+bound `w.toStatus, w.postAssignee, model.StampText(w.now), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID`. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
 3. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go`).
 
 The UPDATE touches only the status-axis columns — a transition restates no retention column (`store.go`).
@@ -737,7 +737,7 @@ The UPDATE touches only the status-axis columns — a transition restates no ret
 ```sql
 UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?
 ```
-bound `w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
+bound `model.StampText(w.now), w.nextArchived, w.nextDeleted, w.issueID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
 
 Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 
@@ -788,7 +788,7 @@ UPDATE issues SET
     title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
     WHERE id = ?
 ```
-bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
+bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, model.StampText(issue.UpdatedAt), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
 3. `writeLabelsTx(ctx, tx, issue.ID, w.priorLabels, issue.Labels, w.actor, at)` — inserts the names the patch added and deletes the ones it removed; a set the patch left as it was moves no row (`store.go`).
 4. `if len(w.changes) > 0` → `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
@@ -813,7 +813,7 @@ The event insert (`import_export.go`):
 ```sql
 INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ```
-bound `event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano), nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())`. Failure → `fmt.Errorf("insert issue event %s: %w", event.ID, err)`.
+bound `event.ID, event.IssueID, actionArg, event.Reason, event.Actor, model.StampText(event.CreatedAt), nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())`. Failure → `fmt.Errorf("insert issue event %s: %w", event.ID, err)`.
 
 Per change row (`import_export.go`):
 - a blank trimmed field name → `fmt.Errorf("issue event %s: field name cannot be empty", event.ID)`;
@@ -851,7 +851,7 @@ Evidence: a create/close/reopen/archive sequence yields exactly 4 events with ac
 ```sql
 INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)
 ```
-with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", err)` (`store.go`).
+with `created_at` as `model.StampText`; failure → `fmt.Errorf("insert comment: %w", err)` (`store.go`).
 5. Returns `(comment, issue, nil)` — the issue is the pre-comment read; a comment never changes the issue row.
 
 #### 8.2 `DeleteComment(ctx, commentID string) (model.Comment, error)`
@@ -882,7 +882,7 @@ Any error returns a zero `storage.PurgeResult`. No `issue_events` row is recorde
 
 #### 8a.2 `insertPurgeTx(ctx, tx, p model.Purge) error`
 
-`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.Key()`'s `IssueID` and `IssueCreatedAt` (the birth in UTC RFC3339Nano) and `p.PurgedAt.Format(time.RFC3339Nano)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore or rebuild (`writeWholeExportTx`), and the replay's delta (`purge.go`).
+`INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` with `p.Key()`'s `IssueID` and `IssueCreatedAt` (the birth in spelled by `model.StampText`) and `model.StampText(p.PurgedAt)`; error → `fmt.Errorf("record purge of %s: %w", p.IssueID, err)`. The only INSERT into `purges`, shared by `Purge`, a restore or rebuild (`writeWholeExportTx`), and the replay's delta (`purge.go`).
 
 #### 8a.3 `listPurges(ctx, q rowQueryer) ([]model.Purge, error)`
 
@@ -1328,7 +1328,7 @@ CREATE TABLE `purges` (
 `internal/store/schema_snapshot.sql`. Source: `00009_purges.sql` (v9).
 
 - PRIMARY KEY `(issue_id, issue_created_at)`; no indexes, no CHECKs, and **no foreign key** on either key column: the issue a row names has been deleted (`00009_purges.sql`).
-- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` (UTC RFC3339Nano) and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeWholeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
+- One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` and `purged_at`, each spelled by `model.StampText` — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeWholeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
 - Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `cutByHeldPurges` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
 
 ### 2.12 `plan_reviews`
@@ -1353,7 +1353,7 @@ CREATE TABLE `plan_reviews` (
 
 - PRIMARY KEY `(id)`; index `idx_plan_reviews_issue_created (issue_id, created_at)`; FK `plan_reviews_issue` → `issues(id)` `ON DELETE CASCADE`, so a purge's issue delete takes the issue's reviews; CHECK `plan_reviews_verdict_check` admits `pass` and `fail`.
 - One row per law review of a ticket's plan. `plan_digest` is the hex SHA-256 of the plan text judged; `laws` is the cited tokens joined by `","` (`joinLaws`), the empty text for none, split back by `splitLaws`, which drops empty tokens (`internal/store/plan_review.go`).
-- The only INSERT is `insertPlanReviewTx` — `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`, `created_at` formatted RFC3339Nano, error `insert plan review <id>: …` — reached from `AddPlanReview` and the replay's delta. The only single-row DELETE is `deletePlanReviewTx` (`DELETE FROM plan_reviews WHERE id = ?`, through `execDelete`), reached only from the replay's delta (`internal/store/plan_review.go`). `writeWholeExportTx` does not name the table; clearing `issues` cascades into it.
+- The only INSERT is `insertPlanReviewTx` — `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`, `created_at` spelled by `model.StampText`, error `insert plan review <id>: …` — reached from `AddPlanReview` and the replay's delta. The only single-row DELETE is `deletePlanReviewTx` (`DELETE FROM plan_reviews WHERE id = ?`, through `execDelete`), reached only from the replay's delta (`internal/store/plan_review.go`). `writeWholeExportTx` does not name the table; clearing `issues` cascades into it.
 - Read by `queryPlanReviews(ctx, q, where, args...)`: `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews <where>`, unordered in SQL — the rows are sorted in Go by `storage.PlanReviewOrdering`, the `created_at` instant (parsed through `scanTime`) then id, because the varchar `created_at` sorts by its spelling; query error wrapped `list plan reviews: …`; from `Export` (no `where`) and `GetIssueDetail` (`WHERE issue_id = ?`) (`internal/store/plan_review.go`).
 
 ---
@@ -2244,7 +2244,7 @@ This runs after the totality and problem phases, so a shape fault masks an arity
 
 `cellNullString` (shapemap.go): `nil` → `sql.NullString{}`; `string` → `{Valid:true, String:v}`; anything else → error `expected a string or NULL cell, got %T`.
 
-`parseTimestamp(s)` (shapemap.go): tries `time.RFC3339Nano` then `time.RFC3339`; on both failing returns `time.Time{}, fmt.Errorf("invalid timestamp %q", s)`.
+`parseTimestamp(s)` (shapemap.go): reads it with `model.ParseStamp`; on failure returns `time.Time{}, fmt.Errorf("invalid timestamp %q: %w", s, err)`.
 
 `canonicalLegacyStatus` (schema_reconcile.go), exact-match switch:
 
@@ -2562,7 +2562,7 @@ Scope: `internal/store/issue_ids.go`, `internal/store/labels.go`, `internal/stor
 - `labels` table: `issue_id VARCHAR(191) NOT NULL`, `label VARCHAR(191) NOT NULL`, `created_at VARCHAR(64) NOT NULL`, `created_by TEXT NOT NULL`, `PRIMARY KEY (issue_id, label)`, `FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE` — `internal/store/migrations/00001_baseline.sql`.
 - Indexes: `CREATE INDEX idx_issues_rank ON issues(item_rank(191));`, `CREATE INDEX idx_relations_src_type ON relations(src_id, type);`, `CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`, `CREATE INDEX idx_labels_issue ON labels(issue_id, label);`, `CREATE INDEX idx_labels_name ON labels(label, issue_id);`.
 - Down section drops `labels` and `relations`.
-- All timestamps written by these subsystems use `time.RFC3339Nano` and are read back through `scanTime` = `time.Parse(time.RFC3339Nano, value)` — `internal/store/store.go`.
+- All timestamps written by these subsystems are spelled by `model.StampText` and read back through `scanTime` = `model.ParseStamp(value)` — `internal/store/store.go`.
 
 ---
 
@@ -2714,7 +2714,7 @@ Endpoint-vanished behavior is pinned by `TestRelationEndpointVanishedRejected` �
 ```sql
 INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)
 ```
-bound with `rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy`. Error: `fmt.Errorf("insert relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)`. This is the only relations INSERT in the package (also used by `CreateIssue`'s parent edge, `internal/store/store.go`, and by delta replay, `internal/store/export_delta.go`).
+bound with `rel.SrcID, rel.DstID, rel.Type, model.StampText(rel.CreatedAt), rel.CreatedBy`. Error: `fmt.Errorf("insert relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)`. This is the only relations INSERT in the package (also used by `CreateIssue`'s parent edge, `internal/store/store.go`, and by delta replay, `internal/store/export_delta.go`).
 
 `setSingleValuedEdgeTx` — `internal/store/relations.go`:
 ```sql
@@ -3084,7 +3084,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
    - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)`.
    - `live := liveEdges(edges, liveIDs)`; `blocksCycle(order, live)` non-empty → `fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path})`, before any write.
    - `constraints := storage.NewDependencyOrder(ancestry, live).Constraints()`; `ordered, held := splitRankOrder(order, liveIDs, constraints)`; `repairRankOrder(ordered, held, constraints)`; error → `fmt.Errorf("fix rank inversions: %w", err)`. Edges inside a group constrain nothing.
-   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, touched unless it is `respaced`, which kept its place and only gave a gap room, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
+   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, touched unless it is `respaced`, which kept its place and only gave a gap room, stamped `model.StampText(s.clock.Now())`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
    - `rerankedCount` is the rewrites that are not `respaced`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
 3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues the repair moved, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order or `updated_at`, and those are not counted.
@@ -3409,7 +3409,7 @@ type exportDelta struct {
 ```
 `export_delta.go`; `empty()` at `export_delta.go` is true only when all seven table deltas are empty. These are unexported Go values — **the delta is never serialized to disk or JSON anywhere**.
 
-Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) = purges PRIMARY KEY, the birth spelled in UTC RFC3339Nano by `model.Purge.Key`. Comments, issues, events and plan reviews key on their `string` id; purge records key on `model.Purge.Key` (`export_delta.go`).
+Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) = purges PRIMARY KEY, the birth spelled by `model.StampText` in `model.Purge.Key`. Comments, issues, events and plan reviews key on their `string` id; purge records key on `model.Purge.Key` (`export_delta.go`).
 
 ### 2.3 Add / modify / delete representation
 
@@ -3571,27 +3571,27 @@ Value-by-value (`import_export.go`):
 | `item_rank` | `issue.Rank` | verbatim |
 | `lane` | `issue.Lane` | verbatim |
 | `follows_up` | `nullableString(issue.FollowsUp)` | `""` → SQL NULL (`store.go`) |
-| `created_at` | `issue.CreatedAt.Format(time.RFC3339Nano)` | |
-| `updated_at` | `issue.UpdatedAt.Format(time.RFC3339Nano)` | |
-| `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go`) |
+| `created_at` | `model.StampText(issue.CreatedAt)` | |
+| `updated_at` | `model.StampText(issue.UpdatedAt)` | |
+| `closed_at` | `model.StampText` of `issue.ClosedAtValue()`, else nil | (`import_export.go`) |
 | `resolution` | `nullableResolution(issue.ResolutionValue())` | nil → NULL, else the string (`store.go`) |
 | `redirect_target` | `nullableStringPtr(issue.RedirectTargetValue())` | nil → NULL (`store.go`) |
 | `archived_at`, `deleted_at` | `retentionColumns(issue)` | projected from the sealed Retention; archived-and-deleted is unrepresentable (`store.go`) |
 
 `insertIssueTx` error text: `"restore issue %s: %w"` (`import_export.go`).
 
-Comments (`insertCommentTx`, `import_export.go`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
+Comments (`insertCommentTx`, `import_export.go`): `id, issue_id, body, created_at (`model.StampText`), created_by` verbatim; error `"restore comment %s: %w"`.
 
-Labels (`insertLabelTx`, `import_export.go`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"insert label %s:%s: %w"` (issue id, name).
+Labels (`insertLabelTx`, `import_export.go`): `issue_id, label(=Name), created_at (`model.StampText`), created_by`; error `"insert label %s:%s: %w"` (issue id, name).
 
 Events (`insertEventTx`, `import_export.go`):
 - `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go`).
-- `created_at` RFC3339Nano.
+- `created_at` `model.StampText`.
 - `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
 - error `"insert issue event %s: %w"`.
 - Then, per `event.Changes` entry, a blank trimmed field name fails `"issue event %s: field name cannot be empty"`; otherwise one `INSERT INTO issue_event_changes(event_id, field, from_value, to_value)`, with `from`/`to` through `nullableString` (`""` → NULL); error `"insert issue event change %s.%s: %w"` (event id, field).
 
-Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_digest, verdict` verbatim, `laws` joined by `","` (`joinLaws`), `created_at` RFC3339Nano, `created_by` verbatim; error `"insert plan review %s: %w"`.
+Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_digest, verdict` verbatim, `laws` joined by `","` (`joinLaws`), `created_at` `model.StampText`, `created_by` verbatim; error `"insert plan review %s: %w"`.
 
 ### 3.4 ID remapping / conflict policy
 
@@ -4275,7 +4275,7 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 
 - `relationKey{srcID string; dstID string; kind model.RelationType}` — exactly the schema PK `(src_id, dst_id, type)` (`row_deletes.go`).
 - `labelKey{issueID string; name string}` — the labels PK `(issue_id, label)` (`row_deletes.go`).
-- Purges key on `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) — the purges PK `(issue_id, issue_created_at)`, the birth spelled in UTC RFC3339Nano as the row stores it.
+- Purges key on `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) — the purges PK `(issue_id, issue_created_at)`, the birth spelled in by `model.StampText` as the row stores it.
 
 ### 4.2 The seven deletes — all HARD deletes, all single-row by full primary key
 

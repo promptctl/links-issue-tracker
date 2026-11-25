@@ -90,6 +90,25 @@ func TestParseStampReadsEverySpellingTheStoreHasHeld(t *testing.T) {
 	}
 }
 
+// StampText is fixed-width only for UTC years 0000 to 9999, so an instant
+// outside them is refused where text becomes an instant, never spelled in a
+// width that sorts out of order.
+func TestParseStampRefusesAnInstantAStampCannotSpell(t *testing.T) {
+	for _, text := range []string{
+		"9999-12-31T23:00:00-05:00",
+		"0000-01-01T00:30:00+01:00",
+	} {
+		if got, err := ParseStamp(text); err == nil {
+			t.Errorf("ParseStamp(%q) = %s, want a refusal", text, got)
+		}
+	}
+	for _, text := range []string{"9999-12-31T23:59:59.999999999Z", "0000-01-01T00:00:00Z"} {
+		if _, err := ParseStamp(text); err != nil {
+			t.Errorf("ParseStamp(%q) error = %v", text, err)
+		}
+	}
+}
+
 // v1 history ids are derived from the trimmed RFC3339Nano spelling, which is
 // not the stored one. Changing what is hashed would give an event already
 // imported a second id on the next merge, so one known id pins it.
@@ -104,7 +123,7 @@ func TestV1EventIDIsFrozen(t *testing.T) {
 // A timestamp change is spelled the stored way, an absent side staying absent.
 func TestTimestampChangeSpellsItsInstantsTheStoredWay(t *testing.T) {
 	at := time.Date(2026, time.November, 24, 10, 0, 7, 500000000, time.UTC)
-	got := TimestampChange("closed_at", nil, &at)
+	got := TimestampChange(ClosedAtField, nil, &at)
 	want := FieldChange{Field: "closed_at", From: "", To: "2026-11-24T10:00:07.500000000Z"}
 	if got != want {
 		t.Errorf("TimestampChange = %+v, want %+v", got, want)
@@ -112,7 +131,8 @@ func TestTimestampChangeSpellsItsInstantsTheStoredWay(t *testing.T) {
 }
 
 func TestStampedRespellsAnOlderReleasesTimestampChange(t *testing.T) {
-	for _, field := range TimestampChangeFields() {
+	for _, f := range TimestampFields() {
+		field := f.Name()
 		got, err := FieldChange{Field: field, From: "2026-11-24T10:00:07Z", To: "2026-11-24T12:00:07.5+02:00"}.Stamped()
 		if err != nil {
 			t.Fatalf("%s: Stamped() error = %v", field, err)

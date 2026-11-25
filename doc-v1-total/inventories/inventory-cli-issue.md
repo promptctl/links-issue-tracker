@@ -786,7 +786,7 @@ else ready.
 - `updated` terms (`applyTimeTerm`, `query.go`; `splitComparator`,
   `query.go`): the comparator is one of `>=`, `<=`, `>`, `<`, `:`; a missing
   comparator or empty value is wrapped `parse updated term %q`; a value
-  `query.ParseTimestamp` refuses → `timestamp must be RFC3339, got %q`. `>=` and
+  `query.ParseTimestamp` refuses → `timestamp must be RFC3339 and fall in the years 0000 to 9999 UTC, got %q`. `>=` and
   `>` both set updated-after; `<=` and `<` both set updated-before; `:` with a
   valid timestamp → `updated supports only >=, >, <=, <`.
 - `query.Merge(filter, parsed.Filter)` (`query.go`): statuses, types,

@@ -13,7 +13,7 @@ import (
 // "…:07.5Z", and "…:07.000000001Z" before "…:07Z".
 //
 // The store holds a CHECK on every timestamp column of its data, and on the
-// from/to values of the change rows TimestampChangeFields names, that admits
+// from/to values of the change rows TimestampFields names, that admits
 // only this shape, so a writer that spells an instant any other way is refused
 // by the store itself. [LAW:types-are-the-program]
 const StampLayout = "2006-01-02T15:04:05.000000000Z"
@@ -35,30 +35,59 @@ func StampText(t time.Time) string {
 // accepts any RFC3339 spelling, not only the stored one: a value arrives here
 // from an import, an older export, or a store a migration has not yet reached,
 // and rejecting it would strand the data rather than protect the store. The
-// CHECKs, not this reader, keep a store's own columns canonical. Everything it
-// returns, StampText spells one way.
+// CHECKs, not this reader, keep a store's own columns canonical. An instant
+// whose UTC year StampText cannot spell in four digits is refused, so no bound
+// or value built from it can sort as text out of its instant's order.
+// Everything it returns, StampText spells one way.
 func ParseStamp(text string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		return time.Time{}, err
 	}
-	return t.UTC(), nil
+	t = t.UTC()
+	if year := t.Year(); year < 0 || year > 9999 {
+		return time.Time{}, fmt.Errorf("%q is %s in UTC, outside the years 0000 to 9999 a stamp spells", text, t.Format(time.RFC3339Nano))
+	}
+	return t, nil
 }
 
-// TimestampChangeFields names the FieldChange fields whose from/to values are
-// instants rather than text a person wrote. It is the one list: the writers
-// build these changes through TimestampChange, an imported change is respelled
-// through FieldChange.Stamped, and the store's CHECKs on issue_event_changes
-// name the same three fields. [LAW:one-source-of-truth]
-func TimestampChangeFields() []string {
-	return []string{"closed_at", "archived_at", "deleted_at"}
+// TimestampField is a FieldChange field whose from/to values are instants
+// rather than text a person wrote. The set is closed: a writer names one of
+// these, so it cannot misspell the field and slip past the respelling and the
+// store's CHECKs on issue_event_changes, which name the same three fields.
+// [LAW:one-source-of-truth]
+type TimestampField int
+
+const (
+	ClosedAtField TimestampField = iota + 1
+	ArchivedAtField
+	DeletedAtField
+)
+
+// TimestampFields is every TimestampField.
+func TimestampFields() []TimestampField {
+	return []TimestampField{ClosedAtField, ArchivedAtField, DeletedAtField}
+}
+
+// Name is the field's name in a FieldChange and in the issue_event_changes
+// table.
+func (f TimestampField) Name() string {
+	switch f {
+	case ClosedAtField:
+		return "closed_at"
+	case ArchivedAtField:
+		return "archived_at"
+	case DeletedAtField:
+		return "deleted_at"
+	}
+	panic(fmt.Sprintf("model: %d is not a TimestampField", int(f)))
 }
 
 // TimestampChange is the change of a timestamp field from one instant to
 // another, either of which may be absent (""). The values are spelled the
 // stored way, so no writer can record an instant any other way.
-func TimestampChange(field string, from, to *time.Time) FieldChange {
-	return FieldChange{Field: field, From: stampOrAbsent(from), To: stampOrAbsent(to)}
+func TimestampChange(field TimestampField, from, to *time.Time) FieldChange {
+	return FieldChange{Field: field.Name(), From: stampOrAbsent(from), To: stampOrAbsent(to)}
 }
 
 func stampOrAbsent(t *time.Time) string {
@@ -74,7 +103,7 @@ func stampOrAbsent(t *time.Time) string {
 // spells these values the trimmed way. A value that is no instant is an error,
 // never stored. [LAW:parse-dont-validate]
 func (c FieldChange) Stamped() (FieldChange, error) {
-	if !slices.Contains(TimestampChangeFields(), c.Field) {
+	if !slices.ContainsFunc(TimestampFields(), func(f TimestampField) bool { return f.Name() == c.Field }) {
 		return c, nil
 	}
 	from, err := respell(c.From)

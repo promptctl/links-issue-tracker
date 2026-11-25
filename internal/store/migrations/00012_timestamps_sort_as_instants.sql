@@ -31,7 +31,7 @@
 -- RFC3339Nano wrote, a whole second included. The CHECKs come off first.
 --
 -- issue_event_changes carries timestamps only for the three fields
--- model.TimestampChangeFields names; its other values are text a person wrote
+-- model.TimestampFields names; its other values are text a person wrote
 -- and are not touched. A timestamp field's absent value is NULL, the one
 -- spelling its writer (insertEventTx) produces, so an empty value is set to
 -- NULL here and the CHECK admits NULL alone.
@@ -40,9 +40,11 @@
 -- goose (ensureQuarantineTable), not a column of the store's data, and its
 -- writer spells its stamp with model.StampText.
 --
--- An older release writing trimmed text into a store this migration reached
--- would be refused by the CHECKs; the minimum writer schema below makes it
--- refuse the store up front, rather than fail on a constraint mid-command.
+-- An older release writing trimmed text into a store this migration reached is
+-- refused by the CHECKs, by constraint name. The minimum writer schema below
+-- makes a release that reads that row refuse the store up front instead; a
+-- release built before the row existed (migrations/README.md says which) does
+-- not read it, and meets the CHECK mid-command.
 
 -- +goose Up
 -- +goose StatementBegin

@@ -2000,7 +2000,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	priorClosedAt := issue.ClosedAtValue()
 	newClosedAt := updated.ClosedAtValue()
 	if !timesEqual(priorClosedAt, newClosedAt) {
-		changes = append(changes, model.TimestampChange("closed_at", priorClosedAt, newClosedAt))
+		changes = append(changes, model.TimestampChange(model.ClosedAtField, priorClosedAt, newClosedAt))
 	}
 	priorResolution := issue.ResolutionValue()
 	if !resolutionsEqual(priorResolution, postResolution) {
@@ -2109,10 +2109,10 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 	nextArchived, nextDeleted := retentionColumns(post)
 	var changes []model.FieldChange
 	if !timesEqual(priorArchivedAt, nextArchivedAt) {
-		changes = append(changes, model.TimestampChange("archived_at", priorArchivedAt, nextArchivedAt))
+		changes = append(changes, model.TimestampChange(model.ArchivedAtField, priorArchivedAt, nextArchivedAt))
 	}
 	if !timesEqual(priorDeletedAt, nextDeletedAt) {
-		changes = append(changes, model.TimestampChange("deleted_at", priorDeletedAt, nextDeletedAt))
+		changes = append(changes, model.TimestampChange(model.DeletedAtField, priorDeletedAt, nextDeletedAt))
 	}
 	return retentionWrite{
 		issueID:      issue.ID,
