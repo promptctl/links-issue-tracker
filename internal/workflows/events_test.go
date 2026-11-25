@@ -21,6 +21,11 @@ func TestCatalogNamesAreStableContractShaped(t *testing.T) {
 		if !event.Known() {
 			t.Errorf("catalog event %q not Known()", event)
 		}
+		// A when: entry naming the event reads back as the event, never as a
+		// crossing of some state.
+		if moment, _ := ParseMoment(string(event)); moment != event {
+			t.Errorf("ParseMoment(%q) = %#v, want the event", event, moment)
+		}
 	}
 	if len(seen) == 0 {
 		t.Fatal("Catalog() is empty")

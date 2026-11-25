@@ -355,21 +355,27 @@ breadcrumb (`purge.go`), and neither does `verdict` (`verdict.go`).
 
 ### 1.14 Workflow event dispatch
 
-Every dispatch is `workflows.Dispatch(env, stdout, stderr, ws, o)`, with the invocation's stdout and stderr.
-Occasion builders (`workflow_events.go`):
-- `showTicketOccasion` → `EventShowTicket`, carries IssueID + Labels
-- `backlogOccasion` → `EventShowBacklog`, no IssueID/Labels
-- `nextPulledOccasion` → `EventNextPulled`
-- `ticketCreatedOccasion` → `EventTicketCreated`
-- `ticketUpdatedOccasion` → `EventTicketUpdated`; never carries Entered/Exited
+Every dispatch is `dispatchOccasion(ctx, stderr, env, stdout, ws, o)`
+(`workflow_dispatch.go`), which calls `workflows.Dispatch(env, stdout, stderr, ws, o)`
+— guidance to stdout, each load warning to stderr as one `lit: workflow <warning>`
+line — and records `workflows.when`, `workflows.fired` and `workflows.warnings` on the
+event. A read command passes the invocation's stdout; a transition passes the buffer
+`applyTransition` collects its guidance in.
+Occasion builders (`workflow_events.go`), each an `Occasion{Moments, IssueID, Labels}`:
+- `showTicketOccasion` → `[EventShowTicket]`, carries IssueID + Labels
+- `backlogOccasion` → `[EventShowBacklog]`, no IssueID/Labels
+- `nextPulledOccasion` → `[EventNextPulled]`
+- `ticketCreatedOccasion` → `[EventTicketCreated]`
+- `ticketUpdatedOccasion` → `[EventTicketUpdated]`; never carries a crossing
   because `update` rejects `--status`
-- `commentAddedOccasion` → `EventCommentAdded`
-- `transitionOccasion(action, before, after)` → looks up
-  `transitionEvents` (`start`→`EventWorkStarted`, `phase`→`EventPhaseSet`,
-  `done`→`EventWorkFinished`, `close`→`EventTicketClosed`,
-  `open`→`EventTicketReopened`), sets `Entered` to the states after that were not
-  states before and `Exited` to the reverse, a phase counting as a state inside
-  `in_progress`; **panics** on a non-retention action with no entry.
+- `commentAddedOccasion` → `[EventCommentAdded]`
+- `transitionOccasion(action, before, after)` → the crossings the transition
+  made, never an event: `crossings(Exit, before.states(), after.states())` then
+  `crossings(Enter, after.states(), before.states())` — every state left, then
+  every state entered, each outermost first, a phase counting as a state inside
+  `in_progress`. A start from open is `exit open, enter in_progress, enter plan`;
+  `done` and `close` both end in `enter closed`; a call that leaves the ticket
+  where it was carries no moments.
 
 Retention actions (archive/unarchive/delete/restore) fire no event:
 `transitionOccasion` returns `fires = false` for them (`workflow_events.go`). `purge` fires none either (`purge.go`), nor does `verdict` (`verdict.go`).
@@ -1206,10 +1212,11 @@ transition row runs per id — §2.21):
    before it, so it announces nothing.
 5. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
    (`cli.go`).
-6. If the action is a `StatusAction`, dispatch the transition occasion
-   (`cli.go`).
-7. Write the transfer notice string, then `printIssueSummary`
-   (`cli.go`).
+6. Unless the action is a retention action, dispatch the transition occasion
+   (`transitionOccasion`), its guidance collected after the owed notice into
+   `transitionDone.said` (`applyTransition`, `cli.go`).
+7. Write `said` — the transfer notice, then the guidance — then
+   `printIssueSummary` (`cli.go`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
    (i.e. `done` and `close`), re-read `GetIssueAdjacency` and print the close
    adjacency block (`cli.go`) — §2.12.
@@ -2060,9 +2067,11 @@ before any id is acted on.
 - One action, actor and reason for every id. Each id runs
   `applyTransition` (`cli.go`), the step `transitionLeaf` runs: `GetIssue`,
   `readTicketState`, the spec's authorize hook, `Store.Apply`,
-  `readTicketState` again, the owed notice and statusline facts. Its notice is
-  written to stdout before `"<id> ok\n"` (`bulk.go`).
-- **No workflow events, no summary, no close-adjacency block, no breadcrumb** on the bulk path.
+  `readTicketState` again, the owed notice and statusline facts, and the
+  transition occasion, so each item fires the crossings it made as the single
+  verb does, its `workflows.*` facts under the item's `bulk.item.facts`. Its
+  notice and guidance are written to stdout before `"<id> ok\n"` (`bulk.go`).
+- **No summary, no close-adjacency block, no breadcrumb** on the bulk path.
 
 **`lit bulk import`** (hidden, retired) →
 `RetiredCommandError{Command: "bulk import", Replacement: bulkImportRetirementGuidance}`
@@ -2417,10 +2426,9 @@ a successful run (§1.4). A refused verdict records nothing (`verdict_test.go`).
    hold.** `backlog` renders claims as visibility only (`backlog.go`); `next` routes by claim but never writes (`next_route.go`);
    `start` is the only gate (`cli.go`, `relationOf` at
    `claims_takeover.go`).
-7. **Three functions panic on unreachable states** and would abort the process:
+7. **These functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go`),
    `renderNextOutcome` on an unhandled outcome type (`next.go`),
-   `transitionOccasion` on an unmapped lifecycle action (`workflow_events.go`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
    (`quickstart_topics.go`), `completionRenderer` on an unknown shell
    (`completion.go`), `nestUnder` on a missing nest point (`register.go`),

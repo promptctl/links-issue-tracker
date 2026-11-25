@@ -2038,21 +2038,24 @@ func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
 	return ticketState{issue: issue, events: events, phase: phase}
 }
 
-// transitionDone is what one transition did to one ticket: where it found
-// the ticket, where it left it, and the line the transition owes for it.
+// transitionDone is what one transition did to one ticket: where it left the
+// ticket, and what it prints ahead of its summary — the line the transition
+// owes for it, then the workflow guidance its crossings fired.
 type transitionDone struct {
-	prior, written ticketState
-	notice         string
+	written ticketState
+	said    string
 }
 
 // applyTransition runs one transition on one ticket: the pre-transition read,
-// the spec's authorize hook, Apply, and what the transition owes, with its
-// statusline facts recorded. `lit <verb>` and `lit bulk <verb>` both run it,
-// so a transition one refuses the other refuses with the same error.
-// [LAW:single-enforcer]
+// the spec's authorize hook, Apply, what the transition owes, with its
+// statusline facts recorded, and the workflow occasion its crossings make.
+// `lit <verb>` and `lit bulk <verb>` both run it, so a transition one refuses
+// the other refuses with the same error, and no transition lands without
+// firing what its crossings bind — `lit bulk done` enters closed exactly as
+// `lit done` does. [LAW:single-enforcer]
 func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
 	// The pre-transition read is the state `authorize` gates on and the
-	// before-half of the caller's workflow occasion: the row, and the phase
+	// before-half of the transition's workflow occasion: the row, and the phase
 	// the ticket's history puts it in.
 	priorIssue, err := ap.Store.GetIssue(ctx, issueID)
 	if err != nil {
@@ -2086,7 +2089,23 @@ func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID m
 	// change observer recorded for this same write.
 	notice, facts := owed(written, applied.Handover)
 	ap.Statusline.Record(facts...)
-	return transitionDone{prior: prior, written: written, notice: notice}, nil
+
+	// What the transition did is said first, ahead of any guidance about what
+	// to do next: a hand-off and a phase move say it out loud, every other
+	// transition says it as the empty string. The guidance is collected rather
+	// than streamed so a bulk item's report carries its own, in the same
+	// order a single verb prints them. transitionOccasion decides which
+	// actions fire; retention actions (archive/unarchive/delete/restore) fire
+	// nothing. `done`'s embedded default is what prints the post-close capture
+	// reminder on every transition that enters closed.
+	var said strings.Builder
+	said.WriteString(notice)
+	if occasion, fires := transitionOccasion(action, prior, written); fires {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, &said, ap.Workspace, occasion); err != nil {
+			return transitionDone{}, err
+		}
+	}
+	return transitionDone{written: written, said: said.String()}, nil
 }
 
 func transitionLeaf(spec transitionSpec) appLeaf {
@@ -2132,29 +2151,13 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		if err != nil {
 			return err
 		}
-		prior, written, issue := did.prior, did.written, did.written.issue
+		issue := did.written.issue
 
-		// What the transition did is said first, ahead of any guidance about
-		// what to do next: a hand-off and a phase move say it out loud, every
-		// other transition says it as the empty string, so this write always
-		// runs and only its value varies. The authorize hook holds the rule.
-		// [LAW:dataflow-not-control-flow]
-		if _, err := io.WriteString(inv.Stdout, did.notice); err != nil {
+		// What the transition said — its notice and any guidance its crossings
+		// fired, empty when there is neither — always prints, so this write
+		// always runs and only its value varies. [LAW:dataflow-not-control-flow]
+		if _, err := io.WriteString(inv.Stdout, did.said); err != nil {
 			return err
-		}
-
-		// [LAW:single-enforcer] transitionLeaf is the one lifecycle-transition
-		// path (start/done/close/open and phase all arrive here), so it is the
-		// one place that dispatches their events — no per-command
-		// re-derivation. transitionOccasion decides which actions fire;
-		// retention actions (archive/unarchive/delete/restore) fire nothing.
-		// Dispatch is also where any matching workflow definition's guidance is
-		// injected — `done`'s embedded default is what prints the post-close
-		// capture reminder below.
-		if occasion, fires := transitionOccasion(action, prior, written); fires {
-			if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, occasion); err != nil {
-				return err
-			}
 		}
 
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {

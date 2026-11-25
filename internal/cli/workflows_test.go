@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,11 +27,11 @@ func writeCLIWorkflow(t *testing.T, workspaceRoot, rel, content string) {
 	}
 }
 
-// TestWorkflowsOverviewShowsEmbeddedDefaultAtItsEvent pins the floor: with no
-// project or global workflow files authored, `lit workflows` still shows the
-// embedded "done" default at the event it binds to (work_finished) — the
+// TestWorkflowsOverviewShowsEmbeddedDefaultAtItsCrossing pins the floor: with
+// no project or global workflow files authored, `lit workflows` still shows
+// the embedded "done" default at the crossing it binds to (enter closed) — the
 // same "always at least the embedded layer" guarantee workflows.Load gives.
-func TestWorkflowsOverviewShowsEmbeddedDefaultAtItsEvent(t *testing.T) {
+func TestWorkflowsOverviewShowsEmbeddedDefaultAtItsCrossing(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 
@@ -37,33 +39,35 @@ func TestWorkflowsOverviewShowsEmbeddedDefaultAtItsEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
-	if !strings.Contains(output, `work_finished  [done "Post-close capture reminder" (embedded)]`) {
-		t.Fatalf("workflows output = %q, want the embedded done default at work_finished", output)
+	if !strings.Contains(output, "\n"+`  enter closed  [done "Post-close capture reminder" (embedded)]`+"\n") {
+		t.Fatalf("workflows output = %q, want the embedded done default at enter closed", output)
 	}
 	if strings.Contains(output, "\nWarnings") {
 		t.Fatalf("workflows output = %q, want no warnings section with only the embedded layer loaded", output)
 	}
 }
 
-// TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension is the
-// ticket's core done-claim: a project-authored definition shows at its
-// activation point(s) with its source layer, and label-scoped definitions
-// group under their label too — both dimensions of the same definition,
-// since composition across dimensions is AND to fire but each dimension gets
-// its own place in this static view.
-func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension(t *testing.T) {
+// TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundKey is the core
+// done-claim: a project-authored definition shows at each of its `when:`
+// moments with its source layer, and label-scoped definitions group under
+// their label too — both keys of the same definition, since composition
+// across keys is AND to fire but each key gets its own place in this static
+// view.
+func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundKey(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
-		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
+		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nwhen: [show_ticket, exit review]\n---\nNeeds a design pass.")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
 	want := `need-design-note "Need Design Reminder" (project)`
-	if !strings.Contains(output, "show_ticket  ["+want+"]") {
-		t.Fatalf("workflows output = %q, want the definition listed under show_ticket", output)
+	for _, moment := range []string{"show_ticket", "exit review"} {
+		if !strings.Contains(output, "\n  "+moment+"  ["+want+"]\n") {
+			t.Fatalf("workflows output = %q, want the definition listed at %s", output, moment)
+		}
 	}
 	if !strings.Contains(output, "need-design  ["+want+"]") {
 		t.Fatalf("workflows output = %q, want the definition grouped under its label", output)
@@ -78,14 +82,14 @@ func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "verify.md",
-		"---\nid: verify-reminder\nstates: [{name: verify, when: enter}]\n---\nVerify before accepting.")
+		"---\nid: verify-reminder\nwhen: [enter verify]\n---\nVerify before accepting.")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
-	if !strings.Contains(output, "  verify\n    enter  [verify-reminder (project)]\n    exit\n") {
-		t.Fatalf("workflows output = %q, want the custom \"verify\" state on the spine with enter bound", output)
+	if !strings.Contains(output, "\n  exit closed\n  enter verify  [verify-reminder (project)]\n  exit verify\n") {
+		t.Fatalf("workflows output = %q, want the custom \"verify\" state on the spine after the built-ins, with enter bound", output)
 	}
 }
 
@@ -119,7 +123,7 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
-		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
+		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nwhen: [show_ticket, enter closed]\n---\nNeeds a design pass.")
 
 	output, err := runLit(t, root, "workflows", "show", "need-design-note")
 	if err != nil {
@@ -130,8 +134,8 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 		"name: Need Design Reminder",
 		"source: project",
 		"path: design/reminder.md",
+		"when: show_ticket, enter closed",
 		"labels: need-design",
-		"events: show_ticket",
 		"---\nNeeds a design pass.",
 	} {
 		if !strings.Contains(output, want) {
@@ -176,7 +180,7 @@ func TestWorkflowsShowMissingIDIsUsageError(t *testing.T) {
 func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "reminder.md", "---\nid: my-id\nevents: [show_ticket]\n---\nbody")
+	writeCLIWorkflow(t, root, "reminder.md", "---\nid: my-id\nwhen: [show_ticket]\n---\nbody")
 
 	_, err := runLit(t, root, "workflows", "show", "my-id", "extra", "junk")
 	if _, ok := err.(UsageError); !ok {
@@ -184,122 +188,86 @@ func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 	}
 }
 
-// TestWorkflowsEditScaffoldsFreshEventPoint is `edit`'s "no existing
-// definition" done-claim for an event point: a fresh project file lands with
-// the requested event live and the other two dimensions shown commented.
-func TestWorkflowsEditScaffoldsFreshEventPoint(t *testing.T) {
+// TestWorkflowsEditScaffoldsFreshMomentPoints is `edit`'s "no existing
+// definition" done-claim for a moment: a point spelled as a `when:` entry —
+// an event, or entering or exiting any state, built-in or custom — lands as a
+// fresh project file with that entry live under `when:` and the labels key
+// shown commented, and loads binding exactly that moment.
+func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 	t.Parallel()
-	root := tempRepo(t)
-
-	output, err := runLit(t, root, "workflows", "edit", "work_started")
-	if err != nil {
-		t.Fatalf("Run(workflows edit work_started) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "work_started.md")
-	if !strings.Contains(output, path) {
-		t.Fatalf("workflows edit output = %q, want it to name %q", output, path)
-	}
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
-	}
-	if !strings.Contains(string(content), `events: ["work_started"]`) {
-		t.Fatalf("scaffolded content = %q, want the live events line", content)
-	}
-	if strings.Contains(string(content), "# events: [work_started]") {
-		t.Fatalf("scaffolded content = %q, want no redundant commented events example", content)
+	for _, tc := range []struct {
+		point, file string
+		want        workflows.Moment
+	}{
+		{"show_ticket", "show_ticket.md", workflows.EventShowTicket},
+		{"enter review", "enter-review.md", workflows.Crossing{Side: workflows.Enter, State: "review"}},
+		{"exit closed", "exit-closed.md", workflows.Crossing{Side: workflows.Exit, State: "closed"}},
+		{"Enter  In_Progress", "enter-in_progress.md", workflows.Crossing{Side: workflows.Enter, State: "in_progress"}},
+		// A state is an open string: a colon or a comma in its name is the
+		// state's, and quoting keeps a comma from splitting one entry in two.
+		{"enter deploy:staging", "enter-deploy-staging.md", workflows.Crossing{Side: workflows.Enter, State: "deploy:staging"}},
+		{"exit foo,bar", "exit-foo-bar.md", workflows.Crossing{Side: workflows.Exit, State: "foo,bar"}},
+	} {
+		t.Run(tc.point, func(t *testing.T) {
+			t.Parallel()
+			root := tempRepo(t)
+			output, err := runLit(t, root, "workflows", "edit", tc.point)
+			if err != nil {
+				t.Fatalf("Run(workflows edit %q) error = %v", tc.point, err)
+			}
+			path := filepath.Join(root, ".lit", "workflows", tc.file)
+			if !strings.Contains(output, path) {
+				t.Fatalf("workflows edit output = %q, want it to name %q", output, path)
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", path, readErr)
+			}
+			if live := "\nwhen: [" + strconv.Quote(tc.want.String()) + "]\n"; !strings.Contains(string(content), live) {
+				t.Fatalf("scaffolded content = %q, want the live line %q", content, live)
+			}
+			if strings.Contains(string(content), "# when: [") || !strings.Contains(string(content), "# labels: [") {
+				t.Fatalf("scaffolded content = %q, want labels commented as reference and no redundant when example", content)
+			}
+			set := workflows.Load(runEnv(t), root)
+			def, ok := set.Lookup(strings.TrimSuffix(tc.file, ".md"))
+			if !ok {
+				t.Fatalf("workflows.Load(%s) has no definition for %s; loaded: %+v", root, tc.file, set.Definitions)
+			}
+			if !reflect.DeepEqual(def.When, []workflows.Moment{tc.want}) || def.Labels != nil {
+				t.Fatalf("definition = %+v, want exactly when: [%s]", def, tc.want)
+			}
+			if len(set.Warnings) != 0 {
+				t.Fatalf("warnings = %v, want the scaffold to load cleanly", set.Warnings)
+			}
+		})
 	}
 }
 
-// TestWorkflowsEditScaffoldsFreshStateExitPoint covers the `<state>:exit`
-// syntax and its distinct filename from the bare (enter) form.
-func TestWorkflowsEditScaffoldsFreshStateExitPoint(t *testing.T) {
-	t.Parallel()
-	root := tempRepo(t)
-
-	if _, err := runLit(t, root, "workflows", "edit", "closed:exit"); err != nil {
-		t.Fatalf("Run(workflows edit closed:exit) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "closed_exit.md")
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
-	}
-	if !strings.Contains(string(content), `states: [{name: "closed", when: exit}]`) {
-		t.Fatalf("scaffolded content = %q, want the live exit state activation", content)
-	}
-}
-
-// TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName pins the
-// last-colon split: a state name that itself contains a colon (states are
-// documented as open strings with no restriction against one) must still
-// parse its :enter/:exit suffix correctly rather than misclassifying the
-// whole point as a label.
-func TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName(t *testing.T) {
-	t.Parallel()
-	root := tempRepo(t)
-
-	if _, err := runLit(t, root, "workflows", "edit", "deploy:staging:enter"); err != nil {
-		t.Fatalf("Run(workflows edit deploy:staging:enter) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "deploy-staging.md")
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
-	}
-	if !strings.Contains(string(content), `states: ["deploy:staging"]`) {
-		t.Fatalf("scaffolded content = %q, want the live state activation with the colon preserved in the state name", content)
-	}
-}
-
-// TestWorkflowsEditScaffoldsFreshLabelPointAsFallback covers the fallback
-// branch: a point that is neither a known event nor a built-in state name is
-// treated as a label.
+// TestWorkflowsEditScaffoldsFreshLabelPointAsFallback covers the fallback:
+// a point that is no moment this lit fires — a bare state name among them,
+// since a state is crossed, not named — is treated as a label.
 func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
 	t.Parallel()
-	root := tempRepo(t)
-
-	if _, err := runLit(t, root, "workflows", "edit", "needs-design"); err != nil {
-		t.Fatalf("Run(workflows edit needs-design) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "needs-design.md")
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
-	}
-	if !strings.Contains(string(content), `labels: ["needs-design"]`) {
-		t.Fatalf("scaffolded content = %q, want the live labels line", content)
-	}
-}
-
-// TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation pins YAML
-// escaping: unlike labels (model.NormalizeLabel rejects a comma outright), state
-// names have no such restriction, so a state containing a comma is the
-// domain-valid case where an unquoted flow sequence would silently split one
-// activation into two.
-func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testing.T) {
-	t.Parallel()
-	root := tempRepo(t)
-
-	if _, err := runLit(t, root, "workflows", "edit", "foo,bar:enter"); err != nil {
-		t.Fatalf("Run(workflows edit foo,bar:enter) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "foo-bar.md")
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
-	}
-	if !strings.Contains(string(content), `states: ["foo,bar"]`) {
-		t.Fatalf("scaffolded content = %q, want the comma-containing state name double-quoted", content)
-	}
-
-	set := workflows.Load(runEnv(t), root)
-	def, ok := set.Lookup("foo-bar")
-	if !ok {
-		t.Fatalf("workflows.Load(%s) has no definition with id foo-bar; loaded ids: %+v", root, set.Definitions)
-	}
-	if len(def.States) != 1 || def.States[0].State != "foo,bar" || def.States[0].When != workflows.WhenEnter {
-		t.Fatalf("def.States = %+v, want exactly one activation {foo,bar enter}", def.States)
+	for _, point := range []string{"needs-design", "review"} {
+		t.Run(point, func(t *testing.T) {
+			t.Parallel()
+			root := tempRepo(t)
+			if _, err := runLit(t, root, "workflows", "edit", point); err != nil {
+				t.Fatalf("Run(workflows edit %s) error = %v", point, err)
+			}
+			path := filepath.Join(root, ".lit", "workflows", point+".md")
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", path, readErr)
+			}
+			if !strings.Contains(string(content), "\nlabels: [\""+point+"\"]\n") {
+				t.Fatalf("scaffolded content = %q, want the live labels line", content)
+			}
+			if !strings.Contains(string(content), "# when: [") {
+				t.Fatalf("scaffolded content = %q, want the when key shown commented as reference", content)
+			}
+		})
 	}
 }
 
@@ -387,7 +355,7 @@ func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
 func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "custom.md", "---\nid: my-custom\nevents: [show_ticket]\n---\nalready mine")
+	writeCLIWorkflow(t, root, "custom.md", "---\nid: my-custom\nwhen: [show_ticket]\n---\nalready mine")
 
 	output, err := runLit(t, root, "workflows", "edit", "my-custom")
 	if err != nil {
@@ -406,26 +374,27 @@ func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *te
 	}
 }
 
-// TestWorkflowsDryRunExplainsAHypotheticalMatch is the ticket's own worked
-// example: "what would inject on work_finished for a ticket labeled
-// needs-design?"
+// TestWorkflowsDryRunExplainsAHypotheticalMatch is the worked example: "what
+// would inject when a ticket labeled needs-design enters closed?"
 func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nlabels: [needs-design]\nevents: [work_finished]\n---\nTicket <id>: needs a design pass.")
+	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nlabels: [needs-design]\nwhen: [enter closed]\n---\nTicket <id>: needs a design pass.")
 
-	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished", "--label", "needs-design", "--issue", "lit-7")
+	output, err := runLit(t, root, "workflows", "dry-run", "--when", "enter closed", "--label", "needs-design", "--issue", "lit-7")
 	if err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
-	if !strings.Contains(output, "Fired (2)") {
-		t.Fatalf("dry-run output = %q, want 2 fired (design-note plus the embedded done default)", output)
-	}
-	if !strings.Contains(output, "design-note (project)  [event:work_finished, label:needs-design]") {
-		t.Fatalf("dry-run output = %q, want design-note listed with both matched reasons", output)
-	}
-	if !strings.Contains(output, "Ticket lit-7: needs a design pass.") {
-		t.Fatalf("dry-run output = %q, want the interpolated body previewed", output)
+	for _, want := range []string{
+		`occasion: when=["enter closed"] labels=needs-design issue=lit-7` + "\n",
+		"Fired (2)\n",
+		`done "Post-close capture reminder" (embedded)  [when:enter closed]` + "\n",
+		"design-note (project)  [when:enter closed, label:needs-design]\n",
+		"Ticket lit-7: needs a design pass.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("dry-run output = %q, want it to contain %q", output, want)
+		}
 	}
 }
 
@@ -434,7 +403,7 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 
-	output, err := runLit(t, root, "workflows", "dry-run", "--event", "show_backlog")
+	output, err := runLit(t, root, "workflows", "dry-run", "--when", "show_backlog")
 	if err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
@@ -443,25 +412,84 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 	}
 }
 
-// A state name is an open string that can carry a comma, so the occasion
-// line keeps one state named foo,bar apart from the two states foo and bar.
-func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
+// dry-run is asked in every spelling a `when:` entry takes — an event, an
+// entry into a state, an exit from one, built-in or custom — and reads each
+// the way the frontmatter does, so a definition fires in a dry-run exactly
+// when it says it fires. A state name is an open string that can carry a
+// comma, so the occasion line keeps one crossing of a state named foo,bar
+// apart from two crossings.
+func TestWorkflowsDryRunReadsEveryWhenSpelling(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
+	for id, when := range map[string]string{
+		"on-show":     "show_ticket",
+		"on-exit":     "exit plan",
+		"on-enter":    "enter review",
+		"on-foo-bar":  `"enter foo,bar"`,
+		"on-staging":  "exit deploy:staging",
+		"on-progress": "enter in_progress",
+	} {
+		writeCLIWorkflow(t, root, id+".md", "---\nid: "+id+"\nwhen: ["+when+"]\n---\n"+id+" body")
+	}
 
 	for _, tc := range []struct {
-		args []string
-		want string
+		when       []string
+		occasion   string
+		firedLines []string
 	}{
-		{[]string{"--enter", "foo,bar"}, `entered=["foo,bar"] exited=[]`},
-		{[]string{"--enter", "foo", "--enter", "bar"}, `entered=["foo","bar"] exited=[]`},
+		{[]string{"show_ticket"}, `when=["show_ticket"]`, []string{"on-show (project)  [when:show_ticket]"}},
+		{[]string{"exit plan"}, `when=["exit plan"]`, []string{"on-exit (project)  [when:exit plan]"}},
+		{[]string{"Enter  Review"}, `when=["enter review"]`, []string{
+			`phase-review "Record when the merge is under way" (embedded)  [when:enter review]`,
+			"on-enter (project)  [when:enter review]",
+		}},
+		{[]string{"enter foo,bar"}, `when=["enter foo,bar"]`, []string{"on-foo-bar (project)  [when:enter foo,bar]"}},
+		{[]string{"enter foo", "enter bar"}, `when=["enter foo","enter bar"]`, nil},
+		{[]string{"exit deploy:staging"}, `when=["exit deploy:staging"]`, []string{"on-staging (project)  [when:exit deploy:staging]"}},
+		{[]string{"exit open", "enter in_progress", "enter plan"}, `when=["exit open","enter in_progress","enter plan"]`, []string{
+			`phase-plan "Plan the ticket, then record when the code starts" (embedded)  [when:enter plan]`,
+			"on-progress (project)  [when:enter in_progress]",
+		}},
+		{nil, `when=[]`, nil},
 	} {
-		output, err := runLit(t, root, append([]string{"workflows", "dry-run"}, tc.args...)...)
-		if err != nil {
-			t.Fatalf("Run(workflows dry-run %v) error = %v", tc.args, err)
+		args := []string{"workflows", "dry-run"}
+		for _, when := range tc.when {
+			args = append(args, "--when", when)
 		}
-		if !strings.Contains(output, tc.want) {
-			t.Errorf("dry-run %v output = %q, want it to contain %q", tc.args, output, tc.want)
+		output, err := runLit(t, root, args...)
+		if err != nil {
+			t.Fatalf("Run(%v) error = %v", args, err)
+		}
+		if want := "occasion: " + tc.occasion + " labels=- issue=-\n"; !strings.Contains(output, want) {
+			t.Errorf("%v output = %q, want the occasion line %q", args, output, want)
+		}
+		if want := "Fired (" + strconv.Itoa(len(tc.firedLines)) + ")\n"; !strings.Contains(output, want) {
+			t.Errorf("%v output = %q, want %q", args, output, want)
+		}
+		for _, line := range tc.firedLines {
+			if !strings.Contains(output, "\n  "+line+"\n") {
+				t.Errorf("%v output = %q, want the fired line %q", args, output, line)
+			}
+		}
+	}
+}
+
+// dry-run refuses a moment no command fires — an event outside the catalog,
+// the transition events retired among them — rather than explain a match on
+// something that cannot happen, and names the spellings that can.
+func TestWorkflowsDryRunRefusesAMomentLitNeverFires(t *testing.T) {
+	t.Parallel()
+	root := tempRepo(t)
+	for _, when := range []string{"work_finished", "ticket_closed", "warp_drive_engaged", "enter"} {
+		_, err := runLit(t, root, "workflows", "dry-run", "--when", when)
+		var validation model.ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("dry-run --when %s error = %v (%T), want a ValidationError", when, err, err)
+		}
+		for _, want := range []string{strconv.Quote(when), "enter <state> or exit <state>", "show_ticket"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("dry-run --when %s error = %q, want it to name %s", when, err, want)
+			}
 		}
 	}
 }
@@ -472,9 +500,9 @@ func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 
-	_, err := runLit(t, root, "workflows", "edit", "work_started", "extra")
+	_, err := runLit(t, root, "workflows", "edit", "show_ticket", "extra")
 	if _, ok := err.(UsageError); !ok {
-		t.Fatalf("Run(workflows edit work_started extra) error = %v (%T), want UsageError", err, err)
+		t.Fatalf("Run(workflows edit show_ticket extra) error = %v (%T), want UsageError", err, err)
 	}
 }
 
@@ -484,9 +512,11 @@ func TestWorkflowsDryRunRejectsUnknownFlags(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 
-	_, err := runLit(t, root, "workflows", "dry-run", "--evnt", "work_finished")
-	if _, ok := err.(UsageError); !ok {
-		t.Fatalf("Run(workflows dry-run --evnt) error = %v (%T), want UsageError", err, err)
+	for _, flag := range []string{"--whn", "--event", "--enter", "--exit"} {
+		_, err := runLit(t, root, "workflows", "dry-run", flag, "show_ticket")
+		if _, ok := err.(UsageError); !ok {
+			t.Fatalf("Run(workflows dry-run %s) error = %v (%T), want UsageError", flag, err, err)
+		}
 	}
 }
 
@@ -495,9 +525,9 @@ func TestWorkflowsDryRunRejectsUnknownFlags(t *testing.T) {
 func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nevents: [work_finished]\n---\nbody")
+	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nwhen: [enter closed]\n---\nbody")
 
-	if _, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished"); err != nil {
+	if _, err := runLit(t, root, "workflows", "dry-run", "--when", "enter closed"); err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
 	traceDir := filepath.Join(root, ".lit", "traces", "workflows")
@@ -506,35 +536,10 @@ func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 	}
 }
 
-// A start enters in_progress and plan at once, and dry-run can say so: --enter
-// repeats, the occasion line lists every state entered, and each definition
-// names the one state that matched it.
-func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
-	t.Parallel()
-	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "plan.md", "---\nid: plan-note\nstates: [plan]\n---\nPlan <id> first.")
-	writeCLIWorkflow(t, root, "working.md", "---\nid: working-note\nstates: [in_progress]\n---\nWorking on <id>.")
-
-	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_started", "--exit", "open", "--enter", "in_progress", "--enter", "plan", "--issue", "lit-7")
-	if err != nil {
-		t.Fatalf("Run(workflows dry-run) error = %v", err)
-	}
-	for _, want := range []string{
-		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
-		"Fired (3)\n",
-		`phase-plan "Plan the ticket, then record when the code starts" (embedded)  [state:plan(enter)]` + "\n",
-		"plan-note (project)  [state:plan(enter)]\n",
-		"working-note (project)  [state:in_progress(enter)]\n",
-	} {
-		if !strings.Contains(output, want) {
-			t.Errorf("dry-run output = %q, want it to contain %q", output, want)
-		}
-	}
-}
-
-// The phases are built-in states: the overview walks them after in_progress,
-// in work order, before closed, each with the embedded default bound to
-// entering it.
+// The phases are built-in states: the overview walks entering and exiting
+// each after in_progress, in work order, before closed, each phase with the
+// embedded default bound to entering it — after the event catalog, in the
+// spelling a `when:` entry uses.
 func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
@@ -549,35 +554,22 @@ func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 		"review": `phase-review "Record when the merge is under way"`,
 		"merge":  `phase-merge "Close the ticket once it has merged"`,
 	}
+	shipped["closed"] = `done "Post-close capture reminder"`
 	var spine strings.Builder
+	spine.WriteString("\nWhen\n")
+	for _, event := range workflows.Catalog() {
+		spine.WriteString("  " + string(event) + "\n")
+	}
 	for _, state := range []string{"open", "in_progress", "plan", "impl", "review", "merge", "closed"} {
-		enter := "    enter\n"
+		enter := "  enter " + state + "\n"
 		if def, ok := shipped[state]; ok {
-			enter = "    enter  [" + def + " (embedded)]\n"
+			enter = "  enter " + state + "  [" + def + " (embedded)]\n"
 		}
-		spine.WriteString("  " + state + "\n" + enter + "    exit\n")
+		spine.WriteString(enter + "  exit " + state + "\n")
 	}
-	if !strings.Contains(output, "\nStates\n"+spine.String()) {
-		t.Fatalf("workflows output = %q, want the States spine %q", output, spine.String())
-	}
-}
-
-// A phase named bare is a built-in state, so edit scaffolds it as one, on the
-// enter side, rather than as a label.
-func TestWorkflowsEditScaffoldsABarePhaseAsAState(t *testing.T) {
-	t.Parallel()
-	root := tempRepo(t)
-
-	if _, err := runLit(t, root, "workflows", "edit", "review"); err != nil {
-		t.Fatalf("Run(workflows edit review) error = %v", err)
-	}
-	path := filepath.Join(root, ".lit", "workflows", "review.md")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", path, err)
-	}
-	if !strings.Contains(string(content), "\nstates: [\"review\"]\n") {
-		t.Fatalf("scaffolded content = %q, want the live states line for review", content)
+	spine.WriteString("\nLabels\n")
+	if !strings.Contains(output, spine.String()) {
+		t.Fatalf("workflows output = %q, want the When spine %q", output, spine.String())
 	}
 }
 
@@ -610,17 +602,17 @@ func TestWorkflowsHelpNamesThePhasesAndEveryEvent(t *testing.T) {
 
 // TestWorkflowsOverviewPrintsLeastToMostSpecificFirst pins the print order at a
 // shared point: the embedded default is listed before the project definition
-// bound to the same event, even though the project id sorts first.
+// bound to the same crossing, even though the project id sorts first.
 func TestWorkflowsOverviewPrintsLeastToMostSpecificFirst(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "closing.md", "---\nid: close-note\nevents: [work_finished]\n---\nNote it.")
+	writeCLIWorkflow(t, root, "closing.md", "---\nid: close-note\nwhen: [enter closed]\n---\nNote it.")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
-	want := `work_finished  [done "Post-close capture reminder" (embedded), close-note (project)]`
+	want := `enter closed  [done "Post-close capture reminder" (embedded), close-note (project)]`
 	if !strings.Contains(output, want) {
 		t.Fatalf("workflows output = %q, want %q", output, want)
 	}

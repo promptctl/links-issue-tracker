@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/trace"
@@ -30,11 +31,9 @@ type FiringRecord struct {
 	ID          string            `json:"id"`
 	RecordedAt  string            `json:"recorded_at"`
 	WorkspaceID string            `json:"workspace_id"`
-	Event       string            `json:"event,omitempty"`
+	When        []string          `json:"when,omitempty"`
 	IssueID     string            `json:"issue_id,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
-	Entered     []string          `json:"entered,omitempty"`
-	Exited      []string          `json:"exited,omitempty"`
 	Fired       []FiredDefinition `json:"fired"`
 }
 
@@ -51,16 +50,15 @@ func recordFiring(ws workspace.Info, o Occasion, matched []Definition) (string, 
 			Reasons: def.MatchReasons(o),
 		}
 	}
-	_, path, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(string(o.Event)), func(id string, recordedAt time.Time) ([]byte, error) {
+	when := Spellings(o.Moments)
+	_, path, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(strings.Join(when, " ")), func(id string, recordedAt time.Time) ([]byte, error) {
 		record := FiringRecord{
 			ID:          id,
 			RecordedAt:  recordedAt.Format(time.RFC3339Nano),
 			WorkspaceID: ws.WorkspaceID,
-			Event:       string(o.Event),
+			When:        when,
 			IssueID:     o.IssueID.Raw(),
 			Labels:      o.Labels,
-			Entered:     o.Entered,
-			Exited:      o.Exited,
 			Fired:       fired,
 		}
 		payload, err := json.MarshalIndent(record, "", "  ")

@@ -3,6 +3,9 @@ package workflows
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -12,66 +15,33 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
-// frontmatter is the YAML shape of a definition file's header. Unknown keys
-// are deliberately tolerated: a file authored for a newer lit must still load
-// here with the keys this binary understands.
+// frontmatter is the YAML shape of a definition file's header: the keys this
+// lit reads, and every other key in Unread. [LAW:one-source-of-truth] the
+// fields are the one list of keys lit reads; Unread is whatever they do not
+// declare, so no second list can drift from them.
 type frontmatter struct {
-	ID     string            `yaml:"id"`
-	Name   string            `yaml:"name"`
-	Labels []string          `yaml:"labels"`
-	States []StateActivation `yaml:"states"`
-	Events []string          `yaml:"events"`
+	ID     string         `yaml:"id"`
+	Name   string         `yaml:"name"`
+	When   []string       `yaml:"when"`
+	Labels []string       `yaml:"labels"`
+	Unread map[string]any `yaml:",inline"`
 }
 
-// UnmarshalYAML accepts a state activation in either authored shape: a bare
-// scalar state name (meaning enter), or a mapping with `name` and an optional
-// `when: enter|exit`.
-func (s *StateActivation) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		s.State = canonicalState(node.Value)
-		s.When = WhenEnter
-		return nil
-	case yaml.MappingNode:
-		var aux struct {
-			Name string `yaml:"name"`
-			When string `yaml:"when"`
-		}
-		if err := node.Decode(&aux); err != nil {
-			return err
-		}
-		when, err := parseWhen(aux.When)
-		if err != nil {
-			return err
-		}
-		name := canonicalState(aux.Name)
-		// A mapping entry carries authored intent; refusing a nameless one here
-		// keeps that intent from vanishing in a silent drop downstream.
-		// [LAW:parse-dont-validate]
-		if name == "" {
-			return fmt.Errorf("state entry mapping requires a non-empty name")
-		}
-		s.State = name
-		s.When = when
-		return nil
-	default:
-		return fmt.Errorf("state entry must be a state name or a {name, when} mapping")
+// ParseMoment reads one `when:` entry, the one reader of that spelling for
+// the frontmatter, `lit workflows dry-run --when` and `lit workflows edit`:
+// `enter <state>` or `exit <state>` is a Crossing, any other text an Event.
+// Case and runs of whitespace do not matter, like every frontmatter value,
+// so the result is in the canonical form an Occasion carries. Blank text is
+// no moment (ok=false). [LAW:parse-dont-validate] [LAW:single-enforcer]
+func ParseMoment(text string) (Moment, bool) {
+	words := strings.Fields(strings.ToLower(text))
+	if len(words) == 0 {
+		return nil, false
 	}
-}
-
-// parseWhen is the one place a raw `when:` value becomes a When: absent means
-// enter, anything but enter/exit (case-insensitive, like every frontmatter
-// field) is a parse error the caller reports as a malformed file.
-// [LAW:parse-dont-validate]
-func parseWhen(raw string) (When, error) {
-	switch When(strings.ToLower(strings.TrimSpace(raw))) {
-	case "", WhenEnter:
-		return WhenEnter, nil
-	case WhenExit:
-		return WhenExit, nil
-	default:
-		return "", fmt.Errorf("when must be %q or %q, got %q", WhenEnter, WhenExit, raw)
+	if side := Side(words[0]); len(words) > 1 && (side == Enter || side == Exit) {
+		return Crossing{Side: side, State: strings.Join(words[1:], " ")}, true
 	}
+	return Event(strings.Join(words, " ")), true
 }
 
 const frontmatterDelimiter = "---"
@@ -115,6 +85,15 @@ func splitFrontmatter(content string) (header string, body string, found bool, e
 // definition; missing activation keys and unknown events are loaded as
 // authored, each with a warning so the mistake is observable rather than
 // silently inert. [LAW:no-silent-failure]
+//
+// A file carrying a key lit does not read yields a definition with no
+// activation at all: it never fires, and it still holds its id, so a farther
+// layer's definition of that id does not fire in its place. lit cannot tell
+// whether the key was meant to narrow when the definition fires (a `where:`
+// written for a newer lit, an `events:` from an older one beside `labels:`),
+// so firing on the keys it does read could fire more than the author wrote,
+// and dropping the file could fire what the author replaced. What fires for an
+// id is what its nearest author wrote, or nothing. [LAW:no-silent-failure]
 func parseDefinition(content, path string, source templates.Source) (Definition, []Warning, bool) {
 	warn := func(message string) Warning {
 		return Warning{Source: source, Path: path, Message: message}
@@ -129,29 +108,51 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 		return Definition{}, []Warning{warn("invalid frontmatter: " + err.Error())}, false
 	}
 
-	var warnings []Warning
-	labels, labelWarns := canonicalLabels(meta.Labels, warn)
-	warnings = append(warnings, labelWarns...)
-
 	def := Definition{
 		ID:     precedence.First(strings.TrimSpace(meta.ID), defaultID(path)),
 		Name:   strings.TrimSpace(meta.Name),
-		Labels: labels,
-		States: compactStates(meta.States),
-		Events: canonicalEvents(meta.Events),
 		Body:   strings.TrimSpace(body),
 		Source: source,
 		Path:   path,
 	}
-	if def.Inert() {
-		warnings = append(warnings, warn("no activation keys (labels/states/events): definition is inert and will never fire"))
+	if len(meta.Unread) > 0 {
+		return def, []Warning{warn(unreadKeysMessage(slices.Sorted(maps.Keys(meta.Unread))))}, true
 	}
-	for _, event := range def.Events {
-		if !event.Known() {
-			warnings = append(warnings, warn(fmt.Sprintf("unknown event %q: not in this lit's catalog, will never fire here", event)))
+
+	labels, warnings := canonicalLabels(meta.Labels, warn)
+	def.When = parseWhen(meta.When)
+	def.Labels = labels
+	if def.Inert() {
+		warnings = append(warnings, warn("no activation keys (when/labels): definition is inert and will never fire"))
+	}
+	for _, moment := range def.When {
+		if !moment.Known() {
+			warnings = append(warnings, warn(fmt.Sprintf("unknown event %q: not in this lit's catalog, will never fire here; a change of a ticket's state is written enter <state> or exit <state> (when: [enter closed])", moment)))
 		}
 	}
 	return def, warnings, true
+}
+
+// unreadKeysMessage names the keys lit did not read and the spelling it does,
+// so an author holding a file written for another lit sees what to write.
+func unreadKeysMessage(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, key := range keys {
+		quoted[i] = strconv.Quote(key)
+	}
+	return fmt.Sprintf("this lit does not read %s, so the definition never fires; it reads when: for the moments a definition fires at (when: [enter closed], when: [show_ticket]) and labels: for the tickets it fires on", strings.Join(quoted, ", "))
+}
+
+// parseWhen reads a `when:` list through ParseMoment, dropping blank entries
+// as authoring noise, like an empty label.
+func parseWhen(entries []string) []Moment {
+	var out []Moment
+	for _, entry := range entries {
+		if moment, ok := ParseMoment(entry); ok {
+			out = append(out, moment)
+		}
+	}
+	return out
 }
 
 // defaultID derives a definition's ID from its layer-relative path: the ".md"
@@ -183,42 +184,4 @@ func canonicalLabels(values []string, warn func(string) Warning) ([]string, []Wa
 		out = append(out, normalized)
 	}
 	return out, warnings
-}
-
-// canonicalState stamps an authored state name into canonical form: trimmed
-// and lowercased, matching how the lifecycle spells the states an Occasion
-// carries. Lowercase-at-the-parse-boundary is the one convention shared by
-// all three activation dimensions; a future custom-stage feature inherits it.
-func canonicalState(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// canonicalEvents stamps authored event entries into the catalog's canonical
-// form: trimmed and lowercased, empties dropped. Catalog names are lowercase
-// snake_case by contract (the catalog test enforces it), so lowercasing here
-// can never collide two distinct events — it only resolves case variants to
-// the form the catalog speaks, symmetric with label canonicalization.
-// [LAW:parse-dont-validate]
-func canonicalEvents(values []string) []Event {
-	var out []Event
-	for _, value := range values {
-		if trimmed := strings.ToLower(strings.TrimSpace(value)); trimmed != "" {
-			out = append(out, Event(trimmed))
-		}
-	}
-	return out
-}
-
-// compactStates drops activations whose state name trimmed to nothing. Only
-// bare empty scalars can reach here — a nameless mapping is already rejected
-// at unmarshal — so what drops is authoring noise with no intent attached,
-// exactly like an empty label or event entry.
-func compactStates(activations []StateActivation) []StateActivation {
-	var out []StateActivation
-	for _, activation := range activations {
-		if activation.State != "" {
-			out = append(out, activation)
-		}
-	}
-	return out
 }

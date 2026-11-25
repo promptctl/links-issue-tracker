@@ -6,17 +6,17 @@
 // recursively under a layer root (`.lit/workflows/` in the project,
 // `<config>/workflows/` globally, embedded defaults last). The folder
 // hierarchy is arbitrary and user-defined — the path carries no activation
-// meaning; frontmatter alone decides where a definition activates, along
-// three declarative dimensions:
+// meaning; frontmatter alone decides where a definition activates, with two
+// keys:
 //
+//   - when: any of the listed moments happened — a crossing of the ticket's
+//     state (`enter closed`, `exit plan`) or a read moment's event
+//     (`show_ticket`, see events.go)
 //   - labels: the acted-on ticket carries any of the listed labels
-//   - states: the ticket enters or exits any of the listed states
-//   - events: any of the listed semantic events fired (see events.go)
 //
-// Within a dimension the listed values are alternatives (OR); a definition
-// with several dimensions requires all of them (AND). A dimension left out
-// constrains nothing. A definition with no dimensions at all is inert: it
-// loads, it is visible, it never fires.
+// Within a key the listed values are alternatives (OR); a definition with
+// both requires both (AND). A key left out constrains nothing. A definition
+// with neither is inert: it loads, it is visible, it never fires.
 //
 // Workflow bodies are injected text, never executed, and no lifecycle is
 // enforced or gated — this package only answers "which guidance is in place,
@@ -27,34 +27,64 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
-// When says from which side a state activation observes a transition: the
-// ticket entering the state, or exiting it. A transition between two states
-// is expressible as exit-of-one plus enter-of-the-other; there is no separate
+// Moment is one thing that can happen at an occasion, and one entry of a
+// definition's `when:` list: a read moment, named by its Event, or a Crossing
+// of the ticket's state. An occasion carries the moments that happened and a
+// definition lists the moments it fires on, so matching is equality between
+// the two and nothing else. [LAW:types-are-the-program] the union is sealed:
+// Event and Crossing are its only members.
+type Moment interface {
+	// String is the moment as a `when:` entry spells it, the spelling
+	// ParseMoment reads back.
+	String() string
+	// Known reports whether this lit can produce the moment: every crossing,
+	// since a state is an open string, and the events in its catalog.
+	Known() bool
+	moment()
+}
+
+// Side is which way a crossing goes through its state. A transition between
+// two states is exit-of-one plus enter-of-the-other; there is no separate
 // transition concept.
-type When string
+type Side string
 
 const (
-	WhenEnter When = "enter"
-	WhenExit  When = "exit"
+	Enter Side = "enter"
+	Exit  Side = "exit"
 )
 
-// StateActivation binds a definition to one state from one side. State names
+// Crossing is a ticket's state changing into or out of one state. State names
 // are open strings, deliberately not the lifecycle enum: built-in states
-// (open, in_progress, closed) and future custom stages are the same shape,
-// so new stage names need zero new machinery here.
+// (open, in_progress, closed, the phases inside in_progress) and future custom
+// stages are the same shape, so a new stage needs no new machinery here.
 // [LAW:one-type-per-behavior]
-type StateActivation struct {
+type Crossing struct {
+	Side  Side
 	State string
-	When  When
+}
+
+func (c Crossing) String() string { return string(c.Side) + " " + c.State }
+func (Crossing) Known() bool      { return true }
+func (Crossing) moment()          {}
+
+// Spellings is each moment as a `when:` entry spells it, in order — the one
+// rendering every display, trace and event fact shares.
+// [LAW:one-source-of-truth]
+func Spellings(moments []Moment) []string {
+	out := make([]string, len(moments))
+	for i, m := range moments {
+		out[i] = m.String()
+	}
+	return out
 }
 
 // Definition is one loaded workflow definition: its identity, the activation
-// dimensions parsed from frontmatter, the guidance body, and where it came
-// from.
+// keys parsed from frontmatter, the guidance body, and where it came from.
 type Definition struct {
 	// ID is the definition's primary key across layers: a nearer layer's
 	// definition overrides a farther one with the same ID. Defaults to the
@@ -64,9 +94,8 @@ type Definition struct {
 	// Name is an optional pretty name for display surfaces.
 	Name string
 
+	When   []Moment
 	Labels []string
-	States []StateActivation
-	Events []Event
 
 	// Body is the guidance markdown injected when the definition fires.
 	Body string
@@ -77,10 +106,10 @@ type Definition struct {
 	Path   string
 }
 
-// Inert reports whether the definition declares no activation dimension at
-// all. An inert definition never fires.
+// Inert reports whether the definition declares no activation key at all. An
+// inert definition never fires.
 func (d Definition) Inert() bool {
-	return len(d.Labels) == 0 && len(d.States) == 0 && len(d.Events) == 0
+	return len(d.When) == 0 && len(d.Labels) == 0
 }
 
 // Warning is a non-fatal problem found while loading definitions. Loading
@@ -90,6 +119,14 @@ type Warning struct {
 	Source  templates.Source
 	Path    string
 	Message string
+}
+
+// String is the warning on one line — its layer, its file, and its message
+// with any newlines of its own (a yaml parse error's, say) collapsed — the one
+// rendering `lit workflows`, a dispatching command's stderr and its event all
+// share. [LAW:one-source-of-truth]
+func (w Warning) String() string {
+	return fmt.Sprintf("%s %s: %s", w.Source, w.Path, strings.Join(strings.Fields(w.Message), " "))
 }
 
 // Set is the merged, precedence-resolved collection of workflow definitions

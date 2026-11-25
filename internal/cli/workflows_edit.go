@@ -22,11 +22,11 @@ import (
 //     override — open it directly. A global/embedded one gets copied
 //     verbatim into a new project-layer file at its own relative path, ready
 //     to edit.
-//   - Anything else: treated as a lifecycle point (an event name, a state
-//     name optionally suffixed `:enter`/`:exit`, or — falling through — a
-//     label) with no definition bound there yet. A fresh file is scaffolded
-//     under `.lit/workflows/`, commented to show every activation dimension,
-//     with the requested one live.
+//   - Anything else: treated as a lifecycle point (a moment spelled as a
+//     `when:` entry — `enter <state>`, `exit <state>`, an event — or, falling
+//     through, a label) with no definition bound there yet. A fresh file is
+//     scaffolded under `.lit/workflows/`, commented to show each activation
+//     key, with the requested one live.
 //
 // Neither shape ever overwrites an existing file — scaffolding always writes
 // only under the project's `.lit/workflows/`, never into the global or
@@ -62,12 +62,12 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 }
 
 func editFreshDefinition(inv Invocation, ws workspace.Info, point string) error {
-	dimension, liveLine, slug := classifyWorkflowPoint(point)
-	projectPath := projectWorkflowPath(ws, slug+".md")
+	key, liveLine := classifyWorkflowPoint(point)
+	projectPath := projectWorkflowPath(ws, scaffoldFilenameSlug(point)+".md")
 	if err := refuseExistingFile(projectPath, point); err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(dimension, liveLine)); err != nil {
+	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(key, liveLine)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
@@ -155,8 +155,9 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 
 // unsafeScaffoldFilenameChars is everything a fresh scaffold's filename
 // strips: anything but lowercase letters, digits, underscore, and hyphen —
-// deliberately keeping underscore so an event name like "work_started"
-// scaffolds to the readable "work_started.md" rather than "work-started.md".
+// deliberately keeping underscore so an event name like "show_ticket"
+// scaffolds to the readable "show_ticket.md" rather than "show-ticket.md",
+// and "enter in_progress" to "enter-in_progress.md".
 var unsafeScaffoldFilenameChars = regexp.MustCompile(`[^a-z0-9_-]+`)
 
 func scaffoldFilenameSlug(input string) string {
@@ -170,86 +171,29 @@ func scaffoldFilenameSlug(input string) string {
 }
 
 // classifyWorkflowPoint turns a `lit workflows edit` target that matched no
-// loaded definition into the activation dimension it names, in one
-// deterministic order, the one `lit workflows --help` documents:
-//
-//  1. Explicit `<state>:enter` / `<state>:exit` — states are open strings by
-//     design, so this needs no validation against a known set.
-//  2. A name in the event catalog — an event.
-//  3. One of the built-in lifecycle states or phases, bare (defaults to enter).
-//  4. Anything else — a label; labels are open vocabulary too.
-//
-// [LAW:dataflow-not-control-flow] one function, one ordered set of checks;
-// which branch fires is decided entirely by the input, never by a caller
-// flag.
-func classifyWorkflowPoint(point string) (dimension string, liveLine string, filenameSlug string) {
-	if state, when, ok := parseStatePointSuffix(point); ok {
-		return "states", stateActivationLine(state, when), stateFilenameSlug(state, when)
+// loaded definition into the activation key it names, the one way `lit
+// workflows --help` documents: a point workflows.ParseMoment reads as a moment
+// this lit fires — `enter <state>` or `exit <state>` for any state, since
+// states are open strings, or an event in the catalog — is a `when:` entry;
+// anything else is a label, since labels are open vocabulary too.
+// [LAW:single-enforcer] the point is read by the same parser as a `when:`
+// entry, so the two spellings cannot drift.
+func classifyWorkflowPoint(point string) (key string, liveLine string) {
+	if moment, ok := workflows.ParseMoment(point); ok && moment.Known() {
+		return "when", fmt.Sprintf("when: [%s]", yamlDoubleQuoted(moment.String()))
 	}
-	if workflows.Event(point).Known() {
-		return "events", fmt.Sprintf("events: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
-	}
-	if isBuiltinState(point) {
-		return "states", stateActivationLine(point, workflows.WhenEnter), stateFilenameSlug(point, workflows.WhenEnter)
-	}
-	return "labels", fmt.Sprintf("labels: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
+	return "labels", fmt.Sprintf("labels: [%s]", yamlDoubleQuoted(point))
 }
 
 // yamlDoubleQuoted wraps a value as a YAML double-quoted scalar — the one
 // style whose only special characters are `\` and `"` (a flow-context
 // character like `,` or `]` is literal inside the quotes) — so a point
 // containing a comma, bracket, or colon embeds safely into the flow sequence
-// ScaffoldFresh's live dimension line renders. [LAW:single-enforcer] every
+// ScaffoldFresh's live key line renders. [LAW:single-enforcer] every
 // value embedded into scaffolded frontmatter routes through this one
 // escaper, applied uniformly rather than only when a special character
 // happens to be present.
 func yamlDoubleQuoted(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
 	return `"` + replacer.Replace(value) + `"`
-}
-
-// parseStatePointSuffix splits at the LAST colon, not the first: state names
-// are open strings with no restriction against containing one (e.g.
-// "deploy:staging"), so splitting on the first colon would misparse
-// "deploy:staging:enter" as name "deploy", suffix "staging:enter" and fall
-// through to misclassifying the whole point as a label.
-func parseStatePointSuffix(point string) (state string, when workflows.When, ok bool) {
-	i := strings.LastIndex(point, ":")
-	if i < 0 {
-		return "", "", false
-	}
-	name, suffix := point[:i], point[i+1:]
-	switch strings.ToLower(strings.TrimSpace(suffix)) {
-	case "enter":
-		return strings.TrimSpace(name), workflows.WhenEnter, true
-	case "exit":
-		return strings.TrimSpace(name), workflows.WhenExit, true
-	default:
-		return "", "", false
-	}
-}
-
-func isBuiltinState(point string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(point))
-	for _, state := range builtinStates {
-		if state == normalized {
-			return true
-		}
-	}
-	return false
-}
-
-func stateActivationLine(state string, when workflows.When) string {
-	if when == workflows.WhenExit {
-		return fmt.Sprintf("states: [{name: %s, when: exit}]", yamlDoubleQuoted(state))
-	}
-	return fmt.Sprintf("states: [%s]", yamlDoubleQuoted(state))
-}
-
-func stateFilenameSlug(state string, when workflows.When) string {
-	slug := scaffoldFilenameSlug(state)
-	if when == workflows.WhenExit {
-		return slug + "_exit"
-	}
-	return slug
 }

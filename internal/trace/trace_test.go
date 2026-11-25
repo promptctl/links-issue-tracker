@@ -71,10 +71,11 @@ func TestWriteRetriesOnFilenameCollision(t *testing.T) {
 
 func TestSlugCanonicalizesAndFallsBackOnEmpty(t *testing.T) {
 	cases := map[string]string{
-		"work_finished":      "work-finished",
-		"  Git Pre-Push!!  ": "git-pre-push",
-		"":                   "trace",
-		"   ":                "trace",
+		"show_ticket":              "show-ticket",
+		"exit review enter closed": "exit-review-enter-closed",
+		"  Git Pre-Push!!  ":       "git-pre-push",
+		"":                         "trace",
+		"   ":                      "trace",
 	}
 	for input, want := range cases {
 		if got := Slug(input); got != want {

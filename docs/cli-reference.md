@@ -120,7 +120,7 @@ reads a comma as the separator between names.
 ### Transition guidance
 
 Every lifecycle transition is single-phase: one invocation performs the action. `lit done`
-additionally prints **post-close guidance** — a prompt to capture, while context is fresh,
+and `lit close` additionally print **post-close guidance** — a prompt to capture, while context is fresh,
 whatever the next agent needs (follow-ups, comments on adjacent tickets). It does not gate
 the close.
 
@@ -129,10 +129,10 @@ has merged, so it cannot gate the merge. Pre-merge verification belongs at the b
 runs before merge — CI and required PR checks — which lit deliberately does not own. lit
 dictates nothing about a repository's CI, PR, or merge process.
 
-The guidance comes from workflows: user-customizable definitions bound to the
-`work_finished` semantic event (or any label/state/event combination) inject their body
-into the command's output. `done`'s post-close reminder above is the only definition
-shipped as an embedded default today.
+The guidance comes from workflows: user-customizable definitions bound to a moment
+such as `when: [enter closed]`, which both `lit done` and `lit close` make, optionally
+narrowed by `labels:`, inject their body into the command's output. The embedded `done`
+definition is the post-close reminder above.
 
 ### Lifecycle
 
@@ -1305,23 +1305,23 @@ Mutation commands point back here at the moment of need: the text success output
 ### `lit workflows`
 
 ```text
-lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]
+lit workflows [show <id> | edit <id-or-point> | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
 ```
 
 See [Workflows](workflows.md) for what the feature is, and run `lit workflows --help`
-for the definition format, the activation rules, and the event catalog.
-Bare `lit workflows` prints the lifecycle spine (every dispatched event, the
-built-in states and the phases inside `in_progress` with enter/exit, and any bound
-labels) annotated with the definitions
-active at each point and their source layer; `show <id>` resolves one definition
-fully. `edit <id-or-point>` scaffolds a project-layer override (an existing
-definition's id) or a fresh definition (an event name, a state name optionally
-suffixed `:enter`/`:exit`, or — falling through — a label), always prints its path,
+for the definition format, the activation rules, and the events.
+Bare `lit workflows` prints every moment a `when:` entry can name, spelled as one
+(each event, then `enter` and `exit` of each built-in state with the phases inside
+`in_progress`, then any custom stage a definition crosses), and any bound labels,
+annotated with the definitions active at each and their source layer; `show <id>`
+resolves one definition fully. `edit <id-or-point>` scaffolds a project-layer override
+(an existing definition's id) or a fresh definition (a `when:` entry such as
+`enter review` or `show_ticket`, or — falling through — a label), always prints its path,
 and additionally opens it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
 fire, why, and the body each would inject — without anything actually firing.
-`--enter` and `--exit` repeat, because one transition can enter several states:
-`lit start` from open enters `in_progress` and `plan`.
+`--when` takes an entry spelled as in a definition and repeats, because one transition
+makes several crossings: `lit start` from open is `--when "exit open" --when "enter in_progress" --when "enter plan"`.
 
 ### `lit completion`
 

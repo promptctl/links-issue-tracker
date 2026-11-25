@@ -3,6 +3,7 @@ package workflows
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func TestRawDefaultReadsGlobalLayer(t *testing.T) {
 	if err := os.MkdirAll(globalWorkflows, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s) error = %v", globalWorkflows, err)
 	}
-	content := "---\nid: my-global\nevents: [show_ticket]\n---\nglobal body"
+	content := "---\nid: my-global\nwhen: [show_ticket]\n---\nglobal body"
 	if err := os.WriteFile(filepath.Join(globalWorkflows, "custom.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -44,18 +45,36 @@ func TestRawDefaultRejectsProjectLayer(t *testing.T) {
 	}
 }
 
-func TestScaffoldFreshOmitsTheLiveDimensionsCommentedExample(t *testing.T) {
-	content := string(ScaffoldFresh("events", "events: [work_started]"))
-	if !strings.Contains(content, "events: [work_started]") {
-		t.Fatalf("ScaffoldFresh() = %q, want the live events line uncommented", content)
+func TestScaffoldFreshOmitsTheLiveKeysCommentedExample(t *testing.T) {
+	content := string(ScaffoldFresh("when", `when: ["enter closed"]`))
+	if !strings.Contains(content, "\n"+`when: ["enter closed"]`+"\n") {
+		t.Fatalf("ScaffoldFresh() = %q, want the live when line uncommented", content)
 	}
-	if strings.Contains(content, "# events: [work_started]") {
-		t.Fatalf("ScaffoldFresh() = %q, want no redundant commented events example", content)
+	if strings.Contains(content, "# when: [") {
+		t.Fatalf("ScaffoldFresh() = %q, want no redundant commented when example", content)
 	}
 	if !strings.Contains(content, "# labels: [needs-design, blocked]") {
-		t.Fatalf("ScaffoldFresh() = %q, want the labels dimension shown commented as reference", content)
+		t.Fatalf("ScaffoldFresh() = %q, want the labels key shown commented as reference", content)
 	}
-	if !strings.Contains(content, "# states: [open]") {
-		t.Fatalf("ScaffoldFresh() = %q, want the states dimension shown commented as reference", content)
+
+	content = string(ScaffoldFresh("labels", `labels: ["needs-design"]`))
+	if !strings.Contains(content, "# when: [enter review, exit plan, show_ticket]") {
+		t.Fatalf("ScaffoldFresh() = %q, want the when key shown commented as reference", content)
+	}
+	if strings.Contains(content, "# labels: [") {
+		t.Fatalf("ScaffoldFresh() = %q, want no redundant commented labels example", content)
+	}
+}
+
+// A fresh scaffold parses, once it is filled in, to the definition its live
+// line names and loads with no warning: its commented reference is the
+// format this lit reads.
+func TestScaffoldFreshParsesCleanly(t *testing.T) {
+	def, warnings, ok := parseDefinition(string(ScaffoldFresh("when", `when: ["enter closed"]`)), "enter-closed.md", templates.SourceProject)
+	if !ok || len(warnings) != 0 {
+		t.Fatalf("parseDefinition(scaffold) ok=%v warnings=%v, want a clean load", ok, warnings)
+	}
+	if want := []Moment{Crossing{Side: Enter, State: "closed"}}; !reflect.DeepEqual(def.When, want) {
+		t.Fatalf("When = %v, want %v", def.When, want)
 	}
 }

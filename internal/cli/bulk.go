@@ -309,7 +309,7 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			}
 			return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
 				did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
-				return did.notice, err
+				return did.said, err
 			})
 		}}
 	}

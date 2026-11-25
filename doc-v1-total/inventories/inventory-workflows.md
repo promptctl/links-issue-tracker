@@ -29,7 +29,7 @@ Frontmatter delimiter rules (`internal/workflows/parse.go`):
   (`internal/workflows/parse_test.go` pin CRLF files and trailing-whitespace delimiters).
 - The **first line of the file** must be a delimiter for frontmatter to exist at all. If it isn't,
   `found=false` and the **entire file content is the body**, with no frontmatter
-  (`internal/workflows/parse.go`). Such a file loads successfully but is inert — see §1.7
+  (`internal/workflows/parse.go`). Such a file loads successfully but is inert — see §1.8
   (`internal/workflows/parse_test.go`).
 - Scanning then proceeds line by line until the next delimiter line; that line closes the header,
   and everything after it is the body (`internal/workflows/parse.go`).
@@ -42,27 +42,31 @@ Frontmatter delimiter rules (`internal/workflows/parse.go`):
 
 ### 1.2 Frontmatter keys — the complete list
 
-The YAML struct is `internal/workflows/parse.go`:
+The YAML struct is `frontmatter` (`internal/workflows/parse.go`):
 
 | YAML key | Go type | Meaning |
 |---|---|---|
 | `id` | string | `internal/workflows/parse.go` |
 | `name` | string | `internal/workflows/parse.go` |
+| `when` | list of string, each read by `ParseMoment` | `internal/workflows/parse.go` |
 | `labels` | list of string | `internal/workflows/parse.go` |
-| `states` | list of StateActivation | `internal/workflows/parse.go` |
-| `events` | list of string | `internal/workflows/parse.go` |
+| *(any other key)* | `Unread map[string]any`, tagged `yaml:",inline"` | `internal/workflows/parse.go` |
 
-**Unknown keys are tolerated and ignored** — deliberately, so a file authored for a newer `lit`
-still loads (`internal/workflows/parse.go`; pinned by
-`internal/workflows/parse_test.go`). There is no `yaml.KnownFields` strictness.
+The four named fields are the one list of keys lit reads; `Unread` collects whatever they do not
+declare, so no second list can drift from them. A file with anything in `Unread` loads but never
+fires — see §1.7. `parseDefinition` (`internal/workflows/parse.go`) turns the parsed frontmatter
+into a `Definition{ID, Name, When []Moment, Labels []string, Body, Source, Path}`
+(`internal/workflows/workflows.go`).
 
 Frontmatter must be a **YAML mapping**. A sequence (`- a\n- b`) or a bare scalar (`hello`) at the
 top level is malformed and the file is skipped (`internal/workflows/parse_test.go` cases
 "non-mapping frontmatter" and "scalar frontmatter" — they fail `yaml.Unmarshal` into the struct at
 `internal/workflows/parse.go`).
 
-`labels: 17` (a non-sequence for a sequence-typed key) is likewise malformed and skips the file
-(`internal/workflows/parse_test.go`).
+`labels: 17` and an unbracketed `when: enter closed` (a non-sequence for a sequence-typed key), and
+a mapping as a `when:` entry (`- {name: closed}`), are likewise malformed and skip the file
+(`internal/workflows/parse_test.go` cases "labels not a sequence", "when not a sequence", "when
+entry a mapping").
 
 ### 1.3 `id`
 
@@ -84,7 +88,7 @@ Optional pretty display name; trimmed (`internal/workflows/parse.go`). Used only
 `formatDefinitionRef` renders `<id> "<name>" (<source>)` when non-empty, else `<id> (<source>)`
 (`internal/cli/workflows.go`).
 
-### 1.5 `labels` — activation dimension 1
+### 1.5 `labels` — the tickets a definition fires on
 
 - Each entry is passed through `model.NormalizeLabel` (`internal/workflows/parse.go`), which
   lowercases and trims (`internal/model/label.go`), rejects empty (`internal/model/label.go`),
@@ -97,65 +101,84 @@ Optional pretty display name; trimmed (`internal/workflows/parse.go`). Used only
   comparison downstream is exact-string and therefore case-insensitive by construction
   (`internal/workflows/parse.go`). Pinned `internal/workflows/parse_test.go`.
 
-### 1.6 `states` — activation dimension 2
+### 1.6 `when` — the moments a definition fires at
 
-A `states:` entry accepts **two authored shapes** (`internal/workflows/parse.go`):
+Each `when:` entry is one **moment**. The types (`internal/workflows/workflows.go`):
 
-1. **A bare scalar state name** — e.g. `states: [open]` or a YAML block sequence item `- open`.
-   This means `when: enter` (`internal/workflows/parse.go`).
-2. **A mapping** with keys `name` and optional `when` — e.g.
-   `states: [{name: closed, when: exit}]` (`internal/workflows/parse.go`).
+- `Moment` — a sealed interface (`String()`, `Known()`, unexported `moment()`) whose only members
+  are `Event` and `Crossing`. An occasion carries the moments that happened and a definition lists
+  the moments it fires on, so matching is equality between the two.
+- `Event` — a read moment, named by its catalog name (§3). `Event.Known()` is catalog membership
+  (`internal/workflows/events.go`).
+- `Crossing{Side, State}` — the ticket's state changing into or out of one state.
+  `Crossing.String()` is `<side> <state>`; `Crossing.Known()` is always true, since a state is an
+  open string.
+- `Side` — `Enter` (`"enter"`) or `Exit` (`"exit"`). A transition between two states is
+  exit-of-one plus enter-of-the-other; there is no separate transition concept.
+- `Spellings(moments)` — each moment's `String()`, in order: the one rendering every display, trace
+  and event fact shares.
 
-Rules:
+`ParseMoment(text) (Moment, bool)` (`internal/workflows/parse.go`) is the one reader of the
+spelling, for the frontmatter, `lit workflows dry-run --when` and `lit workflows edit`:
 
-- `when` legal values: `enter`, `exit`. Absent/empty means `enter`
-  (`internal/workflows/parse.go`). Comparison is `strings.ToLower(strings.TrimSpace(raw))`, so
-  ` EXIT ` works (`internal/workflows/parse.go`; pinned `internal/workflows/parse_test.go`).
-- Any other `when` value is a **parse error** that makes the whole file malformed and skipped —
-  error text `when must be "enter" or "exit", got %q` (`internal/workflows/parse.go`; pinned
-  case "invalid when" `internal/workflows/parse_test.go`).
-- A mapping entry with a name that trims to empty is a parse error: `state entry mapping requires a
-  non-empty name` (`internal/workflows/parse.go`; pinned case "nameless state mapping"
-  `internal/workflows/parse_test.go`).
-- Any other YAML node kind (e.g. a nested sequence `- [open]`) is a parse error: `state entry must
-  be a state name or a {name, when} mapping` (`internal/workflows/parse.go`; pinned case
-  "invalid state entry kind" `internal/workflows/parse_test.go`).
-- State names are canonicalized to `strings.ToLower(strings.TrimSpace(name))`
-  (`internal/workflows/parse.go`). Pinned `internal/workflows/parse_test.go`.
-- A **bare empty scalar** entry (`states: ['', '  open ']`) is dropped without warning by
-  `compactStates` (`internal/workflows/parse.go`; pinned normalization test
-  `internal/workflows/parse_test.go`).
+- The text is lowercased and split with `strings.Fields`. Blank text is no moment (`ok=false`).
+- A first word `enter` or `exit` **followed by at least one more word** is a `Crossing` whose state
+  is the remaining words joined by single spaces. Anything else — a lone `enter` included — is an
+  `Event` of the words joined by single spaces.
+- Pinned `internal/workflows/parse_test.go` (`TestParseMoment`): `Exit  Review` → `exit review`;
+  `enter deploy:staging` → state `deploy:staging`; `enter foo,bar` → state `foo,bar`;
+  `enter ready  to  pull` → state `ready to pull`; `show_ticket` → `EventShowTicket`; `enter` →
+  `Event("enter")`. Every result's `String()` reads back through `ParseMoment` as itself.
+
+`parseWhen` (`internal/workflows/parse.go`) reads the `when:` list through `ParseMoment`, dropping
+blank entries as authoring noise, like an empty label. Case and runs of whitespace never matter
+(`TestParseDefinitionNormalization`: `' Show_Ticket '` and `'  ENTER   In_Progress '` load as
+`show_ticket` and `enter in_progress`, with no warning).
+
 - **State names are open strings, deliberately not a closed enum** (`internal/workflows/workflows.go`).
-  Custom stage names are legal and require no code change. A state name may contain a colon or a
-  comma (`internal/cli/workflows_test.go` scaffolds a state literally named `foo,bar`).
+  Custom stage names are legal and require no code change. A state name may contain a colon, a
+  comma or a space (`internal/workflows/parse_test.go`; `internal/cli/workflows_test.go` scaffolds
+  `exit foo,bar`).
 - The built-in states are `open`, `in_progress`, `closed`
   (`internal/model/lifecycle/lifecycle.go`) and the phases `plan`, `impl`, `review`, `merge`,
   states inside `in_progress` (`internal/model/lifecycle/phase.go`), surfaced in that lifecycle
   order — `open`, `in_progress`, the phases, `closed` — as `builtinStates` at
   `internal/cli/workflows.go`.
+- An event **not in this binary's catalog still loads**, preserved as authored, with one warning
+  per such entry:
+  `unknown event %q: not in this lit's catalog, will never fire here; a change of a ticket's state is written enter <state> or exit <state> (when: [enter closed])`
+  (`internal/workflows/parse.go`). The list's other entries still bind, since entries are
+  alternatives. `work_started`, `phase_set`, `work_finished`, `ticket_closed` and
+  `ticket_reopened` are unknown events of this kind: each loads, warns, and never fires
+  (`internal/workflows/parse_test.go`, `TestParseDefinitionUnknownEventWarnsButLoads`).
 
-Duplicate activations for the same state with different `when` are allowed and preserved as two
-entries (`internal/workflows/parse_test.go`: `open(enter)`, `in_progress(enter)`,
-`in_progress(exit)`).
+### 1.7 Keys lit does not read
 
-### 1.7 `events` — activation dimension 3
+A file whose frontmatter puts anything in `Unread` (§1.2) — `events:`, `states:`, a `where:`
+written for a newer lit, a differently cased `When:` — yields a definition that **holds its id and
+never fires** (`internal/workflows/parse.go`, `parseDefinition`; pinned
+`internal/workflows/parse_test.go`, `TestParseDefinitionUnreadKeysNeverFire`):
 
-- Entries are canonicalized to `strings.ToLower(strings.TrimSpace(value))`, and entries that trim to
-  empty are dropped (`internal/workflows/parse.go`; pinned
-  `internal/workflows/parse_test.go`).
-- An event **not in this binary's catalog still loads**, preserved as authored, plus a warning:
-  `unknown event %q: not in this lit's catalog, will never fire here`
-  (`internal/workflows/parse.go`, `internal/workflows/events.go`; pinned
-  `internal/workflows/parse_test.go`).
+- `parseDefinition` returns as soon as `Unread` is non-empty, with `ID`, `Name`, `Body`, `Source`
+  and `Path` set and neither `when` nor `labels` read, so the definition is inert (§1.8) and no
+  label or unknown-event warning is produced.
+- Because it holds its id, a farther layer's definition of that id does not fire in its place: lit
+  cannot tell whether the unread key was meant to narrow when the definition fires, so what fires
+  for an id is what its nearest author wrote, or nothing.
+- It carries exactly one warning, built by `unreadKeysMessage` from the unread keys sorted and
+  each `strconv.Quote`d, joined by `, `:
+  `this lit does not read %s, so the definition never fires; it reads when: for the moments a definition fires at (when: [enter closed], when: [show_ticket]) and labels: for the tickets it fires on`
+  (`internal/workflows/parse.go`).
 
 ### 1.8 Inertness
 
-`Definition.Inert()` is true when **all three** of Labels, States, Events are empty
+`Definition.Inert()` is true when **both** `When` and `Labels` are empty
 (`internal/workflows/workflows.go`). An inert definition:
 
 - loads successfully and is visible in `lit workflows` listings,
-- produces a warning at parse time: `no activation keys (labels/states/events): definition is inert
-  and will never fire` (`internal/workflows/parse.go`),
+- produces a warning at parse time: `no activation keys (when/labels): definition is inert and will never fire`
+  (`internal/workflows/parse.go`) — except a file with unread keys, whose one warning is the
+  unread-key warning (§1.7),
 - **never matches anything** — `Matches` short-circuits false on inert
   (`internal/workflows/match.go`).
 
@@ -171,8 +194,6 @@ This is why a plain markdown file with no frontmatter loads but never fires
   (`internal/workflows/dispatch.go`, `strings.ReplaceAll(body, "<id>", issueID)`).
 - When the occasion carries no issue ID (e.g. `show_backlog`), `<id>` is replaced with the empty
   string — the substitution is unconditional (`internal/workflows/dispatch.go`).
-- The comment at `internal/workflows/dispatch.go` records that a prior mechanism also
-  supported `<token>`, which is **not** supported here.
 
 ### 1.10 A complete, valid example file
 
@@ -182,12 +203,14 @@ One of the five files shipped as embedded defaults, `internal/workflows/defaults
 ---
 id: done
 name: Post-close capture reminder
-events: [work_finished]
+when: [enter closed]
 ---
 Ticket <id> has been closed. Before moving on, take a moment to review related tickets. …
 ```
 
-(Body text in full at `internal/workflows/defaults/done.md`.)
+(Body text in full at `internal/workflows/defaults/done.md`.) `lit done` and `lit close` both make
+`enter closed`, so both print it (`internal/cli/phase_test.go`,
+`TestEveryCrossingFiresOnTheTransitionThatMakesIt`).
 
 ---
 
@@ -209,8 +232,8 @@ Ticket <id> has been closed. Before moving on, take a moment to review related t
    (`internal/workflows/load.go`), rooted at `defaults` so entries walk with root-relative
    paths identical to the other two layers → `templates.SourceEmbedded`
    (`internal/templates/templates.go`). Today the tree contains five files: `done.md`
-   (`events: [work_finished]`), and `phase-plan.md`, `phase-impl.md`, `phase-review.md` and
-   `phase-merge.md`, each bound to entering its phase (`states: [plan]` and so on), whose
+   (`when: [enter closed]`), and `phase-plan.md`, `phase-impl.md`, `phase-review.md` and
+   `phase-merge.md`, each bound to entering its phase (`when: [enter plan]` and so on), whose
    bodies name the command that records the next move — `lit phase <id> --to impl`,
    `lit phase <id> --to review`, `lit phase <id> --to merge`, and `lit done <id>`.
 
@@ -242,12 +265,16 @@ Ticket <id> has been closed. Before moving on, take a moment to review related t
 | Unterminated frontmatter | `unterminated frontmatter: missing closing ---` | `internal/workflows/parse.go` |
 | YAML unmarshal failure | `invalid frontmatter: <err>` | `internal/workflows/parse.go` |
 | Comma-bearing label | `label %q can never match: <err>` | `internal/workflows/parse.go` |
-| Inert definition | `no activation keys (labels/states/events): definition is inert and will never fire` | `internal/workflows/parse.go` |
-| Unknown event | `unknown event %q: not in this lit's catalog, will never fire here` | `internal/workflows/parse.go` |
+| Key lit does not read (file loads, never fires) | `this lit does not read %s, so the definition never fires; it reads when: for the moments a definition fires at (when: [enter closed], when: [show_ticket]) and labels: for the tickets it fires on` | `internal/workflows/parse.go` (`unreadKeysMessage`) |
+| Inert definition | `no activation keys (when/labels): definition is inert and will never fire` | `internal/workflows/parse.go` |
+| Unknown event | `unknown event %q: not in this lit's catalog, will never fire here; a change of a ticket's state is written enter <state> or exit <state> (when: [enter closed])` | `internal/workflows/parse.go` |
 | Duplicate ID *within one layer* | `duplicate id %q (already defined by %s): file ignored` | `internal/workflows/load.go` |
 
 A malformed file is skipped; other files in the same layer still load
-(`internal/workflows/load_test.go`).
+(`internal/workflows/load_test.go`). `Warning.String()` (`internal/workflows/workflows.go`) is the
+one-line rendering, `<source> <path>: <message>` with the message's own newlines collapsed by
+`strings.Join(strings.Fields(msg), " ")`, shared by `lit workflows` (§7.4), every dispatching
+command's stderr, and its `workflows.warnings` fact (§5).
 
 ### 2.4 Merge / override semantics
 
@@ -273,31 +300,31 @@ A malformed file is skipped; other files in the same layer still load
 
 ## 3. The complete event catalog
 
-Eleven events, defined as string constants at `internal/workflows/events.go`:
+Six events, defined as string constants at `internal/workflows/events.go`. An `Event` names a
+**read moment** — lit showing or recording something that changes no ticket's state. A change of
+state is never an event: it is the `Crossing`s it makes (§1.6, §3.2), whichever command makes it,
+so `lit done` and `lit close` reach one `enter closed` and no definition can tell the commands
+apart (`internal/workflows/events.go`).
 
 | Event constant name | Wire name | Fires when | Command |
 |---|---|---|---|
 | `EventShowBacklog` | `show_backlog` | agent views the workable backlog | `lit backlog` — `internal/workflows/events.go` |
 | `EventShowTicket` | `show_ticket` | agent views one ticket's details | `lit show` — `internal/workflows/events.go` |
 | `EventNextPulled` | `next_pulled` | agent asks for the next workable ticket | `lit next` — `internal/workflows/events.go` |
-| `EventWorkStarted` | `work_started` | a ticket is claimed and work begins | `lit start` — `internal/workflows/events.go` |
-| `EventPhaseSet` | `phase_set` | an in-progress ticket's phase is set, whether or not it moves | `lit phase` — `internal/workflows/events.go` |
-| `EventWorkFinished` | `work_finished` | claimed work finishes on the success path | `lit done` — `internal/workflows/events.go` |
-| `EventTicketClosed` | `ticket_closed` | a ticket is closed without finishing (wontfix/obsolete/duplicate) | `lit close` — `internal/workflows/events.go` |
-| `EventTicketReopened` | `ticket_reopened` | a closed ticket is reopened | `lit open` — `internal/workflows/events.go` |
 | `EventTicketCreated` | `ticket_created` | a new ticket is created | `lit new`, `lit followup` — `internal/workflows/events.go` |
 | `EventTicketUpdated` | `ticket_updated` | an existing ticket's fields change | `lit update` — `internal/workflows/events.go` |
 | `EventCommentAdded` | `comment_added` | a comment lands on a ticket | `lit comment` — `internal/workflows/events.go` |
 
 `Catalog()` returns them in **display order**, which differs from declaration order:
-`show_backlog, next_pulled, show_ticket, work_started, phase_set, work_finished, ticket_closed,
-ticket_reopened, ticket_created, ticket_updated, comment_added`
-(`internal/workflows/events.go`). This is the order `lit workflows` prints the Events spine
-in (`internal/cli/workflows.go`).
+`show_backlog, next_pulled, show_ticket, ticket_created, ticket_updated, comment_added`
+(`internal/workflows/events.go`). This is the order `lit workflows` prints the events at the
+head of its When section in (`internal/cli/workflows.go`, `catalogMoments` in
+`internal/cli/workflows_dryrun.go`).
 
 `Event.Known()` = membership in `Catalog()` (`internal/workflows/events.go`). Catalog names
-are contractually lowercase snake_case, enforced by
-`internal/workflows/events_test.go` (`TestCatalogNamesAreStableContractShaped`).
+are contractually lowercase snake_case, unique, and each reads back through `ParseMoment` as the
+event, never as a crossing — enforced by `internal/workflows/events_test.go`
+(`TestCatalogNamesAreStableContractShaped`).
 
 Events are a **stable contract deliberately decoupled from command names** — commands may be
 renamed freely, the event name is what user definitions bind to
@@ -309,47 +336,60 @@ renamed freely, the event name is what user definitions bind to
 
 | Field | Meaning | Citation |
 |---|---|---|
-| `Event Event` | the semantic event, or zero when none | `internal/workflows/match.go` |
-| `IssueID string` | acted-on ticket id; empty for backlog-wide moments. **Never read by matching** — used only for `<id>` interpolation, display, and tracing | `internal/workflows/match.go` |
+| `Moments []Moment` | what happened: the one event a read fires, or every crossing a transition made. Several when a state inside another moves with it — a start from open exits `open` and enters both `in_progress` and `plan`. Empty when a transition left the ticket where it was | `internal/workflows/match.go` |
+| `IssueID model.ID` | acted-on ticket id; empty for backlog-wide moments. **Never read by matching** — used only for `<id>` interpolation, display, and tracing | `internal/workflows/match.go` |
 | `Labels []string` | the ticket's labels in canonical form; nil when no single ticket | `internal/workflows/match.go` |
-| `Entered []string` | states the ticket entered, if a transition happened; several when a state inside another moves with it | `internal/workflows/match.go` |
-| `Exited []string` | states the ticket exited, if a transition happened | `internal/workflows/match.go` |
 
-### 3.2 Per-event payloads, as actually built
+### 3.2 Per-occasion payloads, as actually built
 
 Builders live in `internal/cli/workflow_events.go`:
 
-| Event | Builder | Payload fields set |
+| Occasion | Builder | Payload fields set |
 |---|---|---|
-| `show_ticket` | `showTicketOccasion` `internal/cli/workflow_events.go` | Event, IssueID=`issue.ID`, Labels=`issue.Labels`. No Entered/Exited. |
-| `show_backlog` | `backlogOccasion` `internal/cli/workflow_events.go` | Event only. **No IssueID, no Labels, no transition.** |
-| `next_pulled` | `nextPulledOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
-| `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (the labels it was created with). |
-| `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. **Never carries a transition** — `lit update` rejects `--status` (`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`). |
-| `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
-| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` / `phase_set` | `transitionOccasion` `internal/cli/workflow_events.go` | Event (from the action), IssueID, Labels (post-transition), `Entered` = `difference(after, before)`, `Exited` = `difference(before, after)`, over `ticketState.states` (the status, then its phase if any), each in that order. A reclaim or a move to the current phase yields `[]` for both. |
+| `show_ticket` | `showTicketOccasion` `internal/cli/workflow_events.go` | Moments=`[EventShowTicket]`, IssueID=`issue.ID`, Labels=`issue.Labels`. |
+| `show_backlog` | `backlogOccasion` `internal/cli/workflow_events.go` | Moments=`[EventShowBacklog]` only. **No IssueID, no Labels.** |
+| `next_pulled` | `nextPulledOccasion` `internal/cli/workflow_events.go` | Moments=`[EventNextPulled]`, IssueID, Labels. |
+| `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go` | Moments=`[EventTicketCreated]`, IssueID, Labels (the labels it was created with). |
+| `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go` | Moments=`[EventTicketUpdated]`, IssueID, Labels. **Never carries a crossing** — `lit update` rejects `--status` (`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`). |
+| `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go` | Moments=`[EventCommentAdded]`, IssueID, Labels. |
+| every lifecycle transition (start, phase, done, close, open) | `transitionOccasion` `internal/cli/workflow_events.go` | Moments = `crossings(Exit, before.states(), after.states())` followed by `crossings(Enter, after.states(), before.states())`, IssueID=`after.issue.ID`, Labels (post-transition). |
 
-Lifecycle-action → event mapping, `transitionEvents` (`internal/cli/workflow_events.go`):
-`ActionStart→work_started`, `ActionPhase→phase_set`, `ActionDone→work_finished`,
-`ActionClose→ticket_closed`, `ActionReopen→ticket_reopened`. A non-retention action with no map
-entry **panics**: `workflow_events: no event mapped for lifecycle action %q`
-(`internal/cli/workflow_events.go`).
+`ticketState.states()` is every state the ticket is in, outermost first: its status, then its
+phase if any (`internal/cli/workflow_events.go`). `crossings(side, from, to)` is the side's
+`Crossing` of every state in `from` that is not in `to`, kept in `from`'s order
+(`internal/cli/workflow_events.go`). So a transition's moments are its exits, then its entries,
+each outermost first. Pinned `internal/cli/workflow_events_test.go`
+(`TestTransitionOccasionCrossesBothLevels`):
+
+| Transition | Moments |
+|---|---|
+| start from `open` | `exit open`, `enter in_progress`, `enter plan` |
+| reclaim (start while in progress) | none |
+| done from `merge` | `exit in_progress`, `exit merge`, `enter closed` |
+| close from `open` | `exit open`, `enter closed` |
+| close from `impl` | `exit in_progress`, `exit impl`, `enter closed` |
+| reopen (`lit open`) | `exit closed`, `enter open` |
+| phase `impl` → `review` | `exit impl`, `enter review` |
+| phase to the phase it is in | none |
+
+A transition that crosses nothing still dispatches; only a definition bound by labels alone can
+fire on it (§4).
 The phase on each side is `model.PhaseOf` over the issue's events, read by `readTicketState`
-before and after `Store.Apply` (`internal/cli/cli.go`).
+(through `ticketStateOf`) before and after `Store.Apply` (`internal/cli/cli.go`).
 
-Retention actions (archive/unarchive/delete/restore) fire **no event at all** — `transitionOccasion`
-returns `fires = false` for a `RetentionAction` (`internal/cli/workflow_events.go`; pinned
-`internal/cli/workflow_events_test.go`).
+Retention actions (archive/unarchive/delete/restore) fire **no occasion at all** —
+`transitionOccasion` returns `fires = false` for a `RetentionAction`
+(`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`).
 
-### 3.3 Dispatch call sites — where each event is actually fired
+### 3.3 Dispatch call sites — where each occasion is actually fired
 
-| Site | Event | Position in output |
+| Site | Moments | Position in output |
 |---|---|---|
 | `internal/cli/cli.go` (`newLeaf`) | `ticket_created` | **after** `CreateIssue` succeeds, **before** `printIssueSummary` and the `new` breadcrumb (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`followupLeaf`) | `ticket_created` | after create, before summary/breadcrumb (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`showLeaf`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`updateLeaf`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
-| `internal/cli/cli.go` (`transitionLeaf`) | one of the four status transition events, or `phase_set` | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `transitionOccasion`'s `fires` (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`applyTransition`), run by `transitionLeaf` (`lit start`/`phase`/`done`/`close`/`open`) and `bulkTransitionLeaf` (`lit bulk start`/`done`/`close`/`open`, `internal/cli/bulk.go`) | the crossings the transition made | after `authorize` and `Store.Apply`. Guarded by `transitionOccasion`'s `fires`. Dispatch writes into a `strings.Builder` that already holds the transition's owed notice (a claim hand-off, a phase move), and the result is `transitionDone.said`. `transitionLeaf` writes `said` to stdout **before** `printIssueSummary`; `bulkTransitionLeaf` returns it as the item's notice, which `runBulkOver` prints ahead of the item's `<id> ok` line (`internal/cli/bulk.go`) |
 | `internal/cli/cli.go` (`commentAddLeaf`) | `comment_added` | after `AddComment`, before `printComment` |
 | `internal/cli/next.go` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go`) |
 | `internal/cli/workable.go` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go`) |
@@ -366,27 +406,25 @@ returns `fires = false` for a `RetentionAction` (`internal/cli/workflow_events.g
 
 ```
 Inert → false
-otherwise: matchEvents(d.Events, o.Event) AND matchLabels(d.Labels, o.Labels) AND matchStates(d.States, o)
+otherwise: matchAny(d.When, o.Moments) AND matchAny(d.Labels, o.Labels)
 ```
 
-- **OR within a dimension, AND across dimensions.** An undeclared dimension constrains nothing
+- **OR within a key, AND across keys.** An undeclared key constrains nothing
   (`internal/workflows/match.go`, `internal/workflows/workflows.go`). Pinned
-  `internal/workflows/match_test.go` (AND across) (all three).
-- `matchEvents` (`internal/workflows/match.go`): empty bound list → true (unconstrained).
-  Otherwise the fired event must be **non-empty** and present in the bound list. So a definition
-  bound to events can never fire on an occasion with no event.
-- `matchLabels` (`internal/workflows/match.go`): empty bound list → true. Otherwise **at least
-  one** bound label must appear in the occasion's carried labels. Exact string comparison — both
-  sides are already canonicalized (`internal/workflows/parse.go`,
-  `internal/workflows/match.go`).
-- `matchStates` (`internal/workflows/match.go`) → `StateActivation.matches`
-  (`internal/workflows/match.go`): the activation picks the occasion side matching its `When`
-  (`Entered` for `enter`, `Exited` for `exit`), and requires the activation's state name to be
-  **exactly one of** the states listed on that side. "No transition happened" never satisfies a state binding.
+  `internal/workflows/match_test.go` (`TestMatchesSingleKeys`, `TestMatchesAndAcrossKeys`).
+- `matchAny[T comparable](bound, carried []T)` (`internal/workflows/match.go`) is the one test
+  both keys share: empty bound list → true (unconstrained); otherwise **at least one** bound value
+  must appear among the carried values.
+  - For `when`, values are `Moment`s compared by `==`: a `Crossing` is equal when its side and
+    state are, an `Event` when its name is. So a `when:`-bound definition can never fire on an
+    occasion with no moments, such as a transition that crossed nothing.
+  - For `labels`, exact string comparison — both sides are already canonicalized
+    (`internal/workflows/parse.go`, `internal/workflows/match.go`).
 
 **There are no wildcards, no globs, no regexes, and no negation** anywhere in matching. The only
-"match everything" construct is *omitting* a dimension. Verify by reading the whole of
-`internal/workflows/match.go` — the operations are `slices.Contains` and `==` only.
+"match everything" construct is *omitting* a key. Verify by reading the whole of
+`internal/workflows/match.go` — the operations are `slices.Contains`, `slices.ContainsFunc` and
+`==` only.
 
 **Precedence between multiple matches: there is none — every match fires.**
 `Set.Matching` returns every matching definition, in the Set's ID-ascending order
@@ -399,15 +437,20 @@ means at most one definition exists per ID.
 `Definition.MatchReasons(o)` (`internal/workflows/match.go`) returns nil if the definition
 does not match; otherwise a list of strings in this fixed order:
 
-1. `event:<the occasion's event>` — emitted once if the definition declared **any** events
-   (`internal/workflows/match.go`). Note it names `o.Event`, not the bound value.
-2. `label:<label>` for each of the definition's **declared** labels that appear in the occasion's
-   labels (`internal/workflows/match.go`; pinned `internal/workflows/match_test.go` —
-   only overlapping labels are listed).
-3. `state:<state>(<when>)` for each declared activation that matched
+1. `when:<moment>` for each of the definition's `when:` moments the occasion carries, in the
+   definition's order, spelled by the moment's `String()` — the canonical `when:` spelling
    (`internal/workflows/match.go`).
+2. `label:<label>` for each of the definition's **declared** labels that appear in the occasion's
+   labels (`internal/workflows/match.go`).
 
-Example from a real trace: `["event:show_ticket", "label:needs-design"]`
+Pinned `internal/workflows/match_test.go` (`TestMatchReasonsNamesWhatMatchedInEachKey`): a
+definition with `when: [exit plan, enter closed, exit review]` and
+`labels: [needs-design, blocked]`, on an occasion carrying
+`exit in_progress, exit review, enter closed` and the label `blocked`, gives
+`["when:enter closed", "when:exit review", "label:blocked"]` — only what overlapped, in the
+definition's order.
+
+Example from a real trace: `["when:show_ticket", "label:needs-design"]`
 (`internal/workflows/dispatch_test.go`).
 
 This is the single shared "why" computation behind both the real firing trace and `dry-run`
@@ -417,30 +460,54 @@ This is the single shared "why" computation behind both the real firing trace an
 
 ## 5. Dispatch mechanics
 
-`workflows.Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error)`
-(`internal/workflows/dispatch.go`). It returns the definitions that fired, with a write error too.
-Every CLI call site reaches it through `dispatchOccasion` (`internal/cli/workflow_dispatch.go`),
-which sets the facts `workflows.event`, `workflows.entered`, `workflows.exited` and
-`workflows.fired` (fired ids, `[]` when none) on the command's event.
+`workflows.Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, []Warning, error)`
+(`internal/workflows/dispatch.go`). It returns the definitions that fired and the load's warnings
+(in `WarningsByLayer` order), both with a write error too, since they fired whether or not their
+bodies reached `w`. Every CLI call site reaches it through `dispatchOccasion`
+(`internal/cli/workflow_dispatch.go`), which sets three facts on the command's event, each `[]`
+when empty:
+
+| Fact | Value |
+|---|---|
+| `workflows.when` | `workflows.Spellings(o.Moments)` — the occasion's moments in their `when:` spelling |
+| `workflows.fired` | the fired definitions' ids |
+| `workflows.warnings` | each load warning's `Warning.String()` line |
+
+So "nothing is bound here" (`fired` empty, `warnings` empty) and "what was bound here could not be
+read" (`warnings` non-empty) are told apart from the event alone. In `lit bulk`, `runBulkOver`
+runs each item in its own `telemetry.Occurrence` scope, so these facts land per item under
+`bulk.item.facts` (`internal/cli/bulk.go`; pinned `internal/cli/phase_test.go`,
+`TestEveryCrossingFiresOnTheTransitionThatMakesIt`).
 
 - **Synchronous, in-process, called directly from the command path — no bus, no async queue, no
   subscriber list; there is exactly one `Dispatch`, not a registry**
   (`internal/workflows/dispatch.go`).
 - **It re-loads the full definition Set on every call** (`internal/workflows/dispatch.go`,
-  `set := Load(ws.RootDir)`). There is no caching. Every dispatching command walks all three layers
+  `set := Load(env, ws.RootDir)`). There is no caching. Every dispatching command walks all three layers
   from disk.
+- **Every load/parse warning is printed to `errOut`** before matching, one line apiece, via
+  `fmt.Fprintf(errOut, "lit: workflow %s\n", warning)` — the `%s` is `Warning.String()` — in
+  `WarningsByLayer` order, on every call (`internal/workflows/dispatch.go`). So a file lit cannot
+  read or cannot fully fire (one written for another lit, say) is announced by every dispatching
+  command, not only by `lit workflows`. `errOut`, never `w`: `w` is the agent-facing stream, where
+  a config diagnostic would read as guidance. Pinned `internal/workflows/dispatch_test.go`
+  (`TestDispatchReportsLoadWarningsOnErrOut`) and `internal/cli/phase_test.go`
+  (`TestDefinitionsInTheRetiredSpellingsWarnAndNeverFire`: a file with an `events:` key, one with
+  a `states:` key and one listing a retired event under `when:` each warn on `lit done`'s stderr
+  and never fire, and `lit done` still succeeds).
 - Matches, then for each match writes `Interpolate(def.Body, o.IssueID)` followed by a newline to
   `w` via `fmt.Fprintln` (`internal/workflows/dispatch.go`). `w` is the calling command's own
-  **stdout** at every call site (§3.3) — the same agent-facing stream.
+  **stdout** at every read call site, and for a transition the `strings.Builder` behind
+  `transitionDone.said`, which the command then prints to stdout (§3.3) — the same agent-facing
+  stream either way.
 - Output order = `Set.Matching` order = ID-ascending
   (`internal/workflows/dispatch.go`; pinned `internal/workflows/dispatch_test.go`).
 - **A write failure to `w` aborts and returns the error**, which the calling command returns
   directly (`internal/workflows/dispatch.go`; e.g. `internal/cli/cli.go`).
-- **Load/parse warnings are never printed by Dispatch** — deliberately, so a workflow-authoring
-  diagnostic doesn't appear on every invocation. They are only visible via `lit workflows`
-  (`internal/workflows/dispatch.go`).
-- No environment variables are read or set, no subprocess is spawned, no timeout exists — there is
-  no execution (`internal/workflows/dispatch.go` in full; `internal/workflows/workflows.go`).
+- No environment variable is set, no subprocess is spawned, no timeout exists — there is no
+  execution (`internal/workflows/dispatch.go` in full; `internal/workflows/workflows.go`). The
+  `env` it takes serves `Load` alone, which reads the global layer's location from it
+  (`globalWorkflowsDir`, `internal/workflows/load.go`).
 
 ### 5.1 Blocking / exit-code interaction
 
@@ -478,11 +545,13 @@ which sets the facts `workflows.event`, `workflows.entered`, `workflows.exited` 
   (`internal/workflows/dispatch.go`, `filepath.IsAbs`), guarding against writing relative to the
   process CWD (pinned `internal/workflows/dispatch_test.go`).
 - Filename: `<UTC timestamp 20060102T150405.000000000Z>-<slug>.json`, where slug is
-  `trace.Slug(string(o.Event))` (`internal/workflows/trace.go`, `internal/trace/trace.go`,
-). `Slug` lowercases, replaces every run of non-`[a-z0-9]` with `-`, trims leading/trailing
-  `-`, and falls back to `"trace"` when the result is empty
-  (`internal/trace/trace.go`). So `work_finished` → `work-finished`
-  (`internal/trace/trace_test.go`), and an eventless occasion slugs to `trace`.
+  `trace.Slug(strings.Join(Spellings(o.Moments), " "))` (`internal/workflows/trace.go`,
+  `internal/trace/trace.go`). `Slug` lowercases, replaces every run of non-`[a-z0-9]` with `-`,
+  trims leading/trailing `-`, and falls back to `"trace"` when the result is empty
+  (`internal/trace/trace.go`). So `show_ticket` → `show-ticket` and
+  `exit review enter closed` → `exit-review-enter-closed` (`internal/trace/trace_test.go`), and
+  an occasion with no moments — a labels-only definition firing on a transition that crossed
+  nothing — slugs to `trace`.
 - Writes are `O_WRONLY|O_CREATE|O_EXCL`, mode `0644`, dir mode `0755`; on filename collision it
   retries up to 5 attempts with a fresh timestamp and an `-<attempt>` suffix, re-running the build
   callback each attempt (`internal/trace/trace.go`). Exhausting retries yields
@@ -498,17 +567,18 @@ plus a trailing newline (`internal/workflows/trace.go`):
   "id": "<trace id = filename stem>",
   "recorded_at": "<RFC3339Nano>",
   "workspace_id": "<ws.WorkspaceID>",
-  "event": "show_ticket",        // omitempty
+  "when": ["show_ticket"],       // omitempty; Spellings(o.Moments)
   "issue_id": "lit-42",          // omitempty
   "labels": ["needs-design"],    // omitempty
-  "entered": ["closed"],                // omitempty
-  "exited": ["in_progress", "review"],  // omitempty
   "fired": [
     { "id": "needs-design-note", "source": "project", "path": "needs-design.md",
-      "reasons": ["event:show_ticket", "label:needs-design"] }
+      "reasons": ["when:show_ticket", "label:needs-design"] }
   ]
 }
 ```
+
+A transition's record carries every crossing it made, e.g.
+`"when": ["exit in_progress", "exit review", "enter closed"]` for a `lit done` from `review`.
 
 `FiredDefinition` fields and their JSON tags: `id`, `source`, `path`, `reasons`
 (`internal/workflows/trace.go`). `fired` has no `omitempty`
@@ -531,7 +601,7 @@ Registered as a workspace-only command (no store access) at `internal/cli/regist
 Usage string (`internal/cli/workflows.go`):
 
 ```
-usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]
+usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
 ```
 
 Routing (`internal/cli/workflows.go`): a help flag gives the family usage;
@@ -556,14 +626,12 @@ beyond the implicit `--help`.
 
 1. Header line: `lit workflows — work lifecycle guidance (project > global > embedded)`
    (`internal/cli/workflows.go`).
-2. Blank line + `Events` (`internal/cli/workflows.go`), then one line per catalog event in
-   `Catalog()` order, indented 2 spaces (`internal/cli/workflows.go`).
-3. Blank line + `States` (`internal/cli/workflows.go`), then for each spine state: the state name
-   at 2-space indent (`internal/cli/workflows.go`), then `enter` and `exit` sub-lines at 4-space
-   indent (`internal/cli/workflows.go`).
-4. Blank line + `Labels` (`internal/cli/workflows.go`). If no definition binds any label, prints
+2. Blank line + `When` (`internal/cli/workflows.go`), then one line per moment of
+   `spineMoments(set)`, spelled by its `String()` and indented 2 spaces
+   (`internal/cli/workflows.go`). A definition is listed at a moment when its `When` contains it.
+3. Blank line + `Labels` (`internal/cli/workflows.go`). If no definition binds any label, prints
    `  (none bound)` (`internal/cli/workflows.go`). Otherwise one line per label.
-5. Warnings section (§7.4).
+4. Warnings section (§7.4).
 
 Each spine point line is `printSpinePoint` (`internal/cli/workflows.go`): the bare label if
 nothing is bound there, else `<label>  [<ref>, <ref>, …]` where each ref is `formatDefinitionRef`:
@@ -572,22 +640,28 @@ nothing is bound there, else `<label>  [<ref>, <ref>, …]` where each ref is `f
 
 Spine composition:
 
-- **States spine** = the built-in states in lifecycle order (`open`, `in_progress`, `plan`, `impl`,
-  `review`, `merge`, `closed` — `internal/cli/workflows.go`), followed by any **custom** state a loaded definition binds to,
-  sorted alphabetically (`internal/cli/workflows.go`; pinned
-  `internal/cli/workflows_test.go`).
-- **Labels spine** = every label any loaded definition binds to, deduped and sorted — not every label
-  ever used on a ticket (`internal/cli/workflows.go`).
-- **Events spine** = the full catalog, always, whether bound or not
-  (`internal/cli/workflows.go`).
+- **When spine** = `spineMoments(set)` (`internal/cli/workflows.go`): first `catalogMoments()`
+  (`internal/cli/workflows_dryrun.go`) — the full catalog as moments, always, whether bound or
+  not — then `enter <state>` and `exit <state>` for each built-in state in lifecycle order (`open`,
+  `in_progress`, `plan`, `impl`, `review`, `merge`, `closed` — `builtinStates`,
+  `internal/cli/workflows.go`), then the same pair for any **custom** state a loaded definition's
+  `Crossing` names, sorted alphabetically (`internal/cli/workflows.go`; pinned
+  `internal/cli/workflows_test.go`, `TestWorkflowsOverviewSurfacesCustomStateOnTheSpine`:
+  `exit closed` is followed by `enter verify  [verify-reminder (project)]` and `exit verify`). An
+  unknown event a definition lists appears on no spine line.
+- **Labels spine** = `spineLabels(set)`: every label any loaded definition binds to, deduped and
+  sorted — not every label ever used on a ticket (`internal/cli/workflows.go`).
 
-A definition appears at **every** dimension point it binds (pinned
-`internal/cli/workflows_test.go`).
+A definition appears at **every** moment and label it binds (pinned
+`internal/cli/workflows_test.go`, `TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundKey`).
+With only the embedded layer, the overview's `enter closed` line reads
+`enter closed  [done "Post-close capture reminder" (embedded)]`
+(`TestWorkflowsOverviewShowsEmbeddedDefaultAtItsCrossing`).
 
 ### 7.2 `lit workflows show <id>`
 
 `renderWorkflowDefinition` (`internal/cli/workflows.go`). Unknown id →
-`ValidationError{no workflow definition with id %q (run 'lit workflows' to see loaded ids)}`
+``ValidationError{no workflow definition with id %q (run `lit workflows` to see loaded ids)}``
 → exit 3 (`internal/cli/workflows.go`; pinned `internal/cli/workflows_test.go`).
 `lit workflows show` with no id is a `UsageError` (`internal/cli/workflows_test.go`).
 
@@ -598,16 +672,14 @@ id: <id>
 name: <name or ->
 source: <project|global|embedded>
 path: <layer-relative path>
+when: <Spellings(def.When) comma-space joined, or ->
 labels: <comma-space joined, or ->
-states: <"state(when)" comma-space joined, or ->
-events: <comma-space joined, or ->
 ---
 <body>
 ```
 
-`orDash` renders `-` for an empty value (`internal/cli/workflows.go`);
-`formatStateActivations` renders each as `<state>(<when>)` (`internal/cli/workflows.go`);
-`formatEvents` joins raw event names (`internal/cli/workflows.go`).
+`orDash` renders `-` for an empty value (`internal/cli/workflows.go`); `when:` lists each entry
+in its canonical spelling via `workflows.Spellings` (`internal/cli/workflows.go`).
 
 ### 7.3 `lit workflows dry-run`
 
@@ -616,25 +688,32 @@ events: <comma-space joined, or ->
 
 | Flag | Type | Help text |
 |---|---|---|
-| `--event <name>` | string | "Semantic event the hypothetical occasion fires (see the event catalog in 'lit workflows')" |
+| `--when <moment>` | **string array, repeatable** | "A moment the hypothetical occasion carries, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable: a start from open is exit open, enter in_progress, enter plan)" |
 | `--label <name>` | **string array, repeatable** | "Label the hypothetical ticket carries (repeatable)" |
-| `--enter <state>` | **string array, repeatable** | "State the hypothetical ticket enters (repeatable: a start enters in_progress and plan)" |
-| `--exit <state>` | **string array, repeatable** | "State the hypothetical ticket exits (repeatable)" |
-| `--issue <id>` | string | "Issue id to interpolate into `<id>` in previewed bodies" |
+| `--issue <id>` | string | "Issue id to interpolate into <id> in previewed bodies" |
 
 Any stray positional after `dry-run` is a `UsageError` with `workflowsUsage`
 (`internal/cli/workflows_dryrun.go`); an unknown flag is likewise a `UsageError`
-(`internal/cli/workflows_test.go`).
+(`internal/cli/workflows_test.go`, `TestWorkflowsDryRunRejectsUnknownFlags`).
 
-The flags build an `Occasion` **verbatim, with no canonicalization** — `--event`, `--label`,
-`--enter`, `--exit` values are used exactly as typed (`internal/cli/workflows_dryrun.go`).
-(Definitions were canonicalized at parse time; dry-run inputs are not, so a mixed-case `--label
-Needs-Design` will not match a canonicalized definition label.)
+`dryRunMoments` (`internal/cli/workflows_dryrun.go`) reads every `--when` value through
+`workflows.ParseMoment`, so a dry-run is asked in the spelling a definition is written in, and
+canonicalized the same way (`--when "Enter  Review"` is `enter review`). A blank value is skipped.
+A value that parses to a moment this lit can never produce — an event outside the catalog, a lone
+`enter` among them — is refused with a `model.ValidationError` (exit 3):
+`--when %q is not a moment lit fires: write enter <state> or exit <state> for a change of a ticket's state, or one of the events %s`,
+where `%s` is `workflows.Spellings(catalogMoments())` joined by `, ` (pinned
+`internal/cli/workflows_test.go`, `TestWorkflowsDryRunRefusesAMomentLitNeverFires`).
 
-Output (`internal/cli/workflows_dryrun.go`):
+`--label` values build the `Occasion` **verbatim, with no canonicalization**
+(`internal/cli/workflows_dryrun.go`). (Definitions were canonicalized at parse time; dry-run
+labels are not, so a mixed-case `--label Needs-Design` will not match a canonicalized definition
+label.)
+
+Output (`internal/cli/workflows_dryrun.go`, `printDryRunOccasion`):
 
 ```
-occasion: event=<e|-> labels=<comma-joined|-> entered=<["state",...]|[]> exited=<["state",...]|[]> issue=<id|->
+occasion: when=<["moment",...]|[]> labels=<comma-joined|-> issue=<id|->
 <blank line>
 Fired (<n>)
 ```
@@ -646,11 +725,19 @@ then either `  (none)` when n=0 (`internal/cli/workflows_dryrun.go`), or for eac
 (`internal/cli/workflows_dryrun.go`). Body is split on `\n` and every line is indented
 (`internal/cli/workflows_dryrun.go`).
 
-Concrete pinned example (`internal/cli/workflows_test.go`): with a project file
-`design.md` bound to `labels: [needs-design]` + `events: [work_finished]`,
-`lit workflows dry-run --event work_finished --label needs-design --issue lit-7` prints
-`Fired (2)` (the project file **plus the embedded `done` default**) and the line
-`design-note (project)  [event:work_finished, label:needs-design]`.
+`when=` is `quotedList(workflows.Spellings(o.Moments))`: each spelling `strconv.Quote`d, joined by
+`,`, in brackets — `[]` when none (`internal/cli/workflows_dryrun.go`). Labels can join on a bare
+comma because a label cannot contain one; a state name can, so quoting keeps one crossing of a
+state named `foo,bar` (`when=["enter foo,bar"]`) apart from two (`when=["enter foo","enter bar"]`)
+(pinned `internal/cli/workflows_test.go`, `TestWorkflowsDryRunReadsEveryWhenSpelling`).
+
+Concrete pinned example (`internal/cli/workflows_test.go`,
+`TestWorkflowsDryRunExplainsAHypotheticalMatch`): with a project file `design.md` bound to
+`labels: [needs-design]` + `when: [enter closed]`,
+`lit workflows dry-run --when "enter closed" --label needs-design --issue lit-7` prints
+`occasion: when=["enter closed"] labels=needs-design issue=lit-7`, `Fired (2)` (the project file
+**plus the embedded `done` default**, `done "Post-close capture reminder" (embedded)  [when:enter closed]`)
+and the line `design-note (project)  [when:enter closed, label:needs-design]`.
 
 **Dry-run never writes a firing trace** (`internal/cli/workflows_dryrun.go`; pinned
 `internal/cli/workflows_test.go`) and never reads the store
@@ -668,9 +755,10 @@ Warnings (loaded but not fully active)
   <source> <path>: <message>
 ```
 
-Each warning is collapsed to one line by `strings.Join(strings.Fields(msg), " ")`, so an embedded
-multi-line YAML error still occupies exactly one line (`internal/cli/workflows.go`).
-Pinned `internal/cli/workflows_test.go`.
+Each line is `Warning.String()` (`internal/workflows/workflows.go`), which collapses the message
+with `strings.Join(strings.Fields(msg), " ")`, so an embedded multi-line YAML error still occupies
+exactly one line. Pinned `internal/cli/workflows_test.go`
+(`TestWorkflowsOverviewFlagsMalformedFileAsAWarning`).
 
 ---
 
@@ -704,60 +792,56 @@ Pinned `internal/cli/workflows_test.go`.
 
 ### 8.2 Target is not a loaded ID — treated as a lifecycle "point"
 
-`classifyWorkflowPoint` (`internal/cli/workflows_edit.go`) resolves it in this **fixed
-order**:
+`classifyWorkflowPoint(point) (key, liveLine)` (`internal/cli/workflows_edit.go`) reads the
+point with `workflows.ParseMoment`, the same parser as a `when:` entry, so the two spellings
+cannot drift:
 
-1. **`<state>:enter` / `<state>:exit` suffix** → dimension `states`. The split is at the **LAST**
-   colon, so `deploy:staging:enter` yields state `deploy:staging`
-   (`internal/cli/workflows_edit.go`; pinned `internal/cli/workflows_test.go`).
-   The suffix comparison is `strings.ToLower(strings.TrimSpace(suffix))`, and the state name is
-   `strings.TrimSpace`d (`internal/cli/workflows_edit.go`).
-2. **A name in the event catalog** (`workflows.Event(point).Known()`) → dimension `events`, live
-   line `events: ["<point>"]` (`internal/cli/workflows_edit.go`; pinned
-   `internal/cli/workflows_test.go`).
-3. **One of the built-in states or phases, bare** → dimension `states`, defaulting to `enter`
-   (`internal/cli/workflows_edit.go`, `isBuiltinState` at compares
-   lowercased+trimmed against `builtinStates`).
-4. **Anything else** → dimension `labels`, live line `labels: ["<point>"]`
-   (`internal/cli/workflows_edit.go`; pinned `internal/cli/workflows_test.go`).
+1. **A moment this lit fires** — `ParseMoment` returns ok and `moment.Known()`: `enter <state>` or
+   `exit <state>` for any state, built-in or custom, or an event in the catalog → key `when`,
+   live line `when: ["<moment.String()>"]`, the canonical spelling (`Enter  In_Progress` scaffolds
+   `when: ["enter in_progress"]`) (`internal/cli/workflows_edit.go`; pinned
+   `internal/cli/workflows_test.go`, `TestWorkflowsEditScaffoldsFreshMomentPoints`).
+2. **Anything else** → key `labels`, live line `labels: ["<point>"]` with the point as typed. A
+   bare state name is a label point, since a state is crossed, not named: `review` scaffolds
+   `labels: ["review"]`; so is an event outside the catalog (`internal/cli/workflows_edit.go`;
+   pinned `internal/cli/workflows_test.go`, `TestWorkflowsEditScaffoldsFreshLabelPointAsFallback`).
 
 Live-line rendering:
-- `states` enter: `states: ["<state>"]`; exit: `states: [{name: "<state>", when: exit}]`
-  (`internal/cli/workflows_edit.go`).
 - All embedded values go through `yamlDoubleQuoted`, which wraps in `"` and escapes `\` and `"`
   (`internal/cli/workflows_edit.go`) — applied **uniformly**, not only when a special
   character is present. This is what keeps a comma-bearing state name from splitting into two flow
-  entries (`internal/cli/workflows_test.go`).
+  entries: `exit foo,bar` scaffolds `when: ["exit foo,bar"]`, which loads as one crossing
+  (`internal/cli/workflows_test.go`).
 
 Filename:
-- `scaffoldFilenameSlug` lowercases, trims, replaces every run of characters outside `[a-z0-9_-]`
-  with `-`, trims leading/trailing `-`, and falls back to `"point"` if empty
-  (`internal/cli/workflows_edit.go`). **Underscore is deliberately kept** so `work_started`
-  → `work_started.md` (`internal/cli/workflows_edit.go`).
-- For a state point with `when: exit`, `_exit` is appended to the slug
-  (`internal/cli/workflows_edit.go`): `closed:exit` → `closed_exit.md`
-  (`internal/cli/workflows_test.go`).
-- Worked examples from tests: `work_started` → `work_started.md`; `closed:exit` → `closed_exit.md`;
-  `deploy:staging:enter` → `deploy-staging.md`; `needs-design` → `needs-design.md`;
-  `foo,bar:enter` → `foo-bar.md`.
+- `scaffoldFilenameSlug` slugs the point as typed: lowercases, trims, replaces every run of
+  characters outside `[a-z0-9_-]` with `-` (`unsafeScaffoldFilenameChars`), trims
+  leading/trailing `-`, and falls back to `"point"` if empty (`internal/cli/workflows_edit.go`).
+  **Underscore is deliberately kept** so `show_ticket` → `show_ticket.md` and
+  `enter in_progress` → `enter-in_progress.md` (`internal/cli/workflows_edit.go`).
+- Worked examples from tests: `show_ticket` → `show_ticket.md`; `enter review` →
+  `enter-review.md`; `exit closed` → `exit-closed.md`; `Enter  In_Progress` →
+  `enter-in_progress.md`; `enter deploy:staging` → `enter-deploy-staging.md`; `exit foo,bar` →
+  `exit-foo-bar.md`; `needs-design` → `needs-design.md`; `review` → `review.md`. Each moment
+  scaffold loads binding exactly its moment, with no warning
+  (`TestWorkflowsEditScaffoldsFreshMomentPoints`).
 
 Then `editFreshDefinition` (`internal/cli/workflows_edit.go`) refuses on an existing file,
-writes `workflows.ScaffoldFresh(dimension, liveLine)`, prints
+writes `workflows.ScaffoldFresh(key, liveLine)`, prints
 `scaffolded a new definition at <path>`, and opens/prints.
 
 ### 8.3 Fresh-scaffold file content
 
-`ScaffoldFresh(dimension, liveLine)` (`internal/workflows/scaffold.go`) emits exactly:
+`ScaffoldFresh(key, liveLine)` (`internal/workflows/scaffold.go`) emits exactly:
 
 ```
 ---
-# Uncomment or add any of these activation dimensions; declared dimensions
-# combine with AND, values within one dimension combine with OR.
-# Run `lit workflows --help` for the full format and the event catalog.
-# labels: [needs-design, blocked]                        ← omitted if dimension=="labels"
-# states: [open]                       # fires when the ticket ENTERS this state    ← omitted if dimension=="states"
-# states: [{name: closed, when: exit}] # fires when the ticket EXITS this state     ← omitted if dimension=="states"
-# events: [work_started]                                 ← omitted if dimension=="events"
+# when: lists the moments the definition fires at, labels: narrows it to
+# tickets carrying a label. Entries within one key are alternatives (OR);
+# declaring both keys requires both (AND).
+# Run `lit workflows --help` for the full format and every moment.
+# when: [enter review, exit plan, show_ticket]  # entering or exiting a state, or an event   ← omitted if key=="when"
+# labels: [needs-design, blocked]                                                           ← omitted if key=="labels"
 <liveLine>
 # id: my-custom-id     # optional; defaults to this file's relative path under .lit/workflows/
 # name: My Guidance    # optional pretty name shown by `lit workflows`
@@ -765,11 +849,11 @@ writes `workflows.ScaffoldFresh(dimension, liveLine)`, prints
 Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.
 ```
 
-Line-by-line: `internal/workflows/scaffold.go` (`---`) (the two comment lines),
- (labels example, conditional) (both states examples, conditional)
-(events example, conditional) (live line + newline) (id comment) (name
-comment) (closing `---`) (body placeholder). Pinned
-`internal/workflows/scaffold_test.go`.
+Line-by-line: `internal/workflows/scaffold.go` (`---`) (the four comment lines), (when example,
+conditional) (labels example, conditional) (live line + newline) (id comment) (name comment)
+(closing `---`) (body placeholder). Pinned `internal/workflows/scaffold_test.go`
+(`TestScaffoldFreshOmitsTheLiveKeysCommentedExample`; `TestScaffoldFreshParsesCleanly` — the
+scaffold for `when: ["enter closed"]` parses to exactly that moment with no warning).
 
 ### 8.4 No-clobber semantics
 
@@ -777,8 +861,8 @@ Two-stage enforcement (`internal/cli/workflows_edit.go`):
 
 1. `refuseExistingFile` stats the path; if it exists, returns `MergeConflictError` (**exit 5**,
    `internal/cli/error_output.go`) with message
-   `cannot scaffold "<subject>": <path> already exists (edit it directly, or run 'lit workflows' to
-   see what's already loaded there)` (`internal/cli/workflows_edit.go`). A stat error other
+   ``cannot scaffold "<subject>": <path> already exists (edit it directly, or run `lit workflows` to
+   see what's already loaded there)`` (`internal/cli/workflows_edit.go`). A stat error other
    than not-exist is returned as `stat %s: %w` (`internal/cli/workflows_edit.go`).
 2. `writeWorkflowScaffold` is the real enforcer: `os.MkdirAll(dir, 0755)` then
    `os.OpenFile(path, O_WRONLY|O_CREATE|O_EXCL, 0644)`. `os.IsExist` → the same
@@ -793,10 +877,11 @@ layers (`internal/cli/workflows_edit.go`).
 `openOrPrintWorkflowFile` (`internal/cli/workflows_edit.go`):
 
 1. **Always** prints the path on its own line to stdout first (`internal/cli/workflows_edit.go`).
-2. If stdout is **not** a terminal → return; print only (`internal/cli/workflows_edit.go`).
-   `isTerminal` = `w` is an `*os.File` **and** `Stat().Mode()&os.ModeCharDevice != 0`
-   (`internal/cli/workflows_edit.go`). A `bytes.Buffer` (tests), a pipe, or a redirect all
-   return false.
+2. Unless stdin **and** stdout are both terminals → return; print only
+   (`interactive`, `internal/cli/interactive.go`). `isTerminal` = the stream is an `*os.File`
+   **and** `term.IsTerminal` holds for its descriptor, asked through `SyscallConn`
+   (`internal/cli/interactive.go`). A `bytes.Buffer` (tests), a pipe, or a redirect on either
+   stream all return false.
 3. `$EDITOR` is split on whitespace with `strings.Fields`; if empty → return
    (`internal/cli/workflows_edit.go`). So `EDITOR="code -w"` works as command + args.
 4. Otherwise `exec.Command(fields[0], fields[1:]... + path)` is run in the invocation's
@@ -834,13 +919,15 @@ is the word "hook" and the sibling trace-kind comment at `internal/cli/sync_trac
 
 ## 10. Summary of things a workflow author can and cannot do
 
-**Can:** bind on any subset of {labels, states, events}; use `enter`/`exit` sides independently;
-bind to custom (non-lifecycle) state names; nest files arbitrarily; override a nearer layer by ID
-or by matching relative path; use `<id>` in the body; author for a future `lit` (unknown events and
-unknown YAML keys both load).
+**Can:** bind on `when`, `labels`, or both; bind `enter <state>` and `exit <state>` independently;
+bind to custom (non-lifecycle) state names; nest files arbitrarily; override a farther layer by ID
+or by matching relative path; use `<id>` in the body; list an event a newer `lit` fires (the entry
+loads with a warning and the list's other entries still bind).
 
 **Cannot:** run anything, receive environment variables, gate/block a command, set an exit code,
 use a wildcard/glob/regex matcher, negate a matcher, order or prioritize between simultaneously
 matching definitions (all fire, ID-ascending), require ALL labels (label matching is OR — see
-`internal/workflows/match.go`), match on issue ID, or match a state binding when the moment
-carries no transition (`internal/workflows/match.go`).
+`internal/workflows/match.go`), match on issue ID, tell which command made a crossing (`lit done`
+and `lit close` both make `enter closed`), fire a `when:`-bound definition on a transition that
+crossed nothing (`internal/workflows/match.go`), or have a file fire while it carries a key this
+`lit` does not read (`internal/workflows/parse.go`).

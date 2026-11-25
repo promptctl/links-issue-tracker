@@ -59,9 +59,9 @@ func TestLoadRecursiveDiscoveryUnderArbitraryHierarchy(t *testing.T) {
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	// The hierarchy is arbitrary: nesting depth and folder names carry no
 	// meaning, only the frontmatter does.
-	writeWorkflow(t, project, "top.md", "---\nevents: [show_backlog]\n---\ntop")
+	writeWorkflow(t, project, "top.md", "---\nwhen: [show_backlog]\n---\ntop")
 	writeWorkflow(t, project, "a/deep/nested/leaf.md", "---\nlabels: [x]\n---\nleaf")
-	writeWorkflow(t, project, "with space/file name.md", "---\nevents: [show_ticket]\n---\nspaced")
+	writeWorkflow(t, project, "with space/file name.md", "---\nwhen: [show_ticket]\n---\nspaced")
 	writeWorkflow(t, project, "ignored.txt", "not a workflow")
 
 	set := Load(testEnv(), workspaceRoot)
@@ -83,9 +83,9 @@ func TestLoadProjectOverridesGlobalByID(t *testing.T) {
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	// Same explicit id at both layers, authored at different paths: the
 	// nearer (project) layer wins.
-	writeWorkflow(t, project, "local/mine.md", "---\nid: shared\nevents: [show_ticket]\n---\nproject wins")
-	writeWorkflow(t, globalWorkflows, "elsewhere/theirs.md", "---\nid: shared\nevents: [show_ticket]\n---\nglobal loses")
-	writeWorkflow(t, globalWorkflows, "only-global.md", "---\nevents: [show_backlog]\n---\nglobal only")
+	writeWorkflow(t, project, "local/mine.md", "---\nid: shared\nwhen: [show_ticket]\n---\nproject wins")
+	writeWorkflow(t, globalWorkflows, "elsewhere/theirs.md", "---\nid: shared\nwhen: [show_ticket]\n---\nglobal loses")
+	writeWorkflow(t, globalWorkflows, "only-global.md", "---\nwhen: [show_backlog]\n---\nglobal only")
 
 	set := Load(testEnv(), workspaceRoot)
 	if len(authored(set)) != 2 {
@@ -112,8 +112,8 @@ func TestLoadSameRelativePathOverridesWithoutExplicitID(t *testing.T) {
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	// Default IDs derive from the relative path, so the same path at two
 	// layers collides on id — which is exactly the override mechanism.
-	writeWorkflow(t, project, "review/design.md", "---\nevents: [show_ticket]\n---\nproject")
-	writeWorkflow(t, globalWorkflows, "review/design.md", "---\nevents: [show_ticket]\n---\nglobal")
+	writeWorkflow(t, project, "review/design.md", "---\nwhen: [show_ticket]\n---\nproject")
+	writeWorkflow(t, globalWorkflows, "review/design.md", "---\nwhen: [show_ticket]\n---\nglobal")
 
 	set := Load(testEnv(), workspaceRoot)
 	if len(authored(set)) != 1 {
@@ -129,8 +129,8 @@ func TestLoadDuplicateIDWithinLayerWarnsFirstWins(t *testing.T) {
 	workspaceRoot, _ := isolate(t)
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	// Walk order is lexical: "a/dup.md" is seen before "b/dup.md".
-	writeWorkflow(t, project, "a/dup.md", "---\nid: dup\nevents: [show_ticket]\n---\nfirst")
-	writeWorkflow(t, project, "b/dup.md", "---\nid: dup\nevents: [show_ticket]\n---\nsecond")
+	writeWorkflow(t, project, "a/dup.md", "---\nid: dup\nwhen: [show_ticket]\n---\nfirst")
+	writeWorkflow(t, project, "b/dup.md", "---\nid: dup\nwhen: [show_ticket]\n---\nsecond")
 
 	set := Load(testEnv(), workspaceRoot)
 	if len(authored(set)) != 1 {
@@ -176,7 +176,7 @@ func TestLoadAbsentLayersYieldsOnlyEmbeddedDefaults(t *testing.T) {
 func TestLoadMalformedFileWarnsAndSkipsWithoutBreakingOthers(t *testing.T) {
 	workspaceRoot, _ := isolate(t)
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
-	writeWorkflow(t, project, "good.md", "---\nevents: [show_backlog]\n---\ngood")
+	writeWorkflow(t, project, "good.md", "---\nwhen: [show_backlog]\n---\ngood")
 	writeWorkflow(t, project, "broken.md", "---\nlabels: 17\n---\nbad")
 
 	set := Load(testEnv(), workspaceRoot)
@@ -206,11 +206,13 @@ func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
 	}
 	// The inert definition fires nowhere, whatever the embedded defaults
 	// legitimately match alongside it.
+	everything := Occasion{Moments: []Moment{Crossing{Side: Enter, State: "closed"}, Crossing{Side: Exit, State: "open"}}, Labels: []string{"needs-design"}}
 	for _, event := range Catalog() {
-		for _, matched := range set.Matching(Occasion{Event: event}) {
-			if matched.ID == "readme" {
-				t.Fatalf("Matching(%s) matched the inert definition, want it to fire nowhere", event)
-			}
+		everything.Moments = append(everything.Moments, event)
+	}
+	for _, matched := range set.Matching(everything) {
+		if matched.ID == "readme" {
+			t.Fatalf("Matching(%+v) matched the inert definition, want it to fire nowhere", everything)
 		}
 	}
 }
@@ -222,8 +224,8 @@ func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
 func TestDefinitionsByLayerPrintsLeastToMostSpecificFirst(t *testing.T) {
 	workspaceRoot, globalWorkflows := isolate(t)
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
-	writeWorkflow(t, project, "a.md", "---\nevents: [show_ticket]\n---\nproject")
-	writeWorkflow(t, globalWorkflows, "b.md", "---\nevents: [show_ticket]\n---\nglobal")
+	writeWorkflow(t, project, "a.md", "---\nwhen: [show_ticket]\n---\nproject")
+	writeWorkflow(t, globalWorkflows, "b.md", "---\nwhen: [show_ticket]\n---\nglobal")
 
 	set := Load(testEnv(), workspaceRoot)
 	// The embedded layer carries several defaults, so compare the sequence of

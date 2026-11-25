@@ -822,7 +822,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			}
 			// No ticket was handed back, so no next_pulled event fires — the
 			// workflow dispatch must not be told a pull happened.
-			if occasion.Event != "" || occasion.IssueID != "" {
+			if occasion.Moments != nil || occasion.IssueID != "" {
 				t.Fatalf("renderNextOutcome(%T) occasion = %#v, want none — no ticket was handed back", tc.outcome, occasion)
 			}
 			if got := commandErrorReason(err); got != tc.wantReason {

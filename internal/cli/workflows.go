@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 // definitions itself — that stays match.go/load.go's job — so this file is
 // pure presentation over an already-resolved Set. [LAW:single-enforcer]
 
-const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]"
+const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]"
 
 // workflowsFamily is the named surface under `workflows`: one definition
 // resolved (`show <id>`), an override scaffolded or opened (`edit
@@ -100,28 +101,29 @@ var builtinStates = func() []string {
 	return append(states, string(model.StateClosed))
 }()
 
-// spineStates returns the states the overview walks: the built-in states, in
-// lifecycle order, followed by any custom stage a loaded definition binds to
-// that isn't one of them, alphabetically. Custom stages are first-class by
-// design (states are open strings, never a closed enum — see workflows.go),
-// so a definition authored against one is what puts it on the spine at all.
-func spineStates(set workflows.Set) []string {
-	seen := map[string]bool{}
-	states := append([]string{}, builtinStates...)
-	for _, s := range states {
-		seen[s] = true
-	}
+// spineMoments returns every moment the overview walks, in the spelling a
+// `when:` entry uses: the event catalog, then each spine state entered and
+// exited — the built-in states in lifecycle order, followed by any custom
+// stage a loaded definition crosses that isn't one of them, alphabetically.
+// Custom stages are first-class by design (states are open strings, never a
+// closed enum — see workflows.go), so a definition authored against one is
+// what puts it on the spine at all.
+func spineMoments(set workflows.Set) []workflows.Moment {
+	states := slices.Clone(builtinStates)
 	var custom []string
 	for _, def := range set.Definitions {
-		for _, activation := range def.States {
-			if !seen[activation.State] {
-				seen[activation.State] = true
-				custom = append(custom, activation.State)
+		for _, moment := range def.When {
+			if crossing, ok := moment.(workflows.Crossing); ok && !slices.Contains(states, crossing.State) && !slices.Contains(custom, crossing.State) {
+				custom = append(custom, crossing.State)
 			}
 		}
 	}
-	sort.Strings(custom)
-	return append(states, custom...)
+	slices.Sort(custom)
+	moments := catalogMoments()
+	for _, state := range append(states, custom...) {
+		moments = append(moments, workflows.Crossing{Side: workflows.Enter, State: state}, workflows.Crossing{Side: workflows.Exit, State: state})
+	}
+	return moments
 }
 
 // spineLabels returns every label any loaded definition binds to, sorted, so
@@ -153,44 +155,18 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 		return err
 	}
 
-	if _, err := fmt.Fprintln(w, "\nEvents"); err != nil {
+	if _, err := fmt.Fprintln(w, "\nWhen"); err != nil {
 		return err
 	}
-	for _, event := range workflows.Catalog() {
+	for _, moment := range spineMoments(set) {
 		var at []workflows.Definition
 		for _, def := range defs {
-			for _, e := range def.Events {
-				if e == event {
-					at = append(at, def)
-					break
-				}
+			if slices.Contains(def.When, moment) {
+				at = append(at, def)
 			}
 		}
-		if err := printSpinePoint(w, "  "+string(event), at); err != nil {
+		if err := printSpinePoint(w, "  "+moment.String(), at); err != nil {
 			return err
-		}
-	}
-
-	if _, err := fmt.Fprintln(w, "\nStates"); err != nil {
-		return err
-	}
-	for _, state := range spineStates(set) {
-		if _, err := fmt.Fprintf(w, "  %s\n", state); err != nil {
-			return err
-		}
-		for _, when := range []workflows.When{workflows.WhenEnter, workflows.WhenExit} {
-			var at []workflows.Definition
-			for _, def := range defs {
-				for _, activation := range def.States {
-					if activation.State == state && activation.When == when {
-						at = append(at, def)
-						break
-					}
-				}
-			}
-			if err := printSpinePoint(w, "    "+string(when), at); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -206,11 +182,8 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 	for _, label := range labels {
 		var at []workflows.Definition
 		for _, def := range defs {
-			for _, l := range def.Labels {
-				if l == label {
-					at = append(at, def)
-					break
-				}
+			if slices.Contains(def.Labels, label) {
+				at = append(at, def)
 			}
 		}
 		if err := printSpinePoint(w, "  "+label, at); err != nil {
@@ -250,7 +223,8 @@ func formatDefinitionRef(def workflows.Definition) string {
 }
 
 // printWorkflowWarnings surfaces every load/parse warning — inert files,
-// unknown events, malformed frontmatter, duplicate ids — so a file that loads
+// unknown events, keys this lit does not read, malformed frontmatter,
+// duplicate ids — so a file that loads
 // but never fires is diagnosable from the same view that shows what does
 // fire, instead of failing silently.
 func printWorkflowWarnings(w io.Writer, warnings []workflows.Warning) error {
@@ -261,10 +235,7 @@ func printWorkflowWarnings(w io.Writer, warnings []workflows.Warning) error {
 		return err
 	}
 	for _, warning := range warnings {
-		// One line per warning even when the underlying cause (a yaml parse
-		// error, say) embeds newlines of its own.
-		message := strings.Join(strings.Fields(warning.Message), " ")
-		if _, err := fmt.Fprintf(w, "  %s %s: %s\n", warning.Source, warning.Path, message); err != nil {
+		if _, err := fmt.Fprintf(w, "  %s\n", warning); err != nil {
 			return err
 		}
 	}
@@ -284,9 +255,8 @@ func renderWorkflowDefinition(w io.Writer, set workflows.Set, id string) error {
 		{"name", orDash(def.Name)},
 		{"source", string(def.Source)},
 		{"path", def.Path},
+		{"when", orDash(strings.Join(workflows.Spellings(def.When), ", "))},
 		{"labels", orDash(strings.Join(def.Labels, ", "))},
-		{"states", orDash(formatStateActivations(def.States))},
-		{"events", orDash(formatEvents(def.Events))},
 	}
 	for _, f := range fields {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.key, f.value); err != nil {
@@ -305,20 +275,4 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-func formatStateActivations(activations []workflows.StateActivation) string {
-	parts := make([]string, len(activations))
-	for i, a := range activations {
-		parts[i] = fmt.Sprintf("%s(%s)", a.State, a.When)
-	}
-	return strings.Join(parts, ", ")
-}
-
-func formatEvents(events []workflows.Event) string {
-	parts := make([]string, len(events))
-	for i, e := range events {
-		parts[i] = string(e)
-	}
-	return strings.Join(parts, ", ")
 }

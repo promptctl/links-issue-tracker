@@ -42,26 +42,23 @@ func RawDefault(env environ.Env, source templates.Source, relPath string) ([]byt
 
 // ScaffoldFresh builds a fresh definition file's content for `lit workflows
 // edit` when the requested id-or-point matches no loaded definition: a
-// commented reference to every activation dimension (skipping the one the
-// point itself supplies, since liveLine already shows it live) plus that one
-// dimension uncommented and ready to fire, and a placeholder body.
+// commented reference to each activation key (skipping the one the point
+// itself supplies, since liveLine already shows it live) plus that one key
+// uncommented and ready to fire, and a placeholder body.
 // [LAW:comments-carry-meaning] the comments exist to teach the format inline,
 // at the moment a user is about to author their first line of it.
-func ScaffoldFresh(dimension string, liveLine string) []byte {
+func ScaffoldFresh(key string, liveLine string) []byte {
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString("# Uncomment or add any of these activation dimensions; declared dimensions\n")
-	b.WriteString("# combine with AND, values within one dimension combine with OR.\n")
-	b.WriteString("# Run `lit workflows --help` for the full format and the event catalog.\n")
-	if dimension != "labels" {
+	b.WriteString("# when: lists the moments the definition fires at, labels: narrows it to\n")
+	b.WriteString("# tickets carrying a label. Entries within one key are alternatives (OR);\n")
+	b.WriteString("# declaring both keys requires both (AND).\n")
+	b.WriteString("# Run `lit workflows --help` for the full format and every moment.\n")
+	if key != "when" {
+		b.WriteString("# when: [enter review, exit plan, show_ticket]  # entering or exiting a state, or an event\n")
+	}
+	if key != "labels" {
 		b.WriteString("# labels: [needs-design, blocked]\n")
-	}
-	if dimension != "states" {
-		b.WriteString("# states: [open]                       # fires when the ticket ENTERS this state\n")
-		b.WriteString("# states: [{name: closed, when: exit}] # fires when the ticket EXITS this state\n")
-	}
-	if dimension != "events" {
-		b.WriteString("# events: [work_started]\n")
 	}
 	b.WriteString(liveLine)
 	b.WriteString("\n")

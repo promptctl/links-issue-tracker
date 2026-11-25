@@ -42,11 +42,11 @@ is the second and later passes through implementation.
 at first implementation: address every finding or say on the thread why not,
 do not widen the change, re-request review when done, record a decision the
 reviewer should see. A workflow piece could carry that. Today it cannot bind
-to the moment. State activations within one piece combine with OR
-(`internal/workflows/match.go`), and the occasion carries what was entered and
-exited but not the pair as a transition, so `states: [impl, {name: review,
-when: exit}]` fires on every entry to impl and every exit from review, not on
-the one move from review to impl.
+to the moment. The `when:` entries of one piece combine with OR
+(`internal/workflows/match.go`), and the occasion carries each crossing but
+not the pair as a transition, so `when: [enter impl, exit review]` fires on
+every entry to impl and every exit from review, not on the one move from
+review to impl.
 
 **A named fact for reports.** Time spent in rework against time in first
 implementation is a quality signal, the kind of over-time question
@@ -71,14 +71,14 @@ the first time an agent runs `lit phase --to impl` out of habit.
 ## Three shapes
 
 **A. A fifth phase.** `rework` joins the four; the author moves to it with `lit
-phase <id> --to rework`; pieces bind `states: [rework]`; the statusline shows
+phase <id> --to rework`; pieces bind `when: [enter rework]`; the statusline shows
 it. Older lits read it without error, since an unknown phase name is
 read back as written. Costs the fifth word and the drift above.
 
 **B. A derived state.** The phase stays `impl`. The phase reader also reports
 whether this `impl` was entered from `review`, and three consumers read that:
 the phase occasion handed to workflows enters `rework` alongside `impl` when
-the move came from review, so a piece binds `states: [rework]` with no new
+the move came from review, so a piece binds `when: [enter rework]` with no new
 recorded word; `lit show` and the statusline print `impl (rework)`; a report
 counts time in `impl (rework)` apart from `impl`. No new command, no new
 vocabulary to record, and the fact is read off the trail that already holds it

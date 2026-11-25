@@ -6,9 +6,9 @@ import (
 )
 
 // Every command that fires a workflow occasion names it on its event: the
-// event, the states it moved (none, outside a transition) and the definitions
-// that fired, an empty list when none did. The transitions are covered by
-// TestPhaseMovesFireStateBoundWorkflows.
+// moments it carried — a read's one event — the definitions that fired and
+// the load's warnings, an empty list when there were none. The transitions are
+// covered by TestEveryCrossingFiresOnTheTransitionThatMakesIt.
 func TestEveryDispatchingCommandRecordsItsOccasion(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
@@ -28,7 +28,7 @@ func TestEveryDispatchingCommandRecordsItsOccasion(t *testing.T) {
 		{[]string{"backlog"}, "show_backlog"},
 	} {
 		runCLIInDir(t, dir, step.args...)
-		want := map[string]any{"workflows.event": step.event, "workflows.exited": []any{}, "workflows.entered": []any{}, "workflows.fired": []any{}}
+		want := map[string]any{"workflows.when": []any{step.event}, "workflows.fired": []any{}, "workflows.warnings": []any{}}
 		if got := workflowFacts(t); !reflect.DeepEqual(got, want) {
 			t.Errorf("lit %v event facts = %v, want %v", step.args, got, want)
 		}

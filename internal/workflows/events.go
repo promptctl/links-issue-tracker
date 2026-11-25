@@ -2,10 +2,14 @@ package workflows
 
 import "slices"
 
-// Event is a named semantic moment in the work lifecycle. Commands dispatch
-// events; workflow definitions bind to events, never to command names — so
-// commands can be renamed freely while user definitions keep firing, as long
-// as the event stays the same. The constants below are that stable contract.
+// Event names a read moment: lit showing or recording something that changes
+// no ticket's state. A change of state is never an event; it is the Crossing
+// it makes, whichever command makes it, so `lit done` and `lit close` reach
+// one `enter closed` and no definition can tell the commands apart.
+// Commands fire events; workflow definitions name events, never command
+// names — so commands can be renamed freely while user definitions keep
+// firing, as long as the event stays the same. The constants below are that
+// stable contract.
 // [LAW:one-source-of-truth] This catalog is the single home of event names;
 // dispatch wires commands to these constants, never to fresh strings.
 type Event string
@@ -20,21 +24,6 @@ const (
 	// EventNextPulled fires when the agent asks for the next workable ticket
 	// (today: `lit next`).
 	EventNextPulled Event = "next_pulled"
-	// EventWorkStarted fires when the agent claims a ticket and begins work
-	// (today: `lit start`).
-	EventWorkStarted Event = "work_started"
-	// EventPhaseSet fires when the agent sets where an in-progress ticket's
-	// work stands (today: `lit phase`), whether or not the phase moves.
-	EventPhaseSet Event = "phase_set"
-	// EventWorkFinished fires when claimed work finishes on the success path
-	// (today: `lit done`).
-	EventWorkFinished Event = "work_finished"
-	// EventTicketClosed fires when a ticket is closed without finishing —
-	// wontfix, obsolete, duplicate (today: `lit close`).
-	EventTicketClosed Event = "ticket_closed"
-	// EventTicketReopened fires when a closed ticket is reopened
-	// (today: `lit open`).
-	EventTicketReopened Event = "ticket_reopened"
 	// EventTicketCreated fires when a new ticket is created
 	// (today: `lit new`, `lit followup`).
 	EventTicketCreated Event = "ticket_created"
@@ -46,27 +35,26 @@ const (
 	EventCommentAdded Event = "comment_added"
 )
 
-// Catalog returns every event lit can dispatch, in lifecycle display order:
-// discovery, viewing, claiming, working, finishing, and mutation.
+// Catalog returns every event lit can fire, in display order: discovery,
+// viewing, then mutation.
 func Catalog() []Event {
 	return []Event{
 		EventShowBacklog,
 		EventNextPulled,
 		EventShowTicket,
-		EventWorkStarted,
-		EventPhaseSet,
-		EventWorkFinished,
-		EventTicketClosed,
-		EventTicketReopened,
 		EventTicketCreated,
 		EventTicketUpdated,
 		EventCommentAdded,
 	}
 }
 
+func (e Event) String() string { return string(e) }
+
 // Known reports whether the event is in this binary's catalog. A definition
-// bound to an unknown event still loads — it may target a newer lit — but it
-// can never fire here, which the loader surfaces as a warning.
+// naming an unknown event still loads — it may target a newer lit — but that
+// entry can never fire here, which the loader surfaces as a warning.
 func (e Event) Known() bool {
 	return slices.Contains(Catalog(), e)
 }
+
+func (Event) moment() {}

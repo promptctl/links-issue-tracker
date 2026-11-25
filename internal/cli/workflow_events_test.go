@@ -20,102 +20,85 @@ func hydratedIssue(t *testing.T, id model.ID, labels []string, state model.State
 	return issue
 }
 
+// assertReadOccasion checks what a read moment's builder is expected to hand dispatch:
+// the one event, and the ticket it read, if any.
+func assertReadOccasion(t *testing.T, got workflows.Occasion, event workflows.Event, id model.ID, labels []string) {
+	t.Helper()
+	if !slices.Equal(workflows.Spellings(got.Moments), []string{string(event)}) || got.IssueID != id || !slices.Equal(got.Labels, labels) {
+		t.Fatalf("occasion = %+v, want only %s on %q labeled %v", got, event, id, labels)
+	}
+}
+
 func TestShowTicketOccasion(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-1", []string{"need-design"}, model.StateOpen)
-	got := showTicketOccasion(issue)
-	want := workflows.Occasion{Event: workflows.EventShowTicket, IssueID: "lit-1", Labels: []string{"need-design"}}
-	if got.Event != want.Event || got.IssueID != want.IssueID || !slices.Equal(got.Labels, want.Labels) {
-		t.Fatalf("showTicketOccasion() = %+v, want %+v", got, want)
-	}
-	if got.Entered != nil || got.Exited != nil {
-		t.Fatalf("showTicketOccasion() carries a transition: %+v", got)
-	}
+	assertReadOccasion(t, showTicketOccasion(issue), workflows.EventShowTicket, "lit-1", []string{"need-design"})
 }
 
 func TestBacklogOccasionCarriesNoSingleTicket(t *testing.T) {
 	t.Parallel()
-	got := backlogOccasion()
-	if got.Event != workflows.EventShowBacklog {
-		t.Fatalf("backlogOccasion().Event = %q, want %q", got.Event, workflows.EventShowBacklog)
-	}
-	if got.IssueID != "" || got.Labels != nil || got.Entered != nil || got.Exited != nil {
-		t.Fatalf("backlogOccasion() = %+v, want only Event set", got)
-	}
+	assertReadOccasion(t, backlogOccasion(), workflows.EventShowBacklog, "", nil)
 }
 
 func TestNextPulledOccasion(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-2", []string{"epic-child"}, model.StateOpen)
-	got := nextPulledOccasion(issue)
-	if got.Event != workflows.EventNextPulled || got.IssueID != "lit-2" || !slices.Equal(got.Labels, []string{"epic-child"}) {
-		t.Fatalf("nextPulledOccasion() = %+v", got)
-	}
+	assertReadOccasion(t, nextPulledOccasion(issue), workflows.EventNextPulled, "lit-2", []string{"epic-child"})
 }
 
 func TestTicketCreatedOccasion(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-3", []string{"needs-triage"}, model.StateOpen)
-	got := ticketCreatedOccasion(issue)
-	if got.Event != workflows.EventTicketCreated || got.IssueID != "lit-3" || !slices.Equal(got.Labels, []string{"needs-triage"}) {
-		t.Fatalf("ticketCreatedOccasion() = %+v", got)
-	}
+	assertReadOccasion(t, ticketCreatedOccasion(issue), workflows.EventTicketCreated, "lit-3", []string{"needs-triage"})
 }
 
-func TestTicketUpdatedOccasionCarriesNoTransition(t *testing.T) {
+func TestTicketUpdatedOccasionCarriesNoCrossing(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-4", []string{"blocked"}, model.StateInProgress)
-	got := ticketUpdatedOccasion(issue)
-	if got.Event != workflows.EventTicketUpdated || got.IssueID != "lit-4" || !slices.Equal(got.Labels, []string{"blocked"}) {
-		t.Fatalf("ticketUpdatedOccasion() = %+v", got)
-	}
-	if got.Entered != nil || got.Exited != nil {
-		t.Fatalf("ticketUpdatedOccasion() carries a transition: %+v", got)
-	}
+	assertReadOccasion(t, ticketUpdatedOccasion(issue), workflows.EventTicketUpdated, "lit-4", []string{"blocked"})
 }
 
 func TestCommentAddedOccasion(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-5", []string{"discuss"}, model.StateOpen)
-	got := commentAddedOccasion(issue)
-	if got.Event != workflows.EventCommentAdded || got.IssueID != "lit-5" || !slices.Equal(got.Labels, []string{"discuss"}) {
-		t.Fatalf("commentAddedOccasion() = %+v", got)
-	}
+	assertReadOccasion(t, commentAddedOccasion(issue), workflows.EventCommentAdded, "lit-5", []string{"discuss"})
 }
 
-// TestTransitionOccasionMovesBothLevels: every lifecycle transition fires its
-// event with the states it moved the ticket out of and into. A status action
-// exits and enters the phase inside in_progress along with in_progress
-// itself; a phase move exits and enters phases alone; a call that leaves the
-// ticket where it was exits and enters nothing.
-func TestTransitionOccasionMovesBothLevels(t *testing.T) {
+// TestTransitionOccasionCrossesBothLevels: every lifecycle transition fires
+// the crossings it made and nothing naming the command: the states it moved
+// the ticket out of, then the ones it moved it into, each outermost first. A
+// status action exits and enters the phase inside in_progress along with
+// in_progress itself; a phase move exits and enters phases alone; a call that
+// leaves the ticket where it was crosses nothing. done and close make the
+// same crossing into closed.
+func TestTransitionOccasionCrossesBothLevels(t *testing.T) {
 	t.Parallel()
 	at := func(state model.State, phase model.Phase) ticketState {
 		return ticketState{issue: hydratedIssue(t, "lit-9", []string{"tracked"}, state), phase: phase}
 	}
 	cases := []struct {
-		name        string
-		action      model.Action
-		before      ticketState
-		after       ticketState
-		wantEvent   workflows.Event
-		wantExited  []string
-		wantEntered []string
+		name   string
+		action model.Action
+		before ticketState
+		after  ticketState
+		want   []string
 	}{
 		{"start", model.Start{Assignee: "claude"}, at(model.StateOpen, ""), at(model.StateInProgress, model.PhasePlan),
-			workflows.EventWorkStarted, []string{"open"}, []string{"in_progress", "plan"}},
+			[]string{"exit open", "enter in_progress", "enter plan"}},
 		{"reclaim", model.Start{Assignee: "claude"}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
-			workflows.EventWorkStarted, nil, nil},
+			[]string{}},
 		{"done", model.Done{}, at(model.StateInProgress, model.PhaseMerge), at(model.StateClosed, ""),
-			workflows.EventWorkFinished, []string{"in_progress", "merge"}, []string{"closed"}},
+			[]string{"exit in_progress", "exit merge", "enter closed"}},
 		{"close", model.Close{Outcome: model.Wontfix{}}, at(model.StateOpen, ""), at(model.StateClosed, ""),
-			workflows.EventTicketClosed, []string{"open"}, []string{"closed"}},
+			[]string{"exit open", "enter closed"}},
+		{"close from a phase", model.Close{Outcome: model.Wontfix{}}, at(model.StateInProgress, model.PhaseImpl), at(model.StateClosed, ""),
+			[]string{"exit in_progress", "exit impl", "enter closed"}},
 		{"reopen", model.Reopen{}, at(model.StateClosed, ""), at(model.StateOpen, ""),
-			workflows.EventTicketReopened, []string{"closed"}, []string{"open"}},
+			[]string{"exit closed", "enter open"}},
 		{"phase", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseImpl), at(model.StateInProgress, model.PhaseReview),
-			workflows.EventPhaseSet, []string{"impl"}, []string{"review"}},
+			[]string{"exit impl", "enter review"}},
 		{"phase unchanged", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
-			workflows.EventPhaseSet, nil, nil},
+			[]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,17 +106,14 @@ func TestTransitionOccasionMovesBothLevels(t *testing.T) {
 			if !fires {
 				t.Fatalf("transitionOccasion(%T) fires = false, want an occasion", tc.action)
 			}
-			if got.Event != tc.wantEvent {
-				t.Fatalf("Event = %q, want %q", got.Event, tc.wantEvent)
+			if spelled := workflows.Spellings(got.Moments); !slices.Equal(spelled, tc.want) {
+				t.Fatalf("Moments = %q, want %q", spelled, tc.want)
 			}
 			if got.IssueID != "lit-9" {
 				t.Fatalf("IssueID = %q, want lit-9", got.IssueID)
 			}
 			if !slices.Equal(got.Labels, []string{"tracked"}) {
 				t.Fatalf("Labels = %v, want [tracked]", got.Labels)
-			}
-			if !slices.Equal(got.Exited, tc.wantExited) || !slices.Equal(got.Entered, tc.wantEntered) {
-				t.Fatalf("Exited/Entered = %v/%v, want %v/%v", got.Exited, got.Entered, tc.wantExited, tc.wantEntered)
 			}
 		})
 	}
