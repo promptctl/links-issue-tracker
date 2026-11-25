@@ -4,15 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // timestampColumn is one column the stamp CHECKs of migration v12 guard. scope
 // restricts it to the rows that hold a timestamp ("" for all of them): a change
-// row's from/to value is a timestamp only for the fields
-// model.TimestampFields names.
+// row's from/to value is a timestamp only for the fields v12 names.
 type timestampColumn struct {
 	table, column, scope string
 }
@@ -24,8 +22,8 @@ func (c timestampColumn) checkName() string {
 }
 
 // rows is the predicate selecting the column's timestamps, and nothing else:
-// not a NULL, and not the empty value an older import could leave for an
-// absent one, which v12 spells NULL.
+// not a NULL, and not the empty value an older import could leave in a change
+// row for an absent one, which v12 spells NULL.
 func (c timestampColumn) rows() string {
 	scope := "TRUE"
 	if c.scope != "" {
@@ -34,16 +32,13 @@ func (c timestampColumn) rows() string {
 	return "(" + scope + ") AND " + c.column + " IS NOT NULL AND " + c.column + " <> ''"
 }
 
-// timestampColumns is every column the stored spelling binds. The migration
-// repeats it in SQL, so a test pins each entry to its CHECK.
+// v12TimestampColumns is the record of what migration v12 respells and
+// guards, frozen with it: the probe reads it against a store at v11, so a column
+// or field a later migration guards is not here. What the schema guards now is
+// read from the schema, by TestEveryTimestampColumnOfTheStoreIsGuardedByItsCheck.
 // [LAW:one-source-of-truth]
-func timestampColumns() []timestampColumn {
-	changeFields := make([]string, 0, 3)
-	for _, f := range model.TimestampFields() {
-		field := f.Name()
-		changeFields = append(changeFields, "'"+field+"'")
-	}
-	scope := "field IN (" + strings.Join(changeFields, ",") + ")"
+func v12TimestampColumns() []timestampColumn {
+	const scope = "field IN ('closed_at','archived_at','deleted_at')"
 	return []timestampColumn{
 		{"issues", "created_at", ""},
 		{"issues", "updated_at", ""},
@@ -67,7 +62,7 @@ func timestampColumns() []timestampColumn {
 // thing it destroys, since the instant is kept in UTC and the offset is not.
 func probeTimestampSpelling(ctx context.Context, db *sql.DB) (map[string]any, error) {
 	var respelled, offsets int
-	for _, c := range timestampColumns() {
+	for _, c := range v12TimestampColumns() {
 		var inColumn, withOffset int
 		if err := db.QueryRowContext(ctx, fmt.Sprintf(
 			`SELECT COALESCE(SUM(CHAR_LENGTH(%[1]s) <> %[3]d OR RIGHT(%[1]s,1) <> 'Z'),0), COALESCE(SUM(RIGHT(%[1]s,1) <> 'Z'),0) FROM %[2]s WHERE %[4]s`,

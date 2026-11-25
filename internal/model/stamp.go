@@ -54,7 +54,7 @@ func ParseStamp(text string) (time.Time, error) {
 // TimestampField is a FieldChange field whose from/to values are instants
 // rather than text a person wrote. The set is closed: a writer names one of
 // these, so it cannot misspell the field and slip past the respelling and the
-// store's CHECKs on issue_event_changes, which name the same three fields.
+// store's CHECKs on issue_event_changes, which a store test holds to this set.
 // [LAW:one-source-of-truth]
 type TimestampField int
 

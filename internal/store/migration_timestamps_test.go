@@ -101,7 +101,7 @@ func assertColumnSetRefused(t *testing.T, st *Store, c timestampColumn, value st
 // the trimmed spelling, a trailing character, and a date that does not exist.
 func TestEveryTimestampColumnRefusesWhatIsNotTheStoredSpelling(t *testing.T) {
 	st := v12Seeded(t)
-	for _, c := range timestampColumns() {
+	for _, c := range v12TimestampColumns() {
 		for _, value := range []string{
 			"2026-01-01T00:00:00.5Z",
 			"2026-01-01T00:00:00Z",
@@ -115,52 +115,70 @@ func TestEveryTimestampColumnRefusesWhatIsNotTheStoredSpelling(t *testing.T) {
 	}
 }
 
-// The list of columns the tests and the probe walk is read off the schema, not
-// trusted: every *_at column of the store's data is one of them, and each
-// carries the CHECK its name promises. A migration that adds a timestamp column
-// without its CHECK fails here, naming the column. migration_quarantine is
-// lit's bookkeeping, created outside goose, not the store's data.
+// What the store guards is read off the head schema, not trusted from a list:
+// every *_at column of the store's data carries the CHECK its name promises,
+// and the CHECKs on a change row's values name every field model.TimestampFields
+// does. A migration that adds a timestamp column or field without its CHECK
+// fails here, naming it. migration_quarantine is lit's bookkeeping, created
+// outside goose, not the store's data.
 func TestEveryTimestampColumnOfTheStoreIsGuardedByItsCheck(t *testing.T) {
 	ctx := context.Background()
-	st := v12Seeded(t)
-	listed := map[string]bool{}
-	for _, c := range timestampColumns() {
-		// A change row's value is a timestamp only for some fields; it is no
-		// *_at column, and its CHECK is looked up below.
-		if c.scope == "" {
-			listed[c.table+"."+c.column] = true
+	withStore(t, ctx, migratedDoltDir(t), func(st *Store) {
+		checks := map[string]string{}
+		checkRows, err := st.db.QueryContext(ctx, `SELECT tc.table_name, tc.constraint_name, cc.check_clause
+			FROM information_schema.table_constraints tc
+			JOIN information_schema.check_constraints cc
+			  ON tc.constraint_schema = cc.constraint_schema AND tc.constraint_name = cc.constraint_name
+			WHERE tc.table_schema = DATABASE() AND tc.constraint_type = 'CHECK'`)
+		if err != nil {
+			t.Fatalf("read the schema's CHECKs: %v", err)
 		}
-	}
-	rows, err := st.db.QueryContext(ctx, `SELECT table_name, column_name FROM information_schema.columns
-		WHERE table_schema = DATABASE() AND column_name LIKE '%\_at' AND table_name <> 'migration_quarantine'`)
-	if err != nil {
-		t.Fatalf("read the schema's timestamp columns: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var table, column string
-		if err := rows.Scan(&table, &column); err != nil {
+		defer checkRows.Close()
+		for checkRows.Next() {
+			var table, name, clause string
+			if err := checkRows.Scan(&table, &name, &clause); err != nil {
+				t.Fatal(err)
+			}
+			checks[table+"."+name] = clause
+		}
+		if err := checkRows.Err(); err != nil {
 			t.Fatal(err)
 		}
-		if !listed[table+"."+column] {
-			t.Errorf("%s.%s is a timestamp column no CHECK guards: add it to timestampColumns and give it a %s_%s_stamp CHECK", table, column, table, column)
+
+		columns, err := st.db.QueryContext(ctx, `SELECT table_name, column_name FROM information_schema.columns
+			WHERE table_schema = DATABASE() AND column_name LIKE '%\_at' AND table_name <> 'migration_quarantine'`)
+		if err != nil {
+			t.Fatalf("read the schema's timestamp columns: %v", err)
 		}
-		delete(listed, table+"."+column)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	for column := range listed {
-		t.Errorf("timestampColumns lists %s, which the schema does not have", column)
-	}
-	for _, c := range timestampColumns() {
-		var name string
-		if err := st.db.QueryRowContext(ctx, `SELECT constraint_name FROM information_schema.table_constraints
-			WHERE table_schema = DATABASE() AND table_name = ? AND constraint_name = ? AND constraint_type = 'CHECK'`,
-			c.table, c.checkName()).Scan(&name); err != nil {
-			t.Errorf("%s.%s has no CHECK named %s: %v", c.table, c.column, c.checkName(), err)
+		defer columns.Close()
+		for columns.Next() {
+			var table, column string
+			if err := columns.Scan(&table, &column); err != nil {
+				t.Fatal(err)
+			}
+			c := timestampColumn{table: table, column: column}
+			if _, ok := checks[table+"."+c.checkName()]; !ok {
+				t.Errorf("%s.%s is a timestamp column no CHECK guards: give it a CHECK named %s", table, column, c.checkName())
+			}
 		}
-	}
+		if err := columns.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, column := range []string{"from_value", "to_value"} {
+			c := timestampColumn{table: "issue_event_changes", column: column}
+			clause, ok := checks[c.table+"."+c.checkName()]
+			if !ok {
+				t.Errorf("%s.%s has no CHECK named %s", c.table, c.column, c.checkName())
+				continue
+			}
+			for _, field := range model.TimestampFields() {
+				if !strings.Contains(clause, "'"+field.Name()+"'") {
+					t.Errorf("%s does not guard the %s field model.TimestampFields names:\n%s", c.checkName(), field.Name(), clause)
+				}
+			}
+		}
+	})
 }
 
 // Whatever StampText writes, at the edges of its range, every CHECK admits:
@@ -177,7 +195,7 @@ func TestEveryTimestampColumnAdmitsWhatStampTextWrites(t *testing.T) {
 		time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC),
 	} {
-		for _, c := range timestampColumns() {
+		for _, c := range v12TimestampColumns() {
 			stmt := "UPDATE " + c.table + " SET " + c.column + " = ? WHERE " + c.rows()
 			if _, err := st.db.ExecContext(ctx, stmt, model.StampText(instant)); err != nil {
 				t.Errorf("%s.%s refused StampText(%s) = %q: %v", c.table, c.column, instant, model.StampText(instant), err)
