@@ -672,8 +672,9 @@ its `UpdatedAt`; every write that moves an existing row sets updated_at through
 it, and a rank move sets none.
 
 `RetentionChanges(before, after Retention) []FieldChange` (`model.go`) — the
-`archived_at` / `deleted_at` rows a retention move records, spelled like every
-change row (RFC3339Nano, `""` when absent).
+`archived_at` / `deleted_at` rows a retention move records, built by
+`TimestampChange` like every timestamp change row (`StampText`, `""` when
+absent).
 
 ### Hydration
 - `HydrateStatus(issue Issue, view StatusView) (Issue, error)` — `model.go`:

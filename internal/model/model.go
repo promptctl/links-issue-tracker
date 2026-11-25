@@ -589,11 +589,11 @@ func (c StatusChange) Write(at stamp.Instant) (Issue, []FieldChange) {
 	}
 	after = after.Stamped(at)
 	var rows changeRows
-	rows.add("status", before.StatusValue(), after.StatusValue())
-	rows.add("closed_at", formatChangeTime(before.ClosedAtValue()), formatChangeTime(after.ClosedAtValue()))
-	rows.add("resolution", formatChangeString((*string)(before.ResolutionValue())), formatChangeString((*string)(after.ResolutionValue())))
-	rows.add("redirect_target", formatChangeString(before.RedirectTargetValue()), formatChangeString(after.RedirectTargetValue()))
-	rows.add("assignee", before.Assignee.Raw(), after.Assignee.Raw())
+	rows.add(FieldChange{Field: "status", From: before.StatusValue(), To: after.StatusValue()})
+	rows.add(TimestampChange(ClosedAtField, before.ClosedAtValue(), after.ClosedAtValue()))
+	rows.add(FieldChange{Field: "resolution", From: formatChangeString((*string)(before.ResolutionValue())), To: formatChangeString((*string)(after.ResolutionValue()))})
+	rows.add(FieldChange{Field: "redirect_target", From: formatChangeString(before.RedirectTargetValue()), To: formatChangeString(after.RedirectTargetValue())})
+	rows.add(FieldChange{Field: "assignee", From: before.Assignee.Raw(), To: after.Assignee.Raw()})
 	return after, rows
 }
 
@@ -616,27 +616,20 @@ func RetentionChanges(before, after Retention) []FieldChange {
 	priorArchived, priorDeleted := RetentionTimestamps(before)
 	nextArchived, nextDeleted := RetentionTimestamps(after)
 	var rows changeRows
-	rows.add("archived_at", formatChangeTime(priorArchived), formatChangeTime(nextArchived))
-	rows.add("deleted_at", formatChangeTime(priorDeleted), formatChangeTime(nextDeleted))
+	rows.add(TimestampChange(ArchivedAtField, priorArchived, nextArchived))
+	rows.add(TimestampChange(DeletedAtField, priorDeleted, nextDeleted))
 	return rows
 }
 
 // changeRows is a write's change rows, one per field whose spelling moved.
+// A timestamp is spelled by TimestampChange, and StampText has one spelling
+// per instant, so its spelling moves exactly when its instant does.
 type changeRows []FieldChange
 
-func (r *changeRows) add(field, from, to string) {
-	if from != to {
-		*r = append(*r, FieldChange{Field: field, From: from, To: to})
+func (r *changeRows) add(change FieldChange) {
+	if change.From != change.To {
+		*r = append(*r, change)
 	}
-}
-
-// formatChangeTime is an optional instant as every change row spells it:
-// absent as the empty string, present as RFC3339Nano.
-func formatChangeTime(value *time.Time) string {
-	if value == nil {
-		return ""
-	}
-	return value.Format(time.RFC3339Nano)
 }
 
 // formatChangeString is an optional string as a change row spells it, absent

@@ -159,7 +159,8 @@ func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 
 // A written transition records one instant: the stamp it is handed is the
 // row's updated_at and a close's close time, and the change rows the write
-// records spell that same instant.
+// records spell that same instant the way it is stored, its zero fraction
+// written out.
 func TestWriteRecordsTheStampOnce(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task", UpdatedAt: phaseClock.Add(-time.Hour)}, StateInProgress)
 	change, err := leaf.PlanStatus(Done{})
@@ -175,7 +176,7 @@ func TestWriteRecordsTheStampOnce(t *testing.T) {
 	}
 	want := []FieldChange{
 		{Field: "status", From: "in_progress", To: "closed"},
-		{Field: "closed_at", From: "", To: phaseClock.Format(time.RFC3339Nano)},
+		{Field: "closed_at", From: "", To: "2026-03-04T05:06:07.000000000Z"},
 	}
 	if !slices.Equal(changes, want) {
 		t.Errorf("Write(done) change rows = %+v, want %+v", changes, want)
