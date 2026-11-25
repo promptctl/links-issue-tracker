@@ -355,12 +355,14 @@ breadcrumb (`purge.go`), and neither does `verdict` (`verdict.go`).
 
 ### 1.14 Workflow event dispatch
 
-Every dispatch is `dispatchOccasion(ctx, stderr, env, stdout, ws, o)`
-(`workflow_dispatch.go`), which calls `workflows.Dispatch(env, stdout, stderr, ws, o)`
-— guidance to stdout, each load warning to stderr as one `lit: workflow <warning>`
-line — and records `workflows.when`, `workflows.fired` and `workflows.warnings` on the
-event. A read command passes the invocation's stdout; a transition passes the buffer
-`applyTransition` collects its guidance in.
+A firing command loads the workflow definitions once, `loadWorkflows(ctx, inv, ws)`
+(`workflow_dispatch.go`): each load warning goes to stderr as one `lit: workflow <warning>`
+line and all of them to the command's event as `workflows.warnings`, once per command, bulk
+included. Each occasion fires through `(loadedWorkflows).fire(ctx, o)`, which calls
+`workflows.Fire(set, ws, stderr, o)`, records `workflows.when` and `workflows.fired` on the
+event, and returns the guidance. A read command runs `dispatchOccasion(ctx, inv, ws, o)` —
+load, fire, write the guidance to stdout; a transition returns its guidance from
+`applyTransition` in `transitionDone.said`, and a comment from `addComment`.
 Occasion builders (`workflow_events.go`), each an `Occasion{Moments, IssueID, Labels}`:
 - `showTicketOccasion` → `[EventShowTicket]`, carries IssueID + Labels
 - `backlogOccasion` → `[EventShowBacklog]`, no IssueID/Labels
@@ -369,16 +371,17 @@ Occasion builders (`workflow_events.go`), each an `Occasion{Moments, IssueID, La
 - `ticketUpdatedOccasion` → `[EventTicketUpdated]`; never carries a crossing
   because `update` rejects `--status`
 - `commentAddedOccasion` → `[EventCommentAdded]`
-- `transitionOccasion(action, before, after)` → the crossings the transition
-  made, never an event: `crossings(Exit, before.states(), after.states())` then
+- `transitionOccasion(before, after)` → the crossings the transition
+  made, never an event, for every transition: `crossings(Exit, before.states(), after.states())` then
   `crossings(Enter, after.states(), before.states())` — every state left, then
   every state entered, each outermost first, a phase counting as a state inside
   `in_progress`. A start from open is `exit open, enter in_progress, enter plan`;
-  `done` and `close` both end in `enter closed`; a call that leaves the ticket
-  where it was carries no moments.
+  `done` and `close` both end in `enter closed`; a call that leaves the ticket's
+  state where it was carries no moments.
 
-Retention actions (archive/unarchive/delete/restore) fire no event:
-`transitionOccasion` returns `fires = false` for them (`workflow_events.go`). `purge` fires none either (`purge.go`), nor does `verdict` (`verdict.go`).
+Retention actions (archive/unarchive/delete/restore) cross no state, so their occasion
+carries no moments and only a definition bound by labels alone fires on them
+(`workflow_events.go`). `purge` fires no occasion (`purge.go`), nor does `verdict` (`verdict.go`).
 
 ### 1.15 Prefix / ID resolution
 
@@ -451,8 +454,10 @@ prefix (`cli.go`).
   lowercasing and trimming, then taking the display word or the decimal. Both
   reject anything else with the shared
   `"priority must be normal (0) or urgent (1)"` (`priority.go`).
-- States: `open, in_progress, closed`; `in-progress` is normalized to
-  `in_progress`; error `invalid status "<x>" (valid: open, in_progress, closed)`
+- States: `open`, `in_progress`, `closed`, in work order (`States()`, which
+  `ParseState`'s admissible set and its error's list derive from); `in-progress`
+  is normalized to `in_progress`; error
+  `invalid status "<x>" (valid: open, in_progress, closed)`
   (`internal/model/lifecycle/lifecycle.go`).
 - Phases: `plan, impl, review, merge`, in work order; `ParsePhase` lowercases
   and trims; error `invalid phase "<x>" (valid: plan, impl, review, merge)`
@@ -1212,8 +1217,10 @@ transition row runs per id — §2.21):
    before it, so it announces nothing.
 5. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
    (`cli.go`).
-6. Unless the action is a retention action, dispatch the transition occasion
-   (`transitionOccasion`), its guidance collected after the owed notice into
+6. Fire the transition occasion (`transitionOccasion`) against the workflows the
+   command loaded before the pre-read (`loadWorkflows`, §1.14), for every action —
+   a retention action crosses no state, so only a definition bound by labels alone
+   fires on it — its guidance appended after the owed notice in
    `transitionDone.said` (`applyTransition`, `cli.go`).
 7. Write `said` — the transfer notice, then the guidance — then
    `printIssueSummary` (`cli.go`).
@@ -1831,16 +1838,18 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way,
   and `lit new` and `lit update` `--plan` too (event fact `text_source.plan`).
 - Writes through `addComment` (`cli.go`), shared with `bulk comment`:
-  `Store.AddComment`, then the event fact `comment.id`, the new comment's id.
+  `Store.AddComment`, then the event fact `comment.id`, the new comment's id, then
+  the `comment_added` occasion fired against the workflows the command loaded
+  (§1.14), returning its guidance.
 - The body parses through `model.ParseCommentBody` (`internal/model/comment.go`)
   before the store is called: a blank body (after trim) →
   `model.ValidationError{Message: "comment body is required"}` → exit 3. A missing
   issue → exit 4 (`store.go`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
   `"unknown"` (`store.go`).
-- Dispatches `EventCommentAdded` (`cli.go`).
-- Output: `printComment` → `commentLine` → `"<issueID> <commentID>\n"` (`cli.go`).
-  **No breadcrumb.**
+- Fires `EventCommentAdded` (`cli.go`).
+- Output: the guidance `addComment` returned, then `printComment` → `commentLine` →
+  `"<issueID> <commentID>\n"` (`cli.go`). **No breadcrumb.**
 
 **`lit comment rm <comment-id>`** (`commentRmLeaf`, `cli.go`):
 - No flags (not even `--by`).
@@ -2001,8 +2010,9 @@ before any id is acted on.
   with what the item's error declares about itself (`model.ErrorRecord`)
   recorded into the scope. The event's fact `bulk.not_run` lists the ids the
   run never reached, `[]` when it reached them all.
-- `op` returns the item's notice and error. Each success writes the notice and
-  then `"<id> ok\n"` to stdout; a write error stops the run at that item, as
+- `op` returns what it said for the item — what the single verb prints for that
+  ticket, the guidance its workflows fired included — and its error. Each success
+  writes that and then `"<id> ok\n"` to stdout; a write error stops the run at that item, as
   `bulkStop{IssueID, Unprinted, Err, NotRun}` (`bulk.go`).
 - Each item that did not land is collected; **unlanded items never reach
   stdout** (`bulk.go`).
@@ -2047,9 +2057,12 @@ before any id is acted on.
   no comment written. Each id runs `addComment` (`cli.go`), the step
   `commentAddLeaf` runs: `Store.AddComment`, then the fact `comment.id` in the
   id's `bulk.items` scope. The comments an issue already has are untouched.
-- Each landed id's notice is `commentLine` → `"<issueID> <commentID>\n"`
-  (`cli.go`), written before `"<id> ok\n"`.
-- **No workflow events** (`EventCommentAdded` is not dispatched).
+- The workflows are loaded once, before the first id (`loadWorkflows`, §1.14), and
+  each id's `addComment` fires `EventCommentAdded` for the ticket it commented on,
+  its `workflows.when` and `workflows.fired` under the id's `bulk.item.facts` and
+  `workflows.warnings` once, on the command's event.
+- Each landed id's said text is the guidance its occasion fired, then `commentLine` →
+  `"<issueID> <commentID>\n"` (`cli.go`), written before `"<id> ok\n"`.
 
 **`lit bulk <start|done|close|open|archive|unarchive|delete|restore> --ids <csv> [<verb flags>] [--reason <text>]`**
 (`bulkTransitionLeaf(spec)`, `bulk.go`; rows built from `startSpec`, `doneSpec`,
@@ -2068,9 +2081,13 @@ before any id is acted on.
   `applyTransition` (`cli.go`), the step `transitionLeaf` runs: `GetIssue`,
   `readTicketState`, the spec's authorize hook, `Store.Apply`,
   `readTicketState` again, the owed notice and statusline facts, and the
-  transition occasion, so each item fires the crossings it made as the single
-  verb does, its `workflows.*` facts under the item's `bulk.item.facts`. Its
-  notice and guidance are written to stdout before `"<id> ok\n"` (`bulk.go`).
+  transition occasion, fired against the workflows the command loaded once
+  before the first id (`loadWorkflows`, §1.14), so each item fires the crossings
+  it made as the single verb does — a retention verb none, so only a definition
+  bound by labels alone fires on it. Each item's `workflows.when` and
+  `workflows.fired` are under its `bulk.item.facts`; `workflows.warnings` is on
+  the command's event, once. Its notice and guidance are written to stdout
+  before `"<id> ok\n"` (`bulk.go`).
 - **No summary, no close-adjacency block, no breadcrumb** on the bulk path.
 
 **`lit bulk import`** (hidden, retired) →

@@ -31,7 +31,14 @@ func Dir(storageDir string, kind string) string {
 // build runs again each attempt so the record's stamped id/timestamp always
 // matches the file it lands in. [LAW:no-silent-failure] every failure mode
 // (mkdir, marshal, write) returns a wrapped error naming the trace kind.
+//
+// A storageDir that is not absolute is refused: it would land the record
+// wherever the process happens to run. [LAW:single-enforcer] every trace kind
+// writes through here, so none needs a guard of its own.
 func Write(storageDir string, kind string, slug string, build func(id string, recordedAt time.Time) ([]byte, error)) (id string, path string, err error) {
+	if !filepath.IsAbs(storageDir) {
+		return "", "", fmt.Errorf("write %s trace: storage dir %q is not an absolute path", kind, storageDir)
+	}
 	dir := Dir(storageDir, kind)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", fmt.Errorf("create %s trace dir: %w", kind, err)

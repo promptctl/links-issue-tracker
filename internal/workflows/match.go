@@ -33,17 +33,12 @@ type Occasion struct {
 	Labels []string
 }
 
-// Matches reports whether the definition fires on the occasion. Composition
-// is OR within a key (any listed value satisfies it) and AND across keys
-// (every declared key must be satisfied); an undeclared key constrains
-// nothing. An inert definition never fires.
-// [LAW:dataflow-not-control-flow] The same checks run for every definition on
-// every occasion; which keys bite is decided entirely by the data.
+// Matches reports whether the definition fires on the occasion: whether its
+// activation gives a reason to. [LAW:single-enforcer] firing and its reasons
+// are one computation, so the trace and dry-run can never explain a firing
+// that did not happen or miss one that did.
 func (d Definition) Matches(o Occasion) bool {
-	if d.Inert() {
-		return false
-	}
-	return matchAny(d.When, o.Moments) && matchAny(d.Labels, o.Labels)
+	return len(d.MatchReasons(o)) > 0
 }
 
 // Matching returns the definitions that fire on the occasion, in the Set's
@@ -58,41 +53,50 @@ func (s Set) Matching(o Occasion) []Definition {
 	return out
 }
 
-// matchAny is one key's test: unconstrained when the definition lists
-// nothing, otherwise satisfied by any listed value the occasion carries.
-// Moments and labels are both compared by equality — a crossing is its side
-// and state, an event its name — so one test serves both keys.
-// [LAW:one-type-per-behavior]
-func matchAny[T comparable](bound, carried []T) bool {
-	if len(bound) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(bound, func(value T) bool {
-		return slices.Contains(carried, value)
-	})
-}
-
 // MatchReasons returns, for a definition that fires on the occasion, which
 // specific value in each declared key satisfied it — "when:enter closed",
 // "label:needs-design" — the shared "why" computation behind both the firing
 // trace (a real occasion) and `lit workflows dry-run` (a hypothetical one).
-// Nil when the definition does not match.
-// [LAW:single-enforcer] built on Matches rather than re-deriving the boolean
-// logic, so the two can never disagree about whether a definition fired.
+// Nil when the definition does not fire.
 func (d Definition) MatchReasons(o Occasion) []string {
-	if !d.Matches(o) {
+	return d.Activation.reasons(o)
+}
+
+// reasons composes the two keys: OR within a key (any listed value the
+// occasion carries satisfies it) and AND across them (each key that lists an
+// entry must be satisfied). [LAW:dataflow-not-control-flow] the same steps
+// run for every definition on every occasion; which keys bite is decided by
+// what they list. [LAW:one-type-per-behavior] moments and labels are both
+// compared by equality — a crossing is its side and state, an event its name
+// — so one test serves both keys.
+func (k Keys) reasons(o Occasion) []string {
+	when, labels := carried(k.When, o.Moments), carried(k.Labels, o.Labels)
+	if !holds(k.When, when) || !holds(k.Labels, labels) {
 		return nil
 	}
 	var reasons []string
-	for _, moment := range d.When {
-		if slices.Contains(o.Moments, moment) {
-			reasons = append(reasons, "when:"+moment.String())
-		}
+	for _, moment := range when {
+		reasons = append(reasons, "when:"+moment.String())
 	}
-	for _, label := range d.Labels {
-		if slices.Contains(o.Labels, label) {
-			reasons = append(reasons, "label:"+label)
-		}
+	for _, label := range labels {
+		reasons = append(reasons, "label:"+label)
 	}
 	return reasons
+}
+
+// carried is the listed values the occasion carries, in listed order.
+func carried[T comparable](listed, values []T) []T {
+	var out []T
+	for _, value := range listed {
+		if slices.Contains(values, value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+// holds is one key's test: a key that lists nothing constrains nothing, and
+// one that lists entries holds when the occasion carries one of them.
+func holds[T any](listed, carried []T) bool {
+	return len(listed) == 0 || len(carried) > 0
 }

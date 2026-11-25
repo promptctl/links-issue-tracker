@@ -24,23 +24,22 @@ labels:
 
 Remember to review the design doc first.
 `
-	def, warnings, ok := parseDefinition(content, "review/design.md", templates.SourceProject)
-	if !ok {
-		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
-	}
+	def, warnings := parseDefinition(content, "review/design.md", templates.SourceProject)
 	if len(warnings) != 0 {
 		t.Fatalf("parseDefinition() warnings = %v, want none", warnings)
 	}
 	want := Definition{
 		ID:   "needs-design-review",
 		Name: "Design review reminder",
-		When: []Moment{
-			Crossing{Side: Enter, State: "open"},
-			Crossing{Side: Enter, State: "in_progress"},
-			Crossing{Side: Exit, State: "in_progress"},
-			EventShowTicket,
+		Activation: Keys{
+			When: []Moment{
+				Crossing{Side: Enter, State: "open"},
+				Crossing{Side: Enter, State: "in_progress"},
+				Crossing{Side: Exit, State: "in_progress"},
+				EventShowTicket,
+			},
+			Labels: []string{"needs-design", "blocked"},
 		},
-		Labels: []string{"needs-design", "blocked"},
 		Body:   "Remember to review the design doc first.",
 		Source: templates.SourceProject,
 		Path:   "review/design.md",
@@ -52,45 +51,42 @@ Remember to review the design doc first.
 
 func TestParseDefinitionDefaultID(t *testing.T) {
 	// The default ID is the layer-relative path, ".md" dropped, spaces → "_".
-	def, _, ok := parseDefinition("---\nwhen: [show_backlog]\n---\nbody", "review tasks/design check.md", templates.SourceGlobal)
-	if !ok {
-		t.Fatal("parseDefinition() not ok")
-	}
+	def, _ := parseDefinition("---\nwhen: [show_backlog]\n---\nbody", "review tasks/design check.md", templates.SourceGlobal)
 	if def.ID != "review_tasks/design_check" {
 		t.Fatalf("default ID = %q, want %q", def.ID, "review_tasks/design_check")
 	}
 }
 
-func TestParseDefinitionNoFrontmatterIsInertWithWarning(t *testing.T) {
-	def, warnings, ok := parseDefinition("just some notes\n", "notes.md", templates.SourceProject)
-	if !ok {
-		t.Fatal("parseDefinition() not ok; a plain markdown file must still load")
-	}
-	if !def.Inert() {
-		t.Fatalf("definition = %+v, want inert", def)
+func TestParseDefinitionNoFrontmatterNeverFiresWithWarning(t *testing.T) {
+	def, warnings := parseDefinition("just some notes\n", "notes.md", templates.SourceProject)
+	if def.Activation != (Never{}) {
+		t.Fatalf("definition = %+v, want one that never fires", def)
 	}
 	if def.Body != "just some notes" {
 		t.Fatalf("Body = %q, want the whole file", def.Body)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "inert") {
-		t.Fatalf("warnings = %v, want one inert warning", warnings)
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "never fires") {
+		t.Fatalf("warnings = %v, want one never-fires warning", warnings)
 	}
 }
 
-func TestParseDefinitionMalformed(t *testing.T) {
-	cases := map[string]string{
-		"unterminated frontmatter": "---\nwhen: [show_backlog]\nno closing delimiter",
-		"non-mapping frontmatter":  "---\n- a\n- b\n---\nbody",
-		"scalar frontmatter":       "---\nhello\n---\nbody",
-		"when not a sequence":      "---\nwhen: enter closed\n---\nbody",
-		"when entry a mapping":     "---\nwhen:\n  - {name: closed}\n---\nbody",
-		"labels not a sequence":    "---\nlabels: 17\n---\nbody",
+// A malformed file never fires and still holds its id — the one it declares
+// when the header decodes that far, else the one its path gives — so a
+// farther layer's definition of that id does not fire in its place.
+func TestParseDefinitionMalformedNeverFiresAndHoldsItsID(t *testing.T) {
+	cases := map[string]struct{ content, id string }{
+		"unterminated frontmatter": {"---\nwhen: [show_backlog]\nno closing delimiter", "bad"},
+		"non-mapping frontmatter":  {"---\n- a\n- b\n---\nbody", "bad"},
+		"scalar frontmatter":       {"---\nhello\n---\nbody", "bad"},
+		"when not a sequence":      {"---\nid: done\nwhen: enter closed\n---\nbody", "done"},
+		"when entry a mapping":     {"---\nid: done\nwhen:\n  - {enter: closed}\n---\nbody", "done"},
+		"labels not a sequence":    {"---\nlabels: 17\n---\nbody", "bad"},
 	}
-	for name, content := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, warnings, ok := parseDefinition(content, "bad.md", templates.SourceProject)
-			if ok {
-				t.Fatal("parseDefinition() ok, want malformed → skipped")
+			def, warnings := parseDefinition(tc.content, "bad.md", templates.SourceProject)
+			if def.ID != tc.id || def.Activation != (Never{}) {
+				t.Fatalf("definition = %+v, want id %q held by one that never fires", def, tc.id)
 			}
 			if len(warnings) != 1 {
 				t.Fatalf("warnings = %v, want exactly one", warnings)
@@ -102,23 +98,55 @@ func TestParseDefinitionMalformed(t *testing.T) {
 	}
 }
 
-// An event outside the catalog — one a newer lit may fire, or one an older
-// lit fired for a change of state — loads as authored, with a warning that
-// says how a change of state is written; no command here fires it. The rest
-// of the list still binds, since entries are alternatives.
-func TestParseDefinitionUnknownEventWarnsButLoads(t *testing.T) {
-	for _, name := range []string{"warp_drive_engaged", "work_started", "phase_set", "work_finished", "ticket_closed", "ticket_reopened"} {
+// A when: entry naming no moment this lit fires — an event outside the
+// catalog (one a newer lit may fire, or one an older lit fired for a change of
+// state), or a state the lifecycle does not have — never fires, with a warning
+// saying why; the rest of the list still binds, since entries are
+// alternatives.
+func TestParseDefinitionUnreadableWhenEntryWarnsAndNeverFires(t *testing.T) {
+	cases := map[string]string{
+		"warp_drive_engaged": "enter <state> or exit <state>",
+		"work_started":       "enter <state> or exit <state>",
+		"phase_set":          "enter <state> or exit <state>",
+		"work_finished":      "enter <state> or exit <state>",
+		"ticket_closed":      "enter <state> or exit <state>",
+		"ticket_reopened":    "enter <state> or exit <state>",
+		"enter reveiw":       "open, in_progress, plan, impl, review, merge, closed",
+		"exit in progress":   "open, in_progress, plan, impl, review, merge, closed",
+		"":                   "blank",
+	}
+	for entry, says := range cases {
+		t.Run(entry, func(t *testing.T) {
+			def, warnings := parseDefinition("---\nwhen: ['"+entry+"', enter closed]\n---\nbody", "old.md", templates.SourceProject)
+			want := Keys{When: []Moment{Crossing{Side: Enter, State: "closed"}}}
+			if !reflect.DeepEqual(def.Activation, want) {
+				t.Fatalf("Activation = %+v, want %+v: the readable entry still binds", def.Activation, want)
+			}
+			if len(warnings) != 1 || !strings.Contains(warnings[0].Message, says) {
+				t.Fatalf("warnings = %v, want one naming %q", warnings, says)
+			}
+		})
+	}
+}
+
+// A key whose every entry is unreadable can never hold, so the definition
+// never fires: dropping the key instead would widen it to the other key
+// alone.
+func TestParseDefinitionKeyWithNoReadableEntryNeverWidens(t *testing.T) {
+	cases := map[string]string{
+		"when, beside labels": "---\nwhen: [work_finished]\nlabels: [needs-design]\n---\nbody",
+		"blank when":          "---\nwhen: ['']\nlabels: [needs-design]\n---\nbody",
+		"labels, beside when": "---\nwhen: [enter closed]\nlabels: ['a,b']\n---\nbody",
+		"blank labels":        "---\nwhen: [enter closed]\nlabels: ['  ']\n---\nbody",
+	}
+	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			def, warnings, ok := parseDefinition("---\nwhen: ["+name+", enter closed]\n---\nbody", "old.md", templates.SourceProject)
-			if !ok {
-				t.Fatal("parseDefinition() not ok; unknown events must not reject the file")
+			def, warnings := parseDefinition(content, "narrow.md", templates.SourceProject)
+			if def.Activation != (Never{}) {
+				t.Fatalf("Activation = %+v, want one that never fires", def.Activation)
 			}
-			want := []Moment{Event(name), Crossing{Side: Enter, State: "closed"}}
-			if !reflect.DeepEqual(def.When, want) {
-				t.Fatalf("When = %v, want %v, the authored entry preserved", def.When, want)
-			}
-			if len(warnings) != 1 || !strings.Contains(warnings[0].Message, name) || !strings.Contains(warnings[0].Message, "enter <state> or exit <state>") {
-				t.Fatalf("warnings = %v, want one unknown-event warning naming %s and the crossing spelling", warnings, name)
+			if len(warnings) != 1 {
+				t.Fatalf("warnings = %v, want one for the unreadable entry", warnings)
 			}
 		})
 	}
@@ -137,10 +165,7 @@ func TestParseDefinitionUnreadKeysNeverFire(t *testing.T) {
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			def, warnings, ok := parseDefinition(content, "done.md", templates.SourceProject)
-			if !ok {
-				t.Fatalf("parseDefinition() not ok, warnings = %v; the file must still hold its id", warnings)
-			}
+			def, warnings := parseDefinition(content, "done.md", templates.SourceProject)
 			if def.ID != "done" {
 				t.Fatalf("ID = %q, want the file's id held", def.ID)
 			}
@@ -159,22 +184,20 @@ func TestParseDefinitionUnreadKeysNeverFire(t *testing.T) {
 }
 
 func TestParseDefinitionNormalization(t *testing.T) {
-	content := "---\nid: '  spaced  '\nlabels: ['  a  ', '', '   ']\nwhen: ['', ' Show_Ticket ', '  ENTER   In_Progress ']\n---\n\n  body text  \n"
-	def, warnings, ok := parseDefinition(content, "n.md", templates.SourceProject)
-	if !ok {
-		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
-	}
+	content := "---\nid: '  spaced  '\nlabels: ['  A  ']\nwhen: [' Show_Ticket ', '  ENTER   In_Progress ', 'exit In-Progress', 'enter Review', 'SHOW_TICKET']\n---\n\n  body text  \n"
+	def, warnings := parseDefinition(content, "n.md", templates.SourceProject)
 	if len(warnings) != 0 {
-		t.Fatalf("warnings = %v, want none — a case variant is not an unknown event", warnings)
+		t.Fatalf("warnings = %v, want none — a case or alias variant is not an unknown moment", warnings)
 	}
 	if def.ID != "spaced" {
 		t.Fatalf("ID = %q, want trimmed explicit id", def.ID)
 	}
-	if !reflect.DeepEqual(def.Labels, []string{"a"}) {
-		t.Fatalf("Labels = %v, want empties dropped", def.Labels)
+	want := Keys{
+		When:   []Moment{EventShowTicket, Crossing{Side: Enter, State: "in_progress"}, Crossing{Side: Exit, State: "in_progress"}, Crossing{Side: Enter, State: "review"}},
+		Labels: []string{"a"},
 	}
-	if want := []Moment{EventShowTicket, Crossing{Side: Enter, State: "in_progress"}}; !reflect.DeepEqual(def.When, want) {
-		t.Fatalf("When = %v, want %v: lowercased, whitespace collapsed, empties dropped", def.When, want)
+	if !reflect.DeepEqual(def.Activation, want) {
+		t.Fatalf("Activation = %+v, want %+v: lowercased, whitespace collapsed, aliases read as the lifecycle reads them, each moment once", def.Activation, want)
 	}
 	if def.Body != "body text" {
 		t.Fatalf("Body = %q, want trimmed", def.Body)
@@ -184,64 +207,71 @@ func TestParseDefinitionNormalization(t *testing.T) {
 // Frontmatter labels are stamped into the store's canonical form at parse
 // time, so an authored "Needs-Design" matches the persisted "needs-design".
 func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
-	def, warnings, ok := parseDefinition("---\nlabels: ['Needs-Design', 'has,comma']\n---\nbody", "l.md", templates.SourceProject)
-	if !ok {
-		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
-	}
-	if !reflect.DeepEqual(def.Labels, []string{"needs-design"}) {
-		t.Fatalf("Labels = %v, want lowercased canonical form", def.Labels)
+	def, warnings := parseDefinition("---\nlabels: ['Needs-Design', 'has,comma']\n---\nbody", "l.md", templates.SourceProject)
+	if !reflect.DeepEqual(def.Keys().Labels, []string{"needs-design"}) {
+		t.Fatalf("Labels = %v, want lowercased canonical form", def.Keys().Labels)
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "has,comma") {
 		t.Fatalf("warnings = %v, want one can-never-match warning for the comma label", warnings)
 	}
 }
 
-// ParseMoment reads every spelling a when: entry takes; a state is everything
-// after the side word, so a custom stage may hold a colon, a comma or a space.
+// ParseMoment reads every spelling a when: entry takes into the moment it
+// names, and refuses, saying why, text naming no moment this lit fires.
 func TestParseMoment(t *testing.T) {
 	cases := map[string]Moment{
-		"enter closed":          Crossing{Side: Enter, State: "closed"},
-		"exit plan":             Crossing{Side: Exit, State: "plan"},
-		"Exit  Review":          Crossing{Side: Exit, State: "review"},
-		"enter deploy:staging":  Crossing{Side: Enter, State: "deploy:staging"},
-		"enter foo,bar":         Crossing{Side: Enter, State: "foo,bar"},
-		"enter ready  to  pull": Crossing{Side: Enter, State: "ready to pull"},
-		"show_ticket":           EventShowTicket,
-		"enter":                 Event("enter"),
+		"enter closed":      Crossing{Side: Enter, State: "closed"},
+		"exit plan":         Crossing{Side: Exit, State: "plan"},
+		"Exit  Review":      Crossing{Side: Exit, State: "review"},
+		"enter in-progress": Crossing{Side: Enter, State: "in_progress"},
+		"show_ticket":       EventShowTicket,
 	}
 	for text, want := range cases {
-		got, ok := ParseMoment(text)
-		if !ok || got != want {
-			t.Errorf("ParseMoment(%q) = %v, %v; want %v", text, got, ok, want)
+		got, err := ParseMoment(text)
+		if err != nil || got != want {
+			t.Errorf("ParseMoment(%q) = %v, %v; want %v", text, got, err, want)
 		}
 		if again, _ := ParseMoment(got.String()); again != got {
 			t.Errorf("ParseMoment(%q.String()) = %v, want it to read back as itself", got, again)
 		}
 	}
-	if got, ok := ParseMoment("  "); ok {
-		t.Errorf("ParseMoment(blank) = %v, want no moment", got)
+	refused := map[string]string{
+		"  ":                   "blank",
+		"enter":                `unknown event "enter"`,
+		"work_finished":        `unknown event "work_finished"`,
+		"enter deploy:staging": `unknown state "deploy:staging"`,
+		"exit strategy":        `unknown state "strategy"`,
+	}
+	for text, says := range refused {
+		if got, err := ParseMoment(text); err == nil || !strings.Contains(err.Error(), says) {
+			t.Errorf("ParseMoment(%q) = %v, %v; want an error naming %s", text, got, err, says)
+		}
+	}
+}
+
+// Every moment this lit fires reads back from its own spelling.
+func TestMomentsReadBackAsThemselves(t *testing.T) {
+	for _, moment := range Moments() {
+		if got, err := ParseMoment(moment.String()); err != nil || got != moment {
+			t.Errorf("ParseMoment(%q) = %v, %v; want the moment", moment, got, err)
+		}
 	}
 }
 
 func TestParseDefinitionCRLF(t *testing.T) {
-	def, _, ok := parseDefinition("---\r\nwhen: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
-	if !ok {
-		t.Fatal("parseDefinition() not ok on CRLF input")
-	}
-	if !reflect.DeepEqual(def.When, []Moment{EventShowBacklog}) {
-		t.Fatalf("When = %v, want [show_backlog]", def.When)
+	def, _ := parseDefinition("---\r\nwhen: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
+	if !reflect.DeepEqual(def.Keys().When, []Moment{EventShowBacklog}) {
+		t.Fatalf("When = %v, want [show_backlog]", def.Keys().When)
 	}
 }
 
 // Delimiter lines tolerate trailing horizontal whitespace, per the frontmatter
-// convention — a trailing space must not silently degrade the file to inert.
+// convention — a trailing space must not silently degrade the file to one
+// that never fires.
 func TestParseDefinitionDelimiterTrailingWhitespace(t *testing.T) {
-	def, warnings, ok := parseDefinition("--- \nwhen: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
-	if !ok {
-		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
-	}
-	if !reflect.DeepEqual(def.When, []Moment{EventShowBacklog}) {
-		t.Fatalf("When = %v, want frontmatter recognized despite trailing whitespace", def.When)
+	def, warnings := parseDefinition("--- \nwhen: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
+	if !reflect.DeepEqual(def.Keys().When, []Moment{EventShowBacklog}) {
+		t.Fatalf("When = %v, want frontmatter recognized despite trailing whitespace", def.Keys().When)
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)

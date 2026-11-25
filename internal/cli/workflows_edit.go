@@ -61,16 +61,22 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
+// editFreshDefinition scaffolds a definition for a point nothing is bound to
+// yet, and says which key it bound the point under, so a point read as a
+// label rather than the moment it was meant to name shows as one.
 func editFreshDefinition(inv Invocation, ws workspace.Info, point string) error {
-	key, liveLine := classifyWorkflowPoint(point)
+	content, live, err := workflows.ScaffoldFresh(point)
+	if err != nil {
+		return err
+	}
 	projectPath := projectWorkflowPath(ws, scaffoldFilenameSlug(point)+".md")
 	if err := refuseExistingFile(projectPath, point); err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(key, liveLine)); err != nil {
+	if err := writeWorkflowScaffold(projectPath, point, content); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition (%s) at %s\n", live, projectPath); err != nil {
 		return err
 	}
 	return openOrPrintWorkflowFile(inv, projectPath)
@@ -168,32 +174,4 @@ func scaffoldFilenameSlug(input string) string {
 		return "point"
 	}
 	return slug
-}
-
-// classifyWorkflowPoint turns a `lit workflows edit` target that matched no
-// loaded definition into the activation key it names, the one way `lit
-// workflows --help` documents: a point workflows.ParseMoment reads as a moment
-// this lit fires — `enter <state>` or `exit <state>` for any state, since
-// states are open strings, or an event in the catalog — is a `when:` entry;
-// anything else is a label, since labels are open vocabulary too.
-// [LAW:single-enforcer] the point is read by the same parser as a `when:`
-// entry, so the two spellings cannot drift.
-func classifyWorkflowPoint(point string) (key string, liveLine string) {
-	if moment, ok := workflows.ParseMoment(point); ok && moment.Known() {
-		return "when", fmt.Sprintf("when: [%s]", yamlDoubleQuoted(moment.String()))
-	}
-	return "labels", fmt.Sprintf("labels: [%s]", yamlDoubleQuoted(point))
-}
-
-// yamlDoubleQuoted wraps a value as a YAML double-quoted scalar — the one
-// style whose only special characters are `\` and `"` (a flow-context
-// character like `,` or `]` is literal inside the quotes) — so a point
-// containing a comma, bracket, or colon embeds safely into the flow sequence
-// ScaffoldFresh's live key line renders. [LAW:single-enforcer] every
-// value embedded into scaffolded frontmatter routes through this one
-// escaper, applied uniformly rather than only when a special character
-// happens to be present.
-func yamlDoubleQuoted(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	return `"` + replacer.Replace(value) + `"`
 }

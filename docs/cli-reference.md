@@ -1312,16 +1312,18 @@ See [Workflows](workflows.md) for what the feature is, and run `lit workflows --
 for the definition format, the activation rules, and the events.
 Bare `lit workflows` prints every moment a `when:` entry can name, spelled as one
 (each event, then `enter` and `exit` of each built-in state with the phases inside
-`in_progress`, then any custom stage a definition crosses), and any bound labels,
-annotated with the definitions active at each and their source layer; `show <id>`
-resolves one definition fully. `edit <id-or-point>` scaffolds a project-layer override
+`in_progress`), and any bound labels, annotated with the definitions active at each and
+their source layer; `show <id>` resolves one definition fully, with the warnings for its
+file. `edit <id-or-point>` scaffolds a project-layer override
 (an existing definition's id) or a fresh definition (a `when:` entry such as
-`enter review` or `show_ticket`, or — falling through — a label), always prints its path,
+`enter review` or `show_ticket`, or — falling through — a label; a point that is neither
+is refused), prints the line it bound and the file's path,
 and additionally opens it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
 fire, why, and the body each would inject — without anything actually firing.
 `--when` takes an entry spelled as in a definition and repeats, because one transition
 makes several crossings: `lit start` from open is `--when "exit open" --when "enter in_progress" --when "enter plan"`.
+A `--when` naming no moment lit fires, or a `--label` no ticket could carry, is refused.
 
 ### `lit completion`
 

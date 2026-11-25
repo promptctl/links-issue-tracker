@@ -36,8 +36,9 @@ State stringifies as itself). Wire/storage keep the underscored form
 - Alias: the literal normalized string `"in-progress"` (hyphen) is rewritten to
   `"in_progress"` (`lifecycle.go`).
 - Accepts exactly `open`, `in_progress`, `closed` (`lifecycle.go`).
-- Otherwise error text: `invalid status %q (valid: open, in_progress, closed)`
-  where `%q` is the **original** (un-normalized) input (`lifecycle.go`).
+- Otherwise error text: `invalid status %q (valid: %s)`
+  where `%q` is the **original** (un-normalized) input and `%s` is `States()`
+  joined by `, ` (`lifecycle.go`).
 - Blank input is rejected (test `TestParseStateRejectsBlank`,
   `lifecycle_test.go`). Case/alias normalization pinned by
   `TestParseStateNormalizes`, `lifecycle_test.go`.

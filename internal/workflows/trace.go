@@ -15,8 +15,8 @@ import (
 const firingTraceKind = "workflows"
 
 // FiredDefinition is one definition that fired on an occasion, and which
-// specific values in its declared dimensions matched — the "why" half of a
-// firing trace.
+// specific values in its declared keys matched — the "why" half of a firing
+// trace.
 type FiredDefinition struct {
 	ID      string   `json:"id"`
 	Source  string   `json:"source"`
@@ -24,14 +24,16 @@ type FiredDefinition struct {
 	Reasons []string `json:"reasons"`
 }
 
-// FiringRecord is one real occasion's Dispatch outcome: the occasion and
-// every definition that fired on it. Written only when at least one
-// definition fires — see Dispatch.
+// FiringRecord is one real occasion's Fire outcome: the occasion and every
+// definition that fired on it. Written only when at least one definition
+// fires — see Fire. When is always present, [] for an occasion that crossed
+// nothing, so a record of no moments reads apart from one missing the field.
+// [LAW:nothing-unseen]
 type FiringRecord struct {
 	ID          string            `json:"id"`
 	RecordedAt  string            `json:"recorded_at"`
 	WorkspaceID string            `json:"workspace_id"`
-	When        []string          `json:"when,omitempty"`
+	When        []string          `json:"when"`
 	IssueID     string            `json:"issue_id,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
 	Fired       []FiredDefinition `json:"fired"`

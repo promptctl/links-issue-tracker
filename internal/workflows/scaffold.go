@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -41,30 +43,38 @@ func RawDefault(env environ.Env, source templates.Source, relPath string) ([]byt
 }
 
 // ScaffoldFresh builds a fresh definition file's content for `lit workflows
-// edit` when the requested id-or-point matches no loaded definition: a
-// commented reference to each activation key (skipping the one the point
-// itself supplies, since liveLine already shows it live) plus that one key
-// uncommented and ready to fire, and a placeholder body.
+// edit <point>` when the point names no loaded definition, and returns the
+// one live line it bound the point under. The point is a `when:` entry when
+// ParseMoment reads it as one, and otherwise a label; a point that is neither
+// is refused. Both keys are always written: the point's key live, the other
+// commented as a reference, then a placeholder body.
+// [LAW:dataflow-not-control-flow] the same lines are written every time;
+// which one is live is the value that varies.
 // [LAW:comments-carry-meaning] the comments exist to teach the format inline,
 // at the moment a user is about to author their first line of it.
-func ScaffoldFresh(key string, liveLine string) []byte {
+func ScaffoldFresh(point string) (content []byte, live string, err error) {
+	when := "# when: [enter review, exit plan, show_ticket]  # entering or exiting a state, or an event"
+	labels := "# labels: [needs-design, blocked]"
+	if moment, momentErr := ParseMoment(point); momentErr == nil {
+		when = "when: [" + strconv.Quote(moment.String()) + "]"
+		live = when
+	} else if label, labelErr := model.NormalizeLabel(point); labelErr == nil {
+		labels = "labels: [" + strconv.Quote(label) + "]"
+		live = labels
+	} else {
+		return nil, "", model.ValidationError{Message: fmt.Sprintf("%q is neither a when: entry (%v) nor a label (%v)", point, momentErr, labelErr)}
+	}
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("# when: lists the moments the definition fires at, labels: narrows it to\n")
 	b.WriteString("# tickets carrying a label. Entries within one key are alternatives (OR);\n")
 	b.WriteString("# declaring both keys requires both (AND).\n")
 	b.WriteString("# Run `lit workflows --help` for the full format and every moment.\n")
-	if key != "when" {
-		b.WriteString("# when: [enter review, exit plan, show_ticket]  # entering or exiting a state, or an event\n")
-	}
-	if key != "labels" {
-		b.WriteString("# labels: [needs-design, blocked]\n")
-	}
-	b.WriteString(liveLine)
-	b.WriteString("\n")
+	b.WriteString(when + "\n")
+	b.WriteString(labels + "\n")
 	b.WriteString("# id: my-custom-id     # optional; defaults to this file's relative path under .lit/workflows/\n")
 	b.WriteString("# name: My Guidance    # optional pretty name shown by `lit workflows`\n")
 	b.WriteString("---\n")
 	b.WriteString("Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.\n")
-	return []byte(b.String())
+	return []byte(b.String()), live, nil
 }

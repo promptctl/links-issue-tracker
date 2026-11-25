@@ -600,17 +600,20 @@ key already set.
 
 A command that fires a [workflow](workflows.md) occasion records it:
 `lit new`, `lit followup`, `lit show`, `lit update`, `lit comment add`,
-`lit next` when it hands back a ticket, `lit backlog`, and the lifecycle
-transitions `lit start`, `lit done`, `lit close`, `lit open` and `lit phase`.
-A `lit bulk` transition records the keys on each item, under
-`bulk.item.facts`. A command that failed before the occasion fired, such as a refused transition,
-has none of these keys.
+`lit next` when it hands back a ticket, `lit backlog`, the lifecycle
+transitions `lit start`, `lit done`, `lit close`, `lit open` and `lit phase`,
+and `lit archive`, `lit unarchive`, `lit delete` and `lit restore`, which cross
+no state. A `lit bulk` transition and `lit bulk comment` record `workflows.when`
+and `workflows.fired` on each item, under `bulk.item.facts`, and
+`workflows.warnings` once, on the command. A command that failed before the
+occasion fired, such as a refused transition, has no `workflows.when` or
+`workflows.fired`.
 
 | Key | Meaning |
 | --- | --- |
-| `workflows.when` | The moments the occasion carried, each spelled as a `when:` entry: `["show_ticket"]` for `lit show`; for a transition, every state it left and then every state it entered, each outermost first — `["exit open", "enter in_progress", "enter plan"]` for a start from `open`, `["exit in_progress", "exit review", "enter closed"]` for a `lit done` from `review`. `[]` when a transition moved no state. |
+| `workflows.when` | The moments the occasion carried, each spelled as a `when:` entry: `["show_ticket"]` for `lit show`; for a transition, every state it left and then every state it entered, each outermost first — `["exit open", "enter in_progress", "enter plan"]` for a start from `open`, `["exit in_progress", "exit review", "enter closed"]` for a `lit done` from `review`. `[]` when a transition moved no state, as an archive or delete never does. |
 | `workflows.fired` | The ids of the definitions that fired, in the order their guidance was printed; `[]` when none did. |
-| `workflows.warnings` | Every warning loading the definitions produced, one line each as the command printed it on stderr: a file lit could not read, a key it does not read, an unknown event. `[]` when there were none. |
+| `workflows.warnings` | Every warning loading the definitions produced, one line each as the command printed it on stderr: a file lit could not read, a key it does not read, an entry naming nothing lit fires. `[]` when there were none. |
 
 ## What `lit upgrade` records
 

@@ -64,6 +64,7 @@ const (
 )
 
 var (
+	States          = lifecycle.States
 	ParseState      = lifecycle.ParseState
 	ParseStates     = lifecycle.ParseStates
 	ParseAction     = lifecycle.ParseAction

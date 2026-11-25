@@ -3,6 +3,7 @@ package workflows
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,38 +174,77 @@ func TestLoadAbsentLayersYieldsOnlyEmbeddedDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadMalformedFileWarnsAndSkipsWithoutBreakingOthers(t *testing.T) {
+func TestLoadMalformedFileWarnsWithoutBreakingOthers(t *testing.T) {
 	workspaceRoot, _ := isolate(t)
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	writeWorkflow(t, project, "good.md", "---\nwhen: [show_backlog]\n---\ngood")
 	writeWorkflow(t, project, "broken.md", "---\nlabels: 17\n---\nbad")
 
 	set := Load(testEnv(), workspaceRoot)
-	if len(authored(set)) != 1 {
-		t.Fatalf("Definitions = %+v, want the good file beside the embedded defaults", set.Definitions)
-	}
 	if _, ok := findDefinition(set, "good"); !ok {
 		t.Fatalf("Definitions = %+v, want \"good\" to have loaded", set.Definitions)
+	}
+	if broken, ok := findDefinition(set, "broken"); !ok || broken.Activation != (Never{}) {
+		t.Fatalf("Definitions = %+v, want \"broken\" loaded, never firing", set.Definitions)
 	}
 	if len(set.Warnings) != 1 || set.Warnings[0].Path != "broken.md" {
 		t.Fatalf("Warnings = %v, want one warning for broken.md", set.Warnings)
 	}
 }
 
-func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
+// A project override of a shipped id that lit cannot read — malformed, or
+// unreadable — still holds the id, so the shipped definition it was written to
+// replace does not fire in its place.
+func TestLoadUnreadableOverrideHoldsItsID(t *testing.T) {
+	cases := map[string]func(t *testing.T, project string){
+		"malformed": func(t *testing.T, project string) {
+			writeWorkflow(t, project, "mine.md", "---\nid: done\nwhen: enter closed\n---\nmine")
+		},
+		"unreadable": func(t *testing.T, project string) {
+			if err := os.MkdirAll(project, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%s) error = %v", project, err)
+			}
+			// A link to nothing: walked as a *.md file, failing when read.
+			if err := os.Symlink(filepath.Join(project, "missing"), filepath.Join(project, "done.md")); err != nil {
+				t.Fatalf("Symlink() error = %v", err)
+			}
+		},
+	}
+	for name, write := range cases {
+		t.Run(name, func(t *testing.T) {
+			workspaceRoot, _ := isolate(t)
+			project := filepath.Join(workspaceRoot, ".lit", "workflows")
+			write(t, project)
+
+			set := Load(testEnv(), workspaceRoot)
+			done, ok := findDefinition(set, "done")
+			if !ok || done.Source != templates.SourceProject || done.Activation != (Never{}) {
+				t.Fatalf("done = %+v, want the project's file holding the id, never firing", done)
+			}
+			if fired := set.Matching(Occasion{Moments: []Moment{Crossing{Side: Enter, State: "closed"}}}); slices.ContainsFunc(fired, func(d Definition) bool { return d.ID == "done" }) {
+				t.Fatalf("Matching(enter closed) = %+v, want the shipped done held off", fired)
+			}
+			if len(set.Warnings) != 1 || set.Warnings[0].Source != templates.SourceProject {
+				t.Fatalf("Warnings = %v, want one for the project's file", set.Warnings)
+			}
+		})
+	}
+}
+
+func TestLoadKeylessFileLoadsWithWarningAndNeverFires(t *testing.T) {
 	workspaceRoot, _ := isolate(t)
 	project := filepath.Join(workspaceRoot, ".lit", "workflows")
 	writeWorkflow(t, project, "readme.md", "no frontmatter, just prose")
 
 	set := Load(testEnv(), workspaceRoot)
 	readme, ok := findDefinition(set, "readme")
-	if !ok || !readme.Inert() {
-		t.Fatalf("Definitions = %+v, want the inert definition loaded", set.Definitions)
+	if !ok || readme.Activation != (Never{}) {
+		t.Fatalf("Definitions = %+v, want the definition loaded, never firing", set.Definitions)
 	}
-	if len(set.Warnings) != 1 || !strings.Contains(set.Warnings[0].Message, "inert") {
-		t.Fatalf("Warnings = %v, want one inert warning", set.Warnings)
+	if len(set.Warnings) != 1 || !strings.Contains(set.Warnings[0].Message, "never fires") {
+		t.Fatalf("Warnings = %v, want one never-fires warning", set.Warnings)
 	}
-	// The inert definition fires nowhere, whatever the embedded defaults
+	// The definition fires nowhere, whatever the embedded defaults
 	// legitimately match alongside it.
 	everything := Occasion{Moments: []Moment{Crossing{Side: Enter, State: "closed"}, Crossing{Side: Exit, State: "open"}}, Labels: []string{"needs-design"}}
 	for _, event := range Catalog() {
@@ -212,7 +252,7 @@ func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
 	}
 	for _, matched := range set.Matching(everything) {
 		if matched.ID == "readme" {
-			t.Fatalf("Matching(%+v) matched the inert definition, want it to fire nowhere", everything)
+			t.Fatalf("Matching(%+v) matched the keyless definition, want it to fire nowhere", everything)
 		}
 	}
 }

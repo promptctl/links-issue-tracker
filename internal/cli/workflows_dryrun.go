@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -16,15 +15,17 @@ import (
 // <label> enters closed?" without a real occasion ever happening: it builds an
 // Occasion from flags alone, matches it against the loaded Set, and prints
 // every match with why it matched (Definition.MatchReasons) and the body
-// that would be injected. This is the same "why" computation Dispatch's real
-// firing trace uses (internal/workflows/trace.go), so a hypothetical here
-// and a real firing explain themselves identically. [LAW:single-enforcer]
+// that would be injected. This is the same "why" computation a real firing's
+// trace uses (internal/workflows/trace.go), so a hypothetical here and a real
+// firing explain themselves identically. [LAW:single-enforcer]
 //
-// Each --when is read by workflows.ParseMoment, the reader of a `when:`
-// entry, so a dry-run is asked in the spelling a definition is written in. An
-// event this lit never fires is refused rather than explained: no real
-// occasion carries it, so a match on it would describe nothing that can
-// happen. [LAW:parse-dont-validate]
+// Each flag is read through the gate a definition's own entry is: --when by
+// workflows.ParseMoment, --label by model.NormalizeLabel, so a dry-run is
+// asked in the spelling a definition is written in and compared in the form
+// a real occasion carries. A value naming no moment lit fires, or no label a
+// ticket can carry, is refused rather than explained: no real occasion
+// carries it, so a match on it would describe nothing that can happen.
+// [LAW:parse-dont-validate]
 //
 // Never writes a firing trace itself — nothing actually fired, there is
 // nothing to record — and needs no store access, only the loaded definition
@@ -35,14 +36,9 @@ func workflowsDryRunLeaf() wsLeaf {
 	labels := fs.StringArray("label", "Label the hypothetical ticket carries (repeatable)")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
 	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
-		moments, err := dryRunMoments(*when)
+		occasion, err := dryRunOccasion(*when, *labels, model.ID(*issue))
 		if err != nil {
 			return err
-		}
-		occasion := workflows.Occasion{
-			Moments: moments,
-			IssueID: model.ID(*issue),
-			Labels:  *labels,
 		}
 		set := workflows.Load(inv.Env, ws.RootDir)
 		matched := set.Matching(occasion)
@@ -54,48 +50,31 @@ func workflowsDryRunLeaf() wsLeaf {
 	}}
 }
 
-// dryRunMoments reads every --when value into the moment it names, refusing
-// one this lit can never produce.
-func dryRunMoments(values []string) ([]workflows.Moment, error) {
-	var moments []workflows.Moment
-	for _, value := range values {
-		moment, ok := workflows.ParseMoment(value)
-		if !ok {
-			continue
+// dryRunOccasion is the hypothetical occasion the flags describe, or the
+// first flag value that names nothing a real occasion can carry.
+func dryRunOccasion(when, labels []string, issueID model.ID) (workflows.Occasion, error) {
+	occasion := workflows.Occasion{IssueID: issueID}
+	for _, value := range when {
+		moment, err := workflows.ParseMoment(value)
+		if err != nil {
+			return workflows.Occasion{}, model.ValidationError{Message: fmt.Sprintf("--when %q is not a moment lit fires: %v", value, err)}
 		}
-		if !moment.Known() {
-			return nil, model.ValidationError{Message: fmt.Sprintf("--when %q is not a moment lit fires: write enter <state> or exit <state> for a change of a ticket's state, or one of the events %s", value, strings.Join(workflows.Spellings(catalogMoments()), ", "))}
+		occasion.Moments = append(occasion.Moments, moment)
+	}
+	for _, value := range labels {
+		label, err := model.NormalizeLabel(value)
+		if err != nil {
+			return workflows.Occasion{}, model.ValidationError{Message: fmt.Sprintf("--label %q is not a label a ticket can carry: %v", value, err)}
 		}
-		moments = append(moments, moment)
+		occasion.Labels = append(occasion.Labels, label)
 	}
-	return moments, nil
-}
-
-// catalogMoments is the event catalog as moments.
-func catalogMoments() []workflows.Moment {
-	var moments []workflows.Moment
-	for _, event := range workflows.Catalog() {
-		moments = append(moments, event)
-	}
-	return moments
+	return occasion, nil
 }
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
 	_, err := fmt.Fprintf(w, "occasion: when=%s labels=%s issue=%s\n\n",
-		quotedList(workflows.Spellings(o.Moments)), orDash(strings.Join(o.Labels, ",")), orDash(fmt.Sprint(o.IssueID)))
+		orDash(strings.Join(workflows.Spellings(o.Moments), ",")), orDash(strings.Join(o.Labels, ",")), orDash(fmt.Sprint(o.IssueID)))
 	return err
-}
-
-// quotedList renders moments as a list of quoted spellings, [] when there are
-// none. Labels can join on a bare comma because a label cannot contain one; a
-// state name is an open string that can, so each moment is quoted to keep one
-// crossing of a state named "foo,bar" apart from two crossings.
-func quotedList(spellings []string) string {
-	quoted := make([]string, len(spellings))
-	for i, spelling := range spellings {
-		quoted[i] = strconv.Quote(spelling)
-	}
-	return "[" + strings.Join(quoted, ",") + "]"
 }
 
 func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows.Occasion) error {

@@ -69,8 +69,9 @@ func TestCommentAddedOccasion(t *testing.T) {
 // the ticket out of, then the ones it moved it into, each outermost first. A
 // status action exits and enters the phase inside in_progress along with
 // in_progress itself; a phase move exits and enters phases alone; a call that
-// leaves the ticket where it was crosses nothing. done and close make the
-// same crossing into closed.
+// leaves the ticket where it was — a reclaim, an archive or delete or their
+// undoing — crosses nothing, and still names the ticket and its labels. done
+// and close make the same crossing into closed.
 func TestTransitionOccasionCrossesBothLevels(t *testing.T) {
 	t.Parallel()
 	at := func(state model.State, phase model.Phase) ticketState {
@@ -78,34 +79,30 @@ func TestTransitionOccasionCrossesBothLevels(t *testing.T) {
 	}
 	cases := []struct {
 		name   string
-		action model.Action
 		before ticketState
 		after  ticketState
 		want   []string
 	}{
-		{"start", model.Start{Assignee: "claude"}, at(model.StateOpen, ""), at(model.StateInProgress, model.PhasePlan),
+		{"start", at(model.StateOpen, ""), at(model.StateInProgress, model.PhasePlan),
 			[]string{"exit open", "enter in_progress", "enter plan"}},
-		{"reclaim", model.Start{Assignee: "claude"}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
+		{"reclaim", at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
 			[]string{}},
-		{"done", model.Done{}, at(model.StateInProgress, model.PhaseMerge), at(model.StateClosed, ""),
+		{"done", at(model.StateInProgress, model.PhaseMerge), at(model.StateClosed, ""),
 			[]string{"exit in_progress", "exit merge", "enter closed"}},
-		{"close", model.Close{Outcome: model.Wontfix{}}, at(model.StateOpen, ""), at(model.StateClosed, ""),
+		{"close", at(model.StateOpen, ""), at(model.StateClosed, ""),
 			[]string{"exit open", "enter closed"}},
-		{"close from a phase", model.Close{Outcome: model.Wontfix{}}, at(model.StateInProgress, model.PhaseImpl), at(model.StateClosed, ""),
+		{"close from a phase", at(model.StateInProgress, model.PhaseImpl), at(model.StateClosed, ""),
 			[]string{"exit in_progress", "exit impl", "enter closed"}},
-		{"reopen", model.Reopen{}, at(model.StateClosed, ""), at(model.StateOpen, ""),
+		{"reopen", at(model.StateClosed, ""), at(model.StateOpen, ""),
 			[]string{"exit closed", "enter open"}},
-		{"phase", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseImpl), at(model.StateInProgress, model.PhaseReview),
+		{"phase", at(model.StateInProgress, model.PhaseImpl), at(model.StateInProgress, model.PhaseReview),
 			[]string{"exit impl", "enter review"}},
-		{"phase unchanged", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
+		{"phase unchanged", at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
 			[]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, fires := transitionOccasion(tc.action, tc.before, tc.after)
-			if !fires {
-				t.Fatalf("transitionOccasion(%T) fires = false, want an occasion", tc.action)
-			}
+			got := transitionOccasion(tc.before, tc.after)
 			if spelled := workflows.Spellings(got.Moments); !slices.Equal(spelled, tc.want) {
 				t.Fatalf("Moments = %q, want %q", spelled, tc.want)
 			}
@@ -116,17 +113,5 @@ func TestTransitionOccasionCrossesBothLevels(t *testing.T) {
 				t.Fatalf("Labels = %v, want [tracked]", got.Labels)
 			}
 		})
-	}
-}
-
-// Archive, unarchive, delete and restore are no lifecycle transition: they
-// fire no occasion, whatever state the ticket is in.
-func TestRetentionActionsFireNothing(t *testing.T) {
-	t.Parallel()
-	inReview := ticketState{issue: hydratedIssue(t, "lit-9", nil, model.StateInProgress), phase: model.PhaseReview}
-	for _, action := range []model.Action{model.Archive{}, model.Unarchive{}, model.Delete{}, model.Restore{}} {
-		if got, fires := transitionOccasion(action, inReview, inReview); fires {
-			t.Errorf("transitionOccasion(%T) = %+v, want no occasion", action, got)
-		}
 	}
 }

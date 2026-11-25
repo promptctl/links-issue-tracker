@@ -14,8 +14,8 @@ import (
 
 // writeProjectWorkflow authors a workflow definition file under the app's
 // workspace at .lit/workflows/<rel>, creating parent directories as needed —
-// the arbitrary-nested-path project layer runTransition (via
-// workflows.Dispatch) reads from.
+// the arbitrary-nested-path project layer a transition's workflows load
+// reads from.
 func writeProjectWorkflow(t *testing.T, ap *app.App, rel, content string) {
 	t.Helper()
 	path := filepath.Join(ap.Workspace.RootDir, ".lit", "workflows", filepath.FromSlash(rel))
@@ -30,7 +30,7 @@ func writeProjectWorkflow(t *testing.T, ap *app.App, rel, content string) {
 // TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath is the
 // end-to-end done-claim: a project workflow file, authored under a
 // nested path with no meaning of its own, fires through the real command path
-// (not just workflows.Dispatch called directly) and its body reaches stdout.
+// (not just workflows.Fire called directly) and its body reaches stdout.
 func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

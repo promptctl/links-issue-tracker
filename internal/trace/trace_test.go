@@ -44,6 +44,24 @@ func TestWriteWritesUnderKindDirAndStampsIDIntoBuild(t *testing.T) {
 	}
 }
 
+// A storage dir that is not absolute would put the trace wherever the
+// process happens to be standing, so Write refuses it before building or
+// writing anything.
+func TestWriteRefusesAStorageDirThatIsNotAbsolute(t *testing.T) {
+	for _, storageDir := range []string{"", "relative-storage"} {
+		_, _, err := Write(storageDir, "widgets", "my-trigger", func(string, time.Time) ([]byte, error) {
+			t.Fatalf("Write(%q) built a record, want a refusal first", storageDir)
+			return nil, nil
+		})
+		if err == nil {
+			t.Fatalf("Write(%q) error = nil, want a refusal", storageDir)
+		}
+		if _, statErr := os.Stat(filepath.Join(storageDir, "traces")); !os.IsNotExist(statErr) {
+			t.Fatalf("Stat(traces under %q) error = %v, want nothing written relative to the working directory", storageDir, statErr)
+		}
+	}
+}
+
 func TestWriteRetriesOnFilenameCollision(t *testing.T) {
 	storageDir := t.TempDir()
 	calls := 0

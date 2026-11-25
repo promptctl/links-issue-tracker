@@ -6,7 +6,7 @@ import (
 )
 
 // Event names are the stable contract user definitions bind to: snake_case
-// semantic names, unique, and every catalog entry self-reports as known.
+// semantic names, unique, and each reads back from a when: entry as itself.
 func TestCatalogNamesAreStableContractShaped(t *testing.T) {
 	namePattern := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
 	seen := map[Event]bool{}
@@ -18,19 +18,13 @@ func TestCatalogNamesAreStableContractShaped(t *testing.T) {
 			t.Errorf("event %q appears twice in the catalog", event)
 		}
 		seen[event] = true
-		if !event.Known() {
-			t.Errorf("catalog event %q not Known()", event)
-		}
 		// A when: entry naming the event reads back as the event, never as a
 		// crossing of some state.
-		if moment, _ := ParseMoment(string(event)); moment != event {
-			t.Errorf("ParseMoment(%q) = %#v, want the event", event, moment)
+		if moment, err := ParseMoment(string(event)); err != nil || moment != event {
+			t.Errorf("ParseMoment(%q) = %#v, %v; want the event", event, moment, err)
 		}
 	}
 	if len(seen) == 0 {
 		t.Fatal("Catalog() is empty")
-	}
-	if Event("not_a_real_event").Known() {
-		t.Fatal("Known() accepted an event outside the catalog")
 	}
 }

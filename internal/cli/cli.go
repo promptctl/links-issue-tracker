@@ -423,7 +423,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -537,7 +537,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -1337,7 +1337,7 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
@@ -1523,7 +1523,7 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, applied.Issue); err != nil {
@@ -2048,12 +2048,13 @@ type transitionDone struct {
 
 // applyTransition runs one transition on one ticket: the pre-transition read,
 // the spec's authorize hook, Apply, what the transition owes, with its
-// statusline facts recorded, and the workflow occasion its crossings make.
-// `lit <verb>` and `lit bulk <verb>` both run it, so a transition one refuses
-// the other refuses with the same error, and no transition lands without
-// firing what its crossings bind — `lit bulk done` enters closed exactly as
-// `lit done` does. [LAW:single-enforcer]
-func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
+// statusline facts recorded, and the workflow occasion its crossings make,
+// fired against the command's loaded workflows. `lit <verb>` and `lit bulk
+// <verb>` both run it, so a transition one refuses the other refuses with the
+// same error, and no transition verb lands without firing what its crossings
+// bind — `lit bulk done` enters closed exactly as `lit done` does.
+// [LAW:single-enforcer]
+func applyTransition(ctx context.Context, inv Invocation, ap *app.App, flows loadedWorkflows, issueID model.ID, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
 	// The pre-transition read is the state `authorize` gates on and the
 	// before-half of the transition's workflow occasion: the row, and the phase
 	// the ticket's history puts it in.
@@ -2090,22 +2091,11 @@ func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID m
 	notice, facts := owed(written, applied.Handover)
 	ap.Statusline.Record(facts...)
 
-	// What the transition did is said first, ahead of any guidance about what
-	// to do next: a hand-off and a phase move say it out loud, every other
-	// transition says it as the empty string. The guidance is collected rather
-	// than streamed so a bulk item's report carries its own, in the same
-	// order a single verb prints them. transitionOccasion decides which
-	// actions fire; retention actions (archive/unarchive/delete/restore) fire
-	// nothing. `done`'s embedded default is what prints the post-close capture
-	// reminder on every transition that enters closed.
-	var said strings.Builder
-	said.WriteString(notice)
-	if occasion, fires := transitionOccasion(action, prior, written); fires {
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, &said, ap.Workspace, occasion); err != nil {
-			return transitionDone{}, err
-		}
-	}
-	return transitionDone{written: written, said: said.String()}, nil
+	// What the transition did is said ahead of the guidance about what to do
+	// next, and both are returned rather than printed, so a bulk item's report
+	// carries them in the order a single verb prints them.
+	guidance := flows.fire(ctx, transitionOccasion(prior, written))
+	return transitionDone{written: written, said: notice + guidance}, nil
 }
 
 func transitionLeaf(spec transitionSpec) appLeaf {
@@ -2147,7 +2137,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
+		did, err := applyTransition(ctx, inv, ap, loadWorkflows(ctx, inv, ap.Workspace), issueID, action, actor, *reason, authorize)
 		if err != nil {
 			return err
 		}
@@ -2213,11 +2203,11 @@ func commentAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		comment, issue, err := addComment(ctx, ap, model.ID(positional[0]), commentBody, resolveActor(inv.Env))
+		comment, guidance, err := addComment(ctx, ap, loadWorkflows(ctx, inv, ap.Workspace), model.ID(positional[0]), commentBody, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+		if _, err := io.WriteString(inv.Stdout, guidance); err != nil {
 			return err
 		}
 		return printComment(inv.Stdout, comment)
@@ -2225,18 +2215,18 @@ func commentAddLeaf() appLeaf {
 }
 
 // addComment is the comment write `lit comment add` and `lit bulk comment`
-// both run, so a comment lands, and records its comment.id fact, the same way
-// from either. The comment_added workflow occasion is the single verb's own, as
-// every bulk verb leaves its single command's guidance unprinted.
-// The author resolves through the same identity rule as every other actor.
+// both run, so a comment lands, records its comment.id fact, and fires the
+// comment_added occasion against the command's loaded workflows the same way
+// from either, returning the guidance it fired. The author resolves through
+// the same identity rule as every other actor.
 // [LAW:single-enforcer] [LAW:one-type-per-behavior]
-func addComment(ctx context.Context, ap *app.App, issueID model.ID, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
+func addComment(ctx context.Context, ap *app.App, flows loadedWorkflows, issueID model.ID, body model.CommentBody, actor string) (model.Comment, string, error) {
 	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: issueID, Body: body, CreatedBy: actor})
 	if err != nil {
-		return model.Comment{}, model.Issue{}, err
+		return model.Comment{}, "", err
 	}
 	telemetry.Set(ctx, "comment.id", comment.ID.Raw())
-	return comment, issue, nil
+	return comment, flows.fire(ctx, commentAddedOccasion(issue)), nil
 }
 
 func commentRmLeaf() appLeaf {

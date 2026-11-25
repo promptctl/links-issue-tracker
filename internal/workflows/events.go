@@ -1,7 +1,5 @@
 package workflows
 
-import "slices"
-
 // Event names a read moment: lit showing or recording something that changes
 // no ticket's state. A change of state is never an event; it is the Crossing
 // it makes, whichever command makes it, so `lit done` and `lit close` reach
@@ -49,12 +47,4 @@ func Catalog() []Event {
 }
 
 func (e Event) String() string { return string(e) }
-
-// Known reports whether the event is in this binary's catalog. A definition
-// naming an unknown event still loads — it may target a newer lit — but that
-// entry can never fire here, which the loader surfaces as a warning.
-func (e Event) Known() bool {
-	return slices.Contains(Catalog(), e)
-}
-
-func (Event) moment() {}
+func (Event) moment()          {}

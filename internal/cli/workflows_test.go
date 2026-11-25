@@ -74,11 +74,11 @@ func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundKey(t *testing.T) {
 	}
 }
 
-// TestWorkflowsOverviewSurfacesCustomStateOnTheSpine confirms a definition
-// bound to a state that isn't one of the built-ins still puts that
-// state on the spine — custom stages are the same shape as built-in ones by
-// design (states are open strings, not a closed enum).
-func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
+// TestWorkflowsOverviewWarnsOfAStateTheLifecycleLacks: the spine is the
+// lifecycle's states, so a definition bound to a state lit does not have puts
+// nothing on it, and the overview's warnings say the entry never fires and
+// name the states it can.
+func TestWorkflowsOverviewWarnsOfAStateTheLifecycleLacks(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "verify.md",
@@ -88,12 +88,15 @@ func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
-	if !strings.Contains(output, "\n  exit closed\n  enter verify  [verify-reminder (project)]\n  exit verify\n") {
-		t.Fatalf("workflows output = %q, want the custom \"verify\" state on the spine after the built-ins, with enter bound", output)
+	if strings.Contains(output, "enter verify  [") || strings.Contains(output, "\n  exit verify\n") {
+		t.Fatalf("workflows output = %q, want no \"verify\" state on the spine", output)
+	}
+	if want := `project verify.md: when: entry "enter verify" never fires: unknown state "verify": a ticket's states are open, in_progress, plan, impl, review, merge, closed`; !strings.Contains(output, want) {
+		t.Fatalf("workflows output = %q, want the warning %q", output, want)
 	}
 }
 
-// TestWorkflowsOverviewFlagsMalformedFileAsAWarning is the "inert/malformed
+// TestWorkflowsOverviewFlagsMalformedFileAsAWarning is the "keyless/malformed
 // file is visibly flagged" done-claim: a file whose frontmatter fails to
 // parse never breaks `lit workflows`, and shows up under Warnings instead of
 // silently vanishing.
@@ -144,6 +147,30 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 	}
 }
 
+// A definition that fires less than it says — or never — shows why under
+// its fields: the load's warnings for its file.
+func TestWorkflowsShowNamesWhyADefinitionFiresLessThanItSays(t *testing.T) {
+	t.Parallel()
+	root := tempRepo(t)
+	writeCLIWorkflow(t, root, "broken.md", "---\nid: broken\nwhen: enter closed\n---\nbad")
+	writeCLIWorkflow(t, root, "partial.md", "---\nid: partial\nwhen: [enter reveiw, exit plan]\n---\nhalf")
+
+	for id, want := range map[string][]string{
+		"broken":  {"when: -\nlabels: -\n", "\nWarnings (loaded but not fully active)\n  project broken.md: invalid frontmatter:", "---\nbad"},
+		"partial": {"when: exit plan\n", "\n  project partial.md: when: entry \"enter reveiw\" never fires: unknown state \"reveiw\"", "---\nhalf"},
+	} {
+		output, err := runLit(t, root, "workflows", "show", id)
+		if err != nil {
+			t.Fatalf("Run(workflows show %s) error = %v", id, err)
+		}
+		for _, line := range want {
+			if !strings.Contains(output, line) {
+				t.Errorf("workflows show %s output = %q, want it to contain %q", id, output, line)
+			}
+		}
+	}
+}
+
 // TestWorkflowsShowUnknownIDIsAValidationError ensures an id that isn't
 // loaded fails loudly and by type, not with a silent empty view.
 func TestWorkflowsShowUnknownIDIsAValidationError(t *testing.T) {
@@ -190,9 +217,10 @@ func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 
 // TestWorkflowsEditScaffoldsFreshMomentPoints is `edit`'s "no existing
 // definition" done-claim for a moment: a point spelled as a `when:` entry —
-// an event, or entering or exiting any state, built-in or custom — lands as a
-// fresh project file with that entry live under `when:` and the labels key
-// shown commented, and loads binding exactly that moment.
+// an event, or entering or exiting a state — lands as a fresh project file
+// with that entry live under `when:`, in the spelling it reads back as, and
+// the labels key shown commented; it loads binding exactly that moment, and
+// the command names the line it bound.
 func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -203,10 +231,7 @@ func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 		{"enter review", "enter-review.md", workflows.Crossing{Side: workflows.Enter, State: "review"}},
 		{"exit closed", "exit-closed.md", workflows.Crossing{Side: workflows.Exit, State: "closed"}},
 		{"Enter  In_Progress", "enter-in_progress.md", workflows.Crossing{Side: workflows.Enter, State: "in_progress"}},
-		// A state is an open string: a colon or a comma in its name is the
-		// state's, and quoting keeps a comma from splitting one entry in two.
-		{"enter deploy:staging", "enter-deploy-staging.md", workflows.Crossing{Side: workflows.Enter, State: "deploy:staging"}},
-		{"exit foo,bar", "exit-foo-bar.md", workflows.Crossing{Side: workflows.Exit, State: "foo,bar"}},
+		{"exit in-progress", "exit-in-progress.md", workflows.Crossing{Side: workflows.Exit, State: "in_progress"}},
 	} {
 		t.Run(tc.point, func(t *testing.T) {
 			t.Parallel()
@@ -216,14 +241,15 @@ func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 				t.Fatalf("Run(workflows edit %q) error = %v", tc.point, err)
 			}
 			path := filepath.Join(root, ".lit", "workflows", tc.file)
-			if !strings.Contains(output, path) {
-				t.Fatalf("workflows edit output = %q, want it to name %q", output, path)
+			live := "when: [" + strconv.Quote(tc.want.String()) + "]"
+			if want := "scaffolded a new definition (" + live + ") at "; !strings.Contains(output, want) || !strings.Contains(output, path) {
+				t.Fatalf("workflows edit output = %q, want %q naming %s", output, want, path)
 			}
 			content, readErr := os.ReadFile(path)
 			if readErr != nil {
 				t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 			}
-			if live := "\nwhen: [" + strconv.Quote(tc.want.String()) + "]\n"; !strings.Contains(string(content), live) {
+			if !strings.Contains(string(content), "\n"+live+"\n") {
 				t.Fatalf("scaffolded content = %q, want the live line %q", content, live)
 			}
 			if strings.Contains(string(content), "# when: [") || !strings.Contains(string(content), "# labels: [") {
@@ -234,7 +260,7 @@ func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 			if !ok {
 				t.Fatalf("workflows.Load(%s) has no definition for %s; loaded: %+v", root, tc.file, set.Definitions)
 			}
-			if !reflect.DeepEqual(def.When, []workflows.Moment{tc.want}) || def.Labels != nil {
+			if want := (workflows.Keys{When: []workflows.Moment{tc.want}}); !reflect.DeepEqual(def.Activation, want) {
 				t.Fatalf("definition = %+v, want exactly when: [%s]", def, tc.want)
 			}
 			if len(set.Warnings) != 0 {
@@ -246,28 +272,52 @@ func TestWorkflowsEditScaffoldsFreshMomentPoints(t *testing.T) {
 
 // TestWorkflowsEditScaffoldsFreshLabelPointAsFallback covers the fallback:
 // a point that is no moment this lit fires — a bare state name among them,
-// since a state is crossed, not named — is treated as a label.
+// since a state is crossed, not named, and a crossing of a state lit does not
+// have — is treated as a label, and the command says it bound a label, so a
+// point meant as a moment shows that it was not read as one.
 func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
 	t.Parallel()
-	for _, point := range []string{"needs-design", "review"} {
+	for point, file := range map[string]string{"needs-design": "needs-design.md", "review": "review.md", "enter reveiw": "enter-reveiw.md"} {
 		t.Run(point, func(t *testing.T) {
 			t.Parallel()
 			root := tempRepo(t)
-			if _, err := runLit(t, root, "workflows", "edit", point); err != nil {
+			output, err := runLit(t, root, "workflows", "edit", point)
+			if err != nil {
 				t.Fatalf("Run(workflows edit %s) error = %v", point, err)
 			}
-			path := filepath.Join(root, ".lit", "workflows", point+".md")
+			live := "labels: [\"" + point + "\"]"
+			path := filepath.Join(root, ".lit", "workflows", file)
+			if want := "scaffolded a new definition (" + live + ") at "; !strings.Contains(output, want) || !strings.Contains(output, path) {
+				t.Fatalf("workflows edit output = %q, want %q naming %s", output, want, path)
+			}
 			content, readErr := os.ReadFile(path)
 			if readErr != nil {
 				t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 			}
-			if !strings.Contains(string(content), "\nlabels: [\""+point+"\"]\n") {
+			if !strings.Contains(string(content), "\n"+live+"\n") {
 				t.Fatalf("scaffolded content = %q, want the live labels line", content)
 			}
 			if !strings.Contains(string(content), "# when: [") {
 				t.Fatalf("scaffolded content = %q, want the when key shown commented as reference", content)
 			}
 		})
+	}
+}
+
+// A point that is neither a moment nor a label is refused, and nothing is
+// scaffolded for it: a file bound to it could never fire.
+func TestWorkflowsEditRefusesAPointThatIsNeither(t *testing.T) {
+	t.Parallel()
+	for _, point := range []string{"a,b", "  "} {
+		root := tempRepo(t)
+		_, err := runLit(t, root, "workflows", "edit", point)
+		var validation model.ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("Run(workflows edit %q) error = %v (%T), want a ValidationError", point, err, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(root, ".lit", "workflows")); !os.IsNotExist(statErr) {
+			t.Fatalf("Stat(.lit/workflows) error = %v, want nothing scaffolded for %q", statErr, point)
+		}
 	}
 }
 
@@ -386,7 +436,7 @@ func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
 	for _, want := range []string{
-		`occasion: when=["enter closed"] labels=needs-design issue=lit-7` + "\n",
+		"occasion: when=enter closed labels=needs-design issue=lit-7\n",
 		"Fired (2)\n",
 		`done "Post-close capture reminder" (embedded)  [when:enter closed]` + "\n",
 		"design-note (project)  [when:enter closed, label:needs-design]\n",
@@ -413,11 +463,9 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 }
 
 // dry-run is asked in every spelling a `when:` entry takes — an event, an
-// entry into a state, an exit from one, built-in or custom — and reads each
-// the way the frontmatter does, so a definition fires in a dry-run exactly
-// when it says it fires. A state name is an open string that can carry a
-// comma, so the occasion line keeps one crossing of a state named foo,bar
-// apart from two crossings.
+// entry into a state, an exit from one — and reads each the way the
+// frontmatter does, so a definition fires in a dry-run exactly when it says
+// it fires.
 func TestWorkflowsDryRunReadsEveryWhenSpelling(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
@@ -425,8 +473,6 @@ func TestWorkflowsDryRunReadsEveryWhenSpelling(t *testing.T) {
 		"on-show":     "show_ticket",
 		"on-exit":     "exit plan",
 		"on-enter":    "enter review",
-		"on-foo-bar":  `"enter foo,bar"`,
-		"on-staging":  "exit deploy:staging",
 		"on-progress": "enter in_progress",
 	} {
 		writeCLIWorkflow(t, root, id+".md", "---\nid: "+id+"\nwhen: ["+when+"]\n---\n"+id+" body")
@@ -437,20 +483,17 @@ func TestWorkflowsDryRunReadsEveryWhenSpelling(t *testing.T) {
 		occasion   string
 		firedLines []string
 	}{
-		{[]string{"show_ticket"}, `when=["show_ticket"]`, []string{"on-show (project)  [when:show_ticket]"}},
-		{[]string{"exit plan"}, `when=["exit plan"]`, []string{"on-exit (project)  [when:exit plan]"}},
-		{[]string{"Enter  Review"}, `when=["enter review"]`, []string{
+		{[]string{"show_ticket"}, "when=show_ticket", []string{"on-show (project)  [when:show_ticket]"}},
+		{[]string{"exit plan"}, "when=exit plan", []string{"on-exit (project)  [when:exit plan]"}},
+		{[]string{"Enter  Review"}, "when=enter review", []string{
 			`phase-review "Record when the merge is under way" (embedded)  [when:enter review]`,
 			"on-enter (project)  [when:enter review]",
 		}},
-		{[]string{"enter foo,bar"}, `when=["enter foo,bar"]`, []string{"on-foo-bar (project)  [when:enter foo,bar]"}},
-		{[]string{"enter foo", "enter bar"}, `when=["enter foo","enter bar"]`, nil},
-		{[]string{"exit deploy:staging"}, `when=["exit deploy:staging"]`, []string{"on-staging (project)  [when:exit deploy:staging]"}},
-		{[]string{"exit open", "enter in_progress", "enter plan"}, `when=["exit open","enter in_progress","enter plan"]`, []string{
+		{[]string{"exit open", "enter in-progress", "enter plan"}, "when=exit open,enter in_progress,enter plan", []string{
 			`phase-plan "Plan the ticket, then record when the code starts" (embedded)  [when:enter plan]`,
 			"on-progress (project)  [when:enter in_progress]",
 		}},
-		{nil, `when=[]`, nil},
+		{nil, "when=-", nil},
 	} {
 		args := []string{"workflows", "dry-run"}
 		for _, when := range tc.when {
@@ -474,22 +517,56 @@ func TestWorkflowsDryRunReadsEveryWhenSpelling(t *testing.T) {
 	}
 }
 
-// dry-run refuses a moment no command fires — an event outside the catalog,
-// the transition events retired among them — rather than explain a match on
-// something that cannot happen, and names the spellings that can.
+// dry-run refuses a --when naming no moment a command fires — an event
+// outside the catalog, the retired transition events among them, a state the
+// lifecycle lacks, a blank — rather than explain a match on something that
+// cannot happen, and names what can.
 func TestWorkflowsDryRunRefusesAMomentLitNeverFires(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	for _, when := range []string{"work_finished", "ticket_closed", "warp_drive_engaged", "enter"} {
+	for when, says := range map[string][]string{
+		"work_finished":      {"enter <state> or exit <state>", "show_ticket"},
+		"ticket_closed":      {"enter <state> or exit <state>", "show_ticket"},
+		"warp_drive_engaged": {"enter <state> or exit <state>", "show_ticket"},
+		"enter":              {"enter <state> or exit <state>", "show_ticket"},
+		"enter verify":       {"open, in_progress, plan, impl, review, merge, closed"},
+		"  ":                 {"blank"},
+	} {
 		_, err := runLit(t, root, "workflows", "dry-run", "--when", when)
 		var validation model.ValidationError
 		if !errors.As(err, &validation) {
-			t.Fatalf("dry-run --when %s error = %v (%T), want a ValidationError", when, err, err)
+			t.Fatalf("dry-run --when %q error = %v (%T), want a ValidationError", when, err, err)
 		}
-		for _, want := range []string{strconv.Quote(when), "enter <state> or exit <state>", "show_ticket"} {
+		for _, want := range append([]string{"--when " + strconv.Quote(when)}, says...) {
 			if !strings.Contains(err.Error(), want) {
-				t.Errorf("dry-run --when %s error = %q, want it to name %s", when, err, want)
+				t.Errorf("dry-run --when %q error = %q, want it to name %s", when, err, want)
 			}
+		}
+	}
+}
+
+// dry-run reads --label the way a ticket's label is stored, so a label asked
+// in any case matches the definition bound to it, and refuses one no ticket
+// can carry.
+func TestWorkflowsDryRunReadsLabelsAsATicketCarriesThem(t *testing.T) {
+	t.Parallel()
+	root := tempRepo(t)
+	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nlabels: [needs-design]\n---\nbody")
+
+	output, err := runLit(t, root, "workflows", "dry-run", "--label", " Needs-Design ")
+	if err != nil {
+		t.Fatalf("Run(workflows dry-run --label) error = %v", err)
+	}
+	for _, want := range []string{"occasion: when=- labels=needs-design issue=-\n", "design-note (project)  [label:needs-design]\n"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("dry-run output = %q, want it to contain %q", output, want)
+		}
+	}
+	for _, label := range []string{"a,b", "  "} {
+		_, err := runLit(t, root, "workflows", "dry-run", "--label", label)
+		var validation model.ValidationError
+		if !errors.As(err, &validation) || !strings.Contains(err.Error(), "--label "+strconv.Quote(label)) {
+			t.Errorf("dry-run --label %q error = %v (%T), want a ValidationError naming it", label, err, err)
 		}
 	}
 }

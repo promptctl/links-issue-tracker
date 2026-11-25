@@ -22,103 +22,97 @@ func TestMatchesSingleKeys(t *testing.T) {
 		want     bool
 	}{
 		{
-			name: "inert never fires, even on an empty occasion",
-			def:  Definition{ID: "inert"},
+			name: "never fires, even on an empty occasion",
+			def:  Definition{ID: "never", Activation: Never{}},
 			want: false,
 		},
 		{
 			name:     "when: the fired event listed",
-			def:      Definition{When: []Moment{EventShowBacklog, EventShowTicket}},
+			def:      Definition{Activation: Keys{When: []Moment{EventShowBacklog, EventShowTicket}}},
 			occasion: Occasion{Moments: []Moment{EventShowTicket}},
 			want:     true,
 		},
 		{
 			name:     "when: the fired event not listed",
-			def:      Definition{When: []Moment{EventShowBacklog}},
+			def:      Definition{Activation: Keys{When: []Moment{EventShowBacklog}}},
 			occasion: Occasion{Moments: []Moment{EventShowTicket}},
 			want:     false,
 		},
 		{
 			name:     "when: nothing on the occasion",
-			def:      Definition{When: []Moment{EventShowBacklog}},
+			def:      Definition{Activation: Keys{When: []Moment{EventShowBacklog}}},
 			occasion: Occasion{},
 			want:     false,
 		},
 		{
 			name:     "labels: any listed label present",
-			def:      Definition{Labels: []string{"needs-design", "blocked"}},
+			def:      Definition{Activation: Keys{Labels: []string{"needs-design", "blocked"}}},
 			occasion: Occasion{Moments: []Moment{EventShowTicket}, Labels: []string{"other", "blocked"}},
 			want:     true,
 		},
 		{
 			name:     "labels: no listed label present",
-			def:      Definition{Labels: []string{"needs-design"}},
+			def:      Definition{Activation: Keys{Labels: []string{"needs-design"}}},
 			occasion: Occasion{Moments: []Moment{EventShowTicket}, Labels: []string{"other"}},
 			want:     false,
 		},
 		{
 			name:     "labels: no ticket on the occasion",
-			def:      Definition{Labels: []string{"needs-design"}},
+			def:      Definition{Activation: Keys{Labels: []string{"needs-design"}}},
 			occasion: Occasion{Moments: []Moment{EventShowBacklog}},
 			want:     false,
 		},
 		{
 			name:     "when: enter matches a state the transition entered",
-			def:      Definition{When: []Moment{enter("in_progress")}},
+			def:      Definition{Activation: Keys{When: []Moment{enter("in_progress")}}},
 			occasion: start,
 			want:     true,
 		},
 		{
 			name:     "when: enter does not match a state the transition exited",
-			def:      Definition{When: []Moment{enter("open")}},
+			def:      Definition{Activation: Keys{When: []Moment{enter("open")}}},
 			occasion: start,
 			want:     false,
 		},
 		{
 			name:     "when: exit matches a state the transition exited",
-			def:      Definition{When: []Moment{exit("open")}},
+			def:      Definition{Activation: Keys{When: []Moment{exit("open")}}},
 			occasion: start,
 			want:     true,
 		},
 		{
 			name:     "when: enter matches a state nested inside another the transition entered",
-			def:      Definition{When: []Moment{enter("plan")}},
+			def:      Definition{Activation: Keys{When: []Moment{enter("plan")}}},
 			occasion: start,
 			want:     true,
 		},
 		{
 			name:     "when: exit matches every state a transition left",
-			def:      Definition{When: []Moment{exit("review")}},
+			def:      Definition{Activation: Keys{When: []Moment{exit("review")}}},
 			occasion: done,
 			want:     true,
 		},
 		{
 			name:     "when: a crossing on one side does not satisfy the other",
-			def:      Definition{When: []Moment{exit("plan")}},
+			def:      Definition{Activation: Keys{When: []Moment{exit("plan")}}},
 			occasion: start,
 			want:     false,
 		},
 		{
-			name:     "when: custom stage names are just names",
-			def:      Definition{When: []Moment{enter("ready-to-pull")}},
-			occasion: Occasion{Moments: []Moment{exit("design"), enter("ready-to-pull")}},
-			want:     true,
-		},
-		{
 			name:     "when: a read moment never satisfies a crossing",
-			def:      Definition{When: []Moment{enter("open")}},
+			def:      Definition{Activation: Keys{When: []Moment{enter("open")}}},
 			occasion: Occasion{Moments: []Moment{EventShowTicket}},
 			want:     false,
 		},
 		{
 			name:     "when: a transition that crossed nothing satisfies no crossing",
-			def:      Definition{When: []Moment{enter("plan"), exit("plan")}},
+			def:      Definition{Activation: Keys{When: []Moment{enter("plan"), exit("plan")}}},
 			occasion: Occasion{Labels: []string{"needs-design"}},
 			want:     false,
 		},
 		{
 			name:     "labels: a transition that crossed nothing still fires a label-only binding",
-			def:      Definition{Labels: []string{"needs-design"}},
+			def:      Definition{Activation: Keys{Labels: []string{"needs-design"}}},
 			occasion: Occasion{Labels: []string{"needs-design"}},
 			want:     true,
 		},
@@ -136,10 +130,10 @@ func TestMatchesSingleKeys(t *testing.T) {
 // ticket with a 'need-design' label, it includes this guidance" — when: AND
 // labels: must both be satisfied.
 func TestMatchesAndAcrossKeys(t *testing.T) {
-	def := Definition{
+	def := Definition{Activation: Keys{
 		When:   []Moment{EventShowTicket, enter("closed")},
 		Labels: []string{"need-design"},
-	}
+	}}
 	cases := []struct {
 		name     string
 		occasion Occasion
@@ -162,9 +156,9 @@ func TestMatchesAndAcrossKeys(t *testing.T) {
 
 func TestSetMatchingKeepsIDOrder(t *testing.T) {
 	set := Set{Definitions: []Definition{
-		{ID: "a", When: []Moment{EventShowTicket}},
-		{ID: "b", When: []Moment{EventShowBacklog}},
-		{ID: "c", When: []Moment{EventShowTicket}},
+		{ID: "a", Activation: Keys{When: []Moment{EventShowTicket}}},
+		{ID: "b", Activation: Keys{When: []Moment{EventShowBacklog}}},
+		{ID: "c", Activation: Keys{When: []Moment{EventShowTicket}}},
 	}}
 	got := set.Matching(Occasion{Moments: []Moment{EventShowTicket}})
 	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "c" {
@@ -173,7 +167,7 @@ func TestSetMatchingKeepsIDOrder(t *testing.T) {
 }
 
 func TestMatchReasonsNilWhenNotMatching(t *testing.T) {
-	def := Definition{When: []Moment{EventShowBacklog}}
+	def := Definition{Activation: Keys{When: []Moment{EventShowBacklog}}}
 	if got := def.MatchReasons(Occasion{Moments: []Moment{EventShowTicket}}); got != nil {
 		t.Fatalf("MatchReasons() = %v, want nil for a non-matching occasion", got)
 	}
@@ -182,10 +176,10 @@ func TestMatchReasonsNilWhenNotMatching(t *testing.T) {
 // The reasons name what matched in the spelling the definition was written
 // in, so a dry-run's or a trace's "why" reads back as its `when:` entry.
 func TestMatchReasonsNamesWhatMatchedInEachKey(t *testing.T) {
-	def := Definition{
+	def := Definition{Activation: Keys{
 		When:   []Moment{exit("plan"), enter("closed"), exit("review")},
 		Labels: []string{"needs-design", "blocked"},
-	}
+	}}
 	occasion := Occasion{
 		Moments: []Moment{exit("in_progress"), exit("review"), enter("closed")},
 		Labels:  []string{"blocked"},

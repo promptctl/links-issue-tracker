@@ -65,7 +65,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, inv, ap.Workspace, occasion)
 	}}
 }
 

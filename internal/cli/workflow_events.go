@@ -9,7 +9,7 @@ import (
 
 // This file is the command surface's half of the occasion layer: one pure
 // occasion-builder function per read moment, and one for every transition,
-// so the payload a command hands to workflows.Dispatch is unit-testable with
+// so the payload a command hands to workflows.Fire is unit-testable with
 // no store, no app, no mocks. [LAW:effects-at-boundaries] The commands
 // themselves (cli.go, workable.go, next.go) call these and dispatch the
 // result, through dispatchOccasion, at the point their mutation or read
@@ -94,10 +94,10 @@ func (t ticketState) states() []string {
 	return states
 }
 
-// transitionOccasion is the single builder every lifecycle transition routes
-// through — applyTransition in cli.go is the one step every transition runs,
-// single verb or bulk, and it calls this — so it is the one place that turns
-// a completed transition into what it fires. [LAW:single-enforcer] before and
+// transitionOccasion is the single builder every transition routes through —
+// applyTransition in cli.go is the one step every transition verb runs,
+// single or bulk, and it calls this — so it is the one place that turns a
+// completed transition into what it fires. [LAW:single-enforcer] before and
 // after are where the ticket stood on either side of the write.
 //
 // What a transition fires is the crossings it made, never a name for the
@@ -109,21 +109,17 @@ func (t ticketState) states() []string {
 // outermost first. So a start from open exits open and enters in_progress and
 // plan, a done from review exits in_progress and review and enters closed,
 // and a phase move exits and enters one phase each, never leaving
-// in_progress. A call that leaves the ticket where it was — a reclaim, a move
-// to the phase it is in — crosses nothing, so only a definition bound by
-// labels alone fires on it.
-//
-// A retention action (archive/unarchive/delete/restore) is no lifecycle
-// transition and fires nothing, so fires is false.
-func transitionOccasion(action model.Action, before, after ticketState) (occasion workflows.Occasion, fires bool) {
-	if _, retention := action.(model.RetentionAction); retention {
-		return workflows.Occasion{}, false
-	}
+// in_progress. A transition that leaves the ticket's state where it was — a
+// reclaim, a move to the phase it is in, an archive or delete or their
+// undoing — crosses nothing, so only a definition bound by labels alone fires
+// on it. [LAW:dataflow-not-control-flow] every transition builds its occasion
+// the same way; what it crossed is the value that varies.
+func transitionOccasion(before, after ticketState) workflows.Occasion {
 	return workflows.Occasion{
 		Moments: append(crossings(workflows.Exit, before.states(), after.states()), crossings(workflows.Enter, after.states(), before.states())...),
 		IssueID: after.issue.ID,
 		Labels:  model.RawTexts(after.issue.Labels),
-	}, true
+	}
 }
 
 // crossings are the side's crossings of every state in from that is not in

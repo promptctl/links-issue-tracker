@@ -10,31 +10,31 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
+
+// prefixed is the facts under one namespace.
+func prefixed(facts map[string]any, prefix string) map[string]any {
+	out := map[string]any{}
+	for key, value := range facts {
+		if strings.HasPrefix(key, prefix) {
+			out[key] = value
+		}
+	}
+	return out
+}
 
 // phaseFacts is what the last invocation's event says its phase move did.
 func phaseFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "phase.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "phase.")
 }
 
 // workflowFacts is what the last invocation's event says about the workflow
 // occasion it fired.
 func workflowFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "workflows.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "workflows.")
 }
 
 // bulkItemWorkflowFacts is what the last bulk run's one item says about the
@@ -45,13 +45,7 @@ func bulkItemWorkflowFacts(t *testing.T) map[string]any {
 	if len(items) != 1 {
 		t.Fatalf("bulk.items = %v, want one item", items)
 	}
-	facts := map[string]any{}
-	for key, value := range items[0].(map[string]any)["bulk.item.facts"].(map[string]any) {
-		if strings.HasPrefix(key, "workflows.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(items[0].(map[string]any)["bulk.item.facts"].(map[string]any), "workflows.")
 }
 
 // A definition bound to `enter <state>` or `exit <state>` fires on every
@@ -67,7 +61,7 @@ func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	var bound []string
-	for _, state := range builtinStates {
+	for _, state := range workflows.States() {
 		for _, side := range []string{"enter", "exit"} {
 			id := side + "-" + state
 			bound = append(bound, id)
@@ -117,8 +111,17 @@ func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 				t.Errorf("lit %v printed %q; want the done guidance %q", step.args, out, body)
 			}
 		}
-		want := map[string]any{"workflows.when": step.when, "workflows.fired": step.fired, "workflows.warnings": []any{}}
-		if got := step.facts(t); !reflect.DeepEqual(got, want) {
+		// The load's warnings are the command's, said once however many
+		// tickets it ran over; a bulk item carries only what it fired.
+		if got := workflowFacts(t)["workflows.warnings"]; !reflect.DeepEqual(got, []any{}) {
+			t.Errorf("lit %v workflows.warnings = %v, want none", step.args, got)
+		}
+		want := map[string]any{"workflows.when": step.when, "workflows.fired": step.fired}
+		got := step.facts(t)
+		if step.args[0] != "bulk" {
+			delete(got, "workflows.warnings")
+		}
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("lit %v event facts = %v, want %v", step.args, got, want)
 		}
 	}

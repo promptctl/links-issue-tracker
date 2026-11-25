@@ -88,44 +88,6 @@ func workflowsEditLeaf() wsLeaf {
 	}}
 }
 
-// builtinStates is the lifecycle's own state order — the spine every
-// workspace has, with or without a single workflow file authored against it:
-// the statuses, with the phases in work order inside in_progress, where the
-// work passes through them. [LAW:one-source-of-truth] the phases are
-// model.Phases(), never a second list.
-var builtinStates = func() []string {
-	states := []string{string(model.StateOpen), string(model.StateInProgress)}
-	for _, phase := range model.Phases() {
-		states = append(states, string(phase))
-	}
-	return append(states, string(model.StateClosed))
-}()
-
-// spineMoments returns every moment the overview walks, in the spelling a
-// `when:` entry uses: the event catalog, then each spine state entered and
-// exited — the built-in states in lifecycle order, followed by any custom
-// stage a loaded definition crosses that isn't one of them, alphabetically.
-// Custom stages are first-class by design (states are open strings, never a
-// closed enum — see workflows.go), so a definition authored against one is
-// what puts it on the spine at all.
-func spineMoments(set workflows.Set) []workflows.Moment {
-	states := slices.Clone(builtinStates)
-	var custom []string
-	for _, def := range set.Definitions {
-		for _, moment := range def.When {
-			if crossing, ok := moment.(workflows.Crossing); ok && !slices.Contains(states, crossing.State) && !slices.Contains(custom, crossing.State) {
-				custom = append(custom, crossing.State)
-			}
-		}
-	}
-	slices.Sort(custom)
-	moments := catalogMoments()
-	for _, state := range append(states, custom...) {
-		moments = append(moments, workflows.Crossing{Side: workflows.Enter, State: state}, workflows.Crossing{Side: workflows.Exit, State: state})
-	}
-	return moments
-}
-
 // spineLabels returns every label any loaded definition binds to, sorted, so
 // the overview's label section only shows labels actually in play rather than
 // every label ever used on a ticket.
@@ -133,7 +95,7 @@ func spineLabels(set workflows.Set) []string {
 	seen := map[string]bool{}
 	var labels []string
 	for _, def := range set.Definitions {
-		for _, label := range def.Labels {
+		for _, label := range def.Keys().Labels {
 			if !seen[label] {
 				seen[label] = true
 				labels = append(labels, label)
@@ -158,10 +120,10 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 	if _, err := fmt.Fprintln(w, "\nWhen"); err != nil {
 		return err
 	}
-	for _, moment := range spineMoments(set) {
+	for _, moment := range workflows.Moments() {
 		var at []workflows.Definition
 		for _, def := range defs {
-			if slices.Contains(def.When, moment) {
+			if slices.Contains(def.Keys().When, moment) {
 				at = append(at, def)
 			}
 		}
@@ -182,7 +144,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 	for _, label := range labels {
 		var at []workflows.Definition
 		for _, def := range defs {
-			if slices.Contains(def.Labels, label) {
+			if slices.Contains(def.Keys().Labels, label) {
 				at = append(at, def)
 			}
 		}
@@ -222,9 +184,9 @@ func formatDefinitionRef(def workflows.Definition) string {
 	return fmt.Sprintf("%s (%s)", def.ID, def.Source)
 }
 
-// printWorkflowWarnings surfaces every load/parse warning — inert files,
-// unknown events, keys this lit does not read, malformed frontmatter,
-// duplicate ids — so a file that loads
+// printWorkflowWarnings surfaces every load/parse warning — files with no
+// keys, entries naming nothing lit fires, keys this lit does not read,
+// malformed frontmatter, duplicate ids — so a file that loads
 // but never fires is diagnosable from the same view that shows what does
 // fire, instead of failing silently.
 func printWorkflowWarnings(w io.Writer, warnings []workflows.Warning) error {
@@ -250,18 +212,24 @@ func renderWorkflowDefinition(w io.Writer, set workflows.Set, id string) error {
 	if !ok {
 		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids)", id)}
 	}
+	keys := def.Keys()
 	fields := []struct{ key, value string }{
 		{"id", def.ID},
 		{"name", orDash(def.Name)},
 		{"source", string(def.Source)},
 		{"path", def.Path},
-		{"when", orDash(strings.Join(workflows.Spellings(def.When), ", "))},
-		{"labels", orDash(strings.Join(def.Labels, ", "))},
+		{"when", orDash(strings.Join(workflows.Spellings(keys.When), ", "))},
+		{"labels", orDash(strings.Join(keys.Labels, ", "))},
 	}
 	for _, f := range fields {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.key, f.value); err != nil {
 			return err
 		}
+	}
+	// The load's warnings for this file, so a definition that fires less than
+	// it says — or never — shows why beside what it fires on.
+	if err := printWorkflowWarnings(w, set.WarningsFor(def)); err != nil {
+		return err
 	}
 	if _, err := fmt.Fprintln(w, "---"); err != nil {
 		return err
