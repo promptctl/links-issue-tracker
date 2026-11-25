@@ -5,8 +5,10 @@ package stamp
 import "time"
 
 // Instant is a write's stamp, built by Next. What the type guarantees is that
-// every instant read out of one came through the stamp rule and is in UTC:
-// Go admits the zero literal in any package, so the type cannot keep an
+// every instant read out of one came through the stamp rule. It is in UTC
+// because each source Next reads from is: a clock reading comes in UTC from
+// storage.Clock, and Next puts history there itself. Go admits the zero
+// literal in any package, so the type cannot keep an
 // unbuilt Instant from being written, and instead refuses to be read as one —
 // Time panics on an Instant Next did not build, rather than recording the
 // year 1 as an instant. [LAW:types-are-the-program] [LAW:no-silent-failure]

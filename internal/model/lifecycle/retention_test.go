@@ -154,7 +154,7 @@ func TestRetainRefusesImpostors(t *testing.T) {
 			t.Fatalf("Retain((*Deleted)(nil), archive) did not panic")
 		}
 	}()
-	_, _ = Retain((*Deleted)(nil), Archive{}, stamp.Next(time.Now(), time.Time{}))
+	_, _ = Retain((*Deleted)(nil), Archive{}, stamp.Next(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), time.Time{}))
 }
 
 // A typed-nil pointer variant satisfies RetentionAction without being one of

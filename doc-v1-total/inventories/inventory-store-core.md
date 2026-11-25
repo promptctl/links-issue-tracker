@@ -707,7 +707,7 @@ The UPDATE touches only the status-axis columns — a transition restates no ret
 
 #### 6.6 `retentionWrite` and `planRetentionTransition`
 
-`retentionWrite` fields (`store.go`): `nextArchived, nextDeleted any; event model.IssueEvent; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
+`retentionWrite` fields (`store.go`): `event model.IssueEvent; post model.Issue`; every column the write sets is read off `post`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
 
 `(s *Store) planRetentionTransition(issue, actor, reason, action, at stamp.Instant)` (`store.go`):
 - `model.Retain(issue.Retention(), action, at)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
@@ -718,7 +718,7 @@ The UPDATE touches only the status-axis columns — a transition restates no ret
 ```sql
 UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?
 ```
-bound `model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.post.ID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `insertEventTx(ctx, tx, w.event)` (`store.go`).
+bound `model.StampText(w.post.UpdatedAt), archivedAt, deletedAt, w.post.ID` (the pair is `retentionColumns(w.post)`); exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `insertEventTx(ctx, tx, w.event)` (`store.go`).
 
 Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 
@@ -2945,7 +2945,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `refuseReversedTie(places, ranked)` reads the first `len(ranked)` rows of the head. Where two adjacent names both stand there on one key and the later name's id sorts before the earlier one's, the set is refused with a `model.ValidationError`: ``fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)``.
 - `rankSetLeadingRun(head, ranked)` is the rows ahead of the head's first unnamed row, up to the first key two rows share: a listing breaks a tie by id, so a shared key cannot pass to another issue. The run stops there, so it stays the frame's first rows. Every other representative joins, an unranked one included.
 - `topEdge.ranksBeyondTx(ctx, tx, f, n, "")` places one key per joining issue past the frame's top, once for the whole set, and the run's keys are read again through `frameHeadTx`, because making room rewrites keys. The slots are those keys and then the run's, ascending, and the representatives take them in the order named.
-- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written if it moved or its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END WHERE deleted_at IS NULL AND id IN (…)`, the key and nothing else, so no rank write moves `updated_at`; error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. The representatives that moved are counted as `RankSetAccount.Touched`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
+- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written only if its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END WHERE deleted_at IS NULL AND id IN (…)`, the key and nothing else, so no rank write moves `updated_at`; error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. The representatives that moved are counted as `RankSetAccount.Touched`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 

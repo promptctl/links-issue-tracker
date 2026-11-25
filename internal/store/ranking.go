@@ -809,19 +809,18 @@ func (s *Store) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetRes
 			held[row.id] = row.rank
 			slots = append(slots, row.rank)
 		}
-		// Each named issue takes its slot's key. Which of them moved is one
-		// question with one answer, its place in the frame before and after: a
-		// key handed round can leave an issue where it stood, and an issue can
-		// move on the key it already held. [LAW:single-enforcer]
+		// Each named issue takes its slot's key, and a key is written only where
+		// it changes. Which of them moved is a separate question with one answer,
+		// its place in the frame before and after: a key handed round can leave
+		// an issue where it stood, and an issue can move on the key it already
+		// held. [LAW:single-enforcer]
 		var writes []rankWrite
 		for i, id := range ranked {
-			stood, inHead := position[id]
-			moved := !inHead || stood != i
-			if moved || slots[i] != held[id] {
+			if stood, inHead := position[id]; !inHead || stood != i {
+				account.Touched++
+			}
+			if slots[i] != held[id] {
 				writes = append(writes, rankWrite{id: id, rank: slots[i]})
-				if moved {
-					account.Touched++
-				}
 			}
 		}
 		if err := writeRanksTx(ctx, tx, writes); err != nil {

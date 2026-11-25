@@ -385,7 +385,8 @@ func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic mode
 // End to end through the store: a backlog in a known deliberate order with
 // exactly one inversion comes back with exactly one ticket moved, every other
 // ticket holding the byte-identical rank it went in with, and no inversions
-// left. The moved ticket is stamped as updated by the repair; no other is.
+// left. The repair reorders the backlog and is no work on a ticket, so every
+// ticket, the moved one included, keeps the updated_at it went in with.
 func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -416,8 +417,15 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 		t.Fatalf("Doctor(before).RankInversions = %d, want exactly 1", report.RankInversions)
 	}
 
-	fixedAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	st.clock = func() time.Time { return fixedAt }
+	updatedBefore := make(map[model.ID]time.Time, len(deliberate))
+	for _, id := range deliberate {
+		issue, err := st.GetIssue(ctx, id)
+		if err != nil {
+			t.Fatalf("GetIssue(%s) error = %v", id, err)
+		}
+		updatedBefore[id] = issue.UpdatedAt
+	}
+	st.clock = func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }
 	fixed, err := st.FixRankInversions(ctx)
 	if err != nil {
 		t.Fatalf("FixRankInversions() error = %v", err)
@@ -432,8 +440,8 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetIssue(%s) error = %v", id, err)
 		}
-		if issue.UpdatedAt.Equal(fixedAt) {
-			t.Fatalf("issue %s updated_at = %s, the repair's clock; a rank repair reorders the backlog and stamps no ticket", id, issue.UpdatedAt)
+		if !issue.UpdatedAt.Equal(updatedBefore[id]) {
+			t.Fatalf("issue %s updated_at %s -> %s; a rank repair reorders the backlog and stamps no ticket", id, updatedBefore[id], issue.UpdatedAt)
 		}
 		if id == dependent {
 			continue

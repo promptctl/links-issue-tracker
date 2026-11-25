@@ -1522,6 +1522,38 @@ func TestRankSetCountsTouchedByPlaceAndNotByKey(t *testing.T) {
 	}
 }
 
+// TestRankSetWritesOnlyTheKeysThatChange pins that a rank set's Rewritten count
+// is the keys it changed. Raising D above A and B gives D a key past the frame's
+// top and hands A and B back the keys they held, so all three changed place and
+// one key was written.
+func TestRankSetWritesOnlyTheKeysThatChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "frame", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	issues := makeChildrenOf(t, ctx, st, epic.ID, "A", "B", "C", "D")
+	a, b, d := issues[0], issues[1], issues[3]
+
+	var accounts []RankSetAccount
+	heard := WithRankObserver(ctx, RankObserver{
+		Wrote:           func(int) {},
+		Respaced:        func(Respace) {},
+		ReadParentEdges: func(int) {},
+		Ancestry:        func(storage.AncestryShape) {},
+		RankSet:         func(account RankSetAccount) { accounts = append(accounts, account) },
+	})
+	if _, err := st.RankSet(heard, []model.ID{d.ID, a.ID, b.ID}); err != nil {
+		t.Fatalf("RankSet(D, A, B) error = %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].Touched != 3 || accounts[0].Minted != 1 || accounts[0].Rewritten != 1 {
+		t.Fatalf("RankSet(D, A, B) accounts = %+v; want one that touched 3, minted 1 and rewrote 1: only D's key changed", accounts)
+	}
+}
+
 // TestRankSetOverIssuesSharingAKey pins what a rank set does with two issues
 // on one key, as imported keys can be, when it names one directly above the
 // other. A listing breaks the tie by id: an order that agrees with the ids has

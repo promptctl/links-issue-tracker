@@ -1995,12 +1995,8 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 // the history format is the same encoding the columns store. applyTx is the
 // write half: one UPDATE plus the event.
 type retentionWrite struct {
-	// nextArchived/nextDeleted are the pair Retain produced, as the
-	// retentionColumns projection the columns store.
-	nextArchived any
-	nextDeleted  any
-	event        model.IssueEvent
-	post         model.Issue
+	event model.IssueEvent
+	post  model.Issue
 }
 
 func (w retentionWrite) postIssue() model.Issue     { return w.post }
@@ -2027,22 +2023,21 @@ func (s *Store) planRetentionTransition(issue model.Issue, actor string, reason 
 	}
 	post := issue.Stamped(at)
 	post.SetRetention(next)
-	nextArchived, nextDeleted := retentionColumns(post)
 	changes := model.RetentionChanges(issue.Retention(), next)
 	return retentionWrite{
-		nextArchived: nextArchived,
-		nextDeleted:  nextDeleted,
-		event:        s.newEvent(issue.ID, string(action.Name()), reason, actor, at, changes),
-		post:         post,
+		event: s.newEvent(issue.ID, string(action.Name()), reason, actor, at, changes),
+		post:  post,
 	}, nil
 }
 
 // applyTx writes a planned retention transition against tx. The UPDATE sets
 // only the columns the retention axis owns — updated_at plus the pair — so a
-// retention write restates no status column. [LAW:one-source-of-truth]
+// retention write restates no status column, and every column it sets is read
+// off the post-state, as a status transition's are. [LAW:one-source-of-truth]
 func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
+	archivedAt, deletedAt := retentionColumns(w.post)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-		model.StampText(w.post.UpdatedAt), w.nextArchived, w.nextDeleted, w.post.ID); err != nil {
+		model.StampText(w.post.UpdatedAt), archivedAt, deletedAt, w.post.ID); err != nil {
 		return fmt.Errorf("update issue retention: %w", err)
 	}
 	return insertEventTx(ctx, tx, w.event)
