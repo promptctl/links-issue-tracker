@@ -21,7 +21,8 @@ CREATE TABLE `comments` (
   PRIMARY KEY (`id`),
   KEY `idx_comments_issue_created` (`issue_id`,`created_at`),
   KEY `issue_id` (`issue_id`),
-  CONSTRAINT `comments_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE
+  CONSTRAINT `comments_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `comments_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `issue_event_changes` (
@@ -30,7 +31,9 @@ CREATE TABLE `issue_event_changes` (
   `from_value` text,
   `to_value` text,
   PRIMARY KEY (`event_id`,`field`),
-  CONSTRAINT `issue_event_changes_ibfk_1` FOREIGN KEY (`event_id`) REFERENCES `issue_events` (`id`) ON DELETE CASCADE
+  CONSTRAINT `issue_event_changes_ibfk_1` FOREIGN KEY (`event_id`) REFERENCES `issue_events` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `issue_event_changes_from_value_stamp` CHECK (((((NOT((`field` IN ('closed_at', 'archived_at', 'deleted_at')))) OR `from_value` IS NULL) OR (`from_value` = '')) OR regexp_like(`from_value`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))),
+  CONSTRAINT `issue_event_changes_to_value_stamp` CHECK (((((NOT((`field` IN ('closed_at', 'archived_at', 'deleted_at')))) OR `to_value` IS NULL) OR (`to_value` = '')) OR regexp_like(`to_value`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `issue_events` (
@@ -45,7 +48,8 @@ CREATE TABLE `issue_events` (
   PRIMARY KEY (`id`),
   KEY `idx_issue_events_issue_created` (`issue_id`,`created_at`),
   KEY `issue_id` (`issue_id`),
-  CONSTRAINT `issue_events_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE
+  CONSTRAINT `issue_events_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `issue_events_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `issues` (
@@ -76,7 +80,12 @@ CREATE TABLE `issues` (
   CONSTRAINT `issues_priority_check` CHECK (((`priority` >= 0) AND (`priority` <= 1))),
   CONSTRAINT `issues_type_check` CHECK ((`issue_type` IN ('task', 'feature', 'bug', 'chore', 'epic'))),
   CONSTRAINT `issues_resolution_check` CHECK ((`resolution` IS NULL OR (`resolution` IN ('duplicate', 'superseded', 'obsolete', 'wontfix')))),
-  CONSTRAINT `issues_redirect_target_check` CHECK ((`redirect_target` IS NULL OR (`resolution` IN ('duplicate', 'superseded'))))
+  CONSTRAINT `issues_redirect_target_check` CHECK ((`redirect_target` IS NULL OR (`resolution` IN ('duplicate', 'superseded')))),
+  CONSTRAINT `issues_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$')),
+  CONSTRAINT `issues_updated_at_stamp` CHECK (regexp_like(`updated_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$')),
+  CONSTRAINT `issues_closed_at_stamp` CHECK ((`closed_at` IS NULL OR regexp_like(`closed_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))),
+  CONSTRAINT `issues_archived_at_stamp` CHECK ((`archived_at` IS NULL OR regexp_like(`archived_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))),
+  CONSTRAINT `issues_deleted_at_stamp` CHECK ((`deleted_at` IS NULL OR regexp_like(`deleted_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `labels` (
@@ -87,7 +96,8 @@ CREATE TABLE `labels` (
   PRIMARY KEY (`issue_id`,`label`),
   KEY `idx_labels_issue` (`issue_id`,`label`),
   KEY `idx_labels_name` (`label`,`issue_id`),
-  CONSTRAINT `labels_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE
+  CONSTRAINT `labels_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `labels_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `meta` (
@@ -115,7 +125,8 @@ CREATE TABLE `plan_reviews` (
   PRIMARY KEY (`id`),
   KEY `idx_plan_reviews_issue_created` (`issue_id`,`created_at`),
   CONSTRAINT `plan_reviews_issue` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `plan_reviews_verdict_check` CHECK ((`verdict` IN ('pass', 'fail')))
+  CONSTRAINT `plan_reviews_verdict_check` CHECK ((`verdict` IN ('pass', 'fail'))),
+  CONSTRAINT `plan_reviews_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `purges` (
@@ -123,7 +134,9 @@ CREATE TABLE `purges` (
   `issue_created_at` varchar(64) NOT NULL,
   `purged_at` varchar(64) NOT NULL,
   `purged_by` text NOT NULL,
-  PRIMARY KEY (`issue_id`,`issue_created_at`)
+  PRIMARY KEY (`issue_id`,`issue_created_at`),
+  CONSTRAINT `purges_issue_created_at_stamp` CHECK (regexp_like(`issue_created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$')),
+  CONSTRAINT `purges_purged_at_stamp` CHECK (regexp_like(`purged_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `relations` (
@@ -138,5 +151,6 @@ CREATE TABLE `relations` (
   KEY `idx_relations_src_type` (`src_id`,`type`),
   CONSTRAINT `relations_ibfk_1` FOREIGN KEY (`src_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
   CONSTRAINT `relations_ibfk_2` FOREIGN KEY (`dst_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocked-by', 'parent-child', 'related-to')))
+  CONSTRAINT `relations_type_check` CHECK ((`type` IN ('blocked-by', 'parent-child', 'related-to'))),
+  CONSTRAINT `relations_created_at_stamp` CHECK (regexp_like(`created_at`,'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{9}Z$'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

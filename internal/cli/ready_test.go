@@ -118,7 +118,7 @@ func (h readyTestHarness) applyAction(issueID model.ID, action model.Action, rea
 
 func (h readyTestHarness) backdateUpdatedAt(issueID model.ID, age time.Duration) {
 	h.t.Helper()
-	backdated := time.Now().UTC().Add(-age).Format(time.RFC3339Nano)
+	backdated := model.StampText(time.Now().Add(-age))
 	// Backdating plants a state the contract cannot express, which is what the
 	// test-support capability is for. Asking rather than asserting means an
 	// engine that does not offer it fails here by name instead of at a nil

@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -121,7 +122,7 @@ func TestListRefusesAStoredLoopByName(t *testing.T) {
 	}
 	if err := raw.ExecRawForTest(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		outer, inner, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		outer, inner, model.StampText(time.Now())); err != nil {
 		t.Fatalf("plant parent loop: %v", err)
 	}
 	if err := ap.Close(); err != nil {

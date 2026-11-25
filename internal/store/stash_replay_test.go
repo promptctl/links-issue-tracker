@@ -195,17 +195,22 @@ func TestAStepWhoseCommitFailedAfterStagingRunsAgain(t *testing.T) {
 func TestANewerLitsInterruptedStepIsUndoneByAWriterItAllows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, _ := storeAtVersion(t, migrations.FS, 11)
-	if err := st.commitWorkingSet(ctx, "at v11"); err != nil {
-		t.Fatalf("commit v11: %v", err)
+	registry, err := migrations.Embedded()
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
 	}
-	if _, err := st.db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (12, 1)`); err != nil {
-		t.Fatalf("record v12: %v", err)
+	head := registry.MaxVersion()
+	st, _ := storeAtVersion(t, migrations.FS, head)
+	if err := st.commitWorkingSet(ctx, "at head"); err != nil {
+		t.Fatalf("commit v%d: %v", head, err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, head+1); err != nil {
+		t.Fatalf("record v%d: %v", head+1, err)
 	}
 
 	migrateLocked(t, ctx, st)
-	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != 11 {
-		t.Fatalf("working schema = v%d (%v), want v11", got, err)
+	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != head {
+		t.Fatalf("working schema = v%d (%v), want v%d", got, err, head)
 	}
 }
 

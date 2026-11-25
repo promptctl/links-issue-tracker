@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -29,7 +30,7 @@ func TestFixIntegrityStampsItsCommitLabel(t *testing.T) {
 	// leave the row this repair deletes.
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'related-to', ?, 'seed')`,
-		issue.ID, issue.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		issue.ID, issue.ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("seed self related-to row error = %v", err)
 	}
 	// Committed before the repair runs, or the seed and its deletion cancel out

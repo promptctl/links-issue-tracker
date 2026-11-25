@@ -42,6 +42,7 @@ var pinnedVersionContent = map[int64]pinnedMigration{
 	9:  {file: "00009_purges.sql", upSHA256: "c3aca522c2e2cada23b7d2b3e1e140b3fa5dc902430864f5b1f7d24a70021587"},
 	10: {file: "00010_history_can_be_re_rooted.sql", upSHA256: "d9262bb984cc5c0a80d839beec6f940880c142539e74a909af28c2fdd12a03f4"},
 	11: {file: "00011_plans_and_plan_reviews.sql", upSHA256: "8477d335ea8d62c52c94b44792477318e22fcdcfdddfbc6a623e29e9be2a85f7"},
+	12: {file: "00012_timestamps_sort_as_instants.sql", upSHA256: "f69b11787371ec42692bf58cfb1fd6d9eff3f6c305b67769fbc3ba691771bbde"},
 }
 
 // migrationFile is one on-disk, non-baseline registry entry reduced to the identity

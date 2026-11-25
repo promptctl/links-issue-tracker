@@ -48,7 +48,7 @@ func TestTheClimbOrdersAsTheWholeReadDoes(t *testing.T) {
 	loop := parentChain(t, ctx, st, "loop one", "loop two")
 	seedParentEdge(t, ctx, st, loop[0].ID, loop[1].ID)
 	gone := parentChain(t, ctx, st, "gone", "orphan")
-	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET deleted_at = '2026-10-31T00:00:00Z' WHERE id = ?`, gone[0].ID); err != nil {
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET deleted_at = '2026-10-31T00:00:00.000000000Z' WHERE id = ?`, gone[0].ID); err != nil {
 		t.Fatal(err)
 	}
 

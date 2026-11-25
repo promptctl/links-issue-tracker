@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -51,7 +50,7 @@ func (s *Store) ListPlanReviews(ctx context.Context, issueID model.ID) ([]model.
 // review and a restore or replay. [LAW:single-enforcer]
 func insertPlanReviewTx(ctx context.Context, tx *sql.Tx, review model.PlanReview) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		review.ID, review.IssueID, string(review.PlanDigest), string(review.Verdict), joinLaws(review.Laws), review.CreatedAt.Format(time.RFC3339Nano), review.CreatedBy); err != nil {
+		review.ID, review.IssueID, string(review.PlanDigest), string(review.Verdict), joinLaws(review.Laws), model.StampText(review.CreatedAt), review.CreatedBy); err != nil {
 		return fmt.Errorf("insert plan review %s: %w", review.ID, err)
 	}
 	return nil
@@ -62,8 +61,8 @@ func deletePlanReviewTx(ctx context.Context, tx *sql.Tx, id model.ID) (int64, er
 }
 
 // queryPlanReviews reads the plan reviews where selects, in
-// storage.PlanReviewOrdering. The order is taken in Go, not in SQL: created_at
-// is a varchar, and ORDER BY on it sorts a stamp by its spelling.
+// storage.PlanReviewOrdering. The order is taken in Go, not in SQL, so the
+// contract's rule is the one both engines sort by.
 func queryPlanReviews(ctx context.Context, q rowQueryer, where string, args ...any) ([]model.PlanReview, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews `+where, args...)
 	if err != nil {

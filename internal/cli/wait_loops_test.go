@@ -110,7 +110,7 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 	// or a restore could have left it: top becomes a child of its own child.
 	if err := raw.ExecRawForTest(h.ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		top.ID, sub.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		top.ID, sub.ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("plant parent cycle: %v", err)
 	}
 	var buf bytes.Buffer

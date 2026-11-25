@@ -208,7 +208,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	if err := raw.ExecRawForTest(h.ctx, `DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (?, ?)`, loose.ID, under.ID); err != nil {
 		t.Fatalf("detach the tickets: %v", err)
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := model.StampText(time.Now())
 	for _, row := range [][3]string{
 		{under.ID.Raw(), host.ID.Raw(), "parent-child"},
 		{first.ID.Raw(), second.ID.Raw(), "blocked-by"},
@@ -510,7 +510,7 @@ func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
 	}
 	if err := raw.ExecRawForTest(h.ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`,
-		second.ID, first.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		second.ID, first.ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("plant the edge: %v", err)
 	}
 	facts, out = runDoctorRecorded(t, h)
@@ -554,7 +554,7 @@ func TestDoctorEventSaysTiedKeysUncheckedOnAStoredParentCycle(t *testing.T) {
 	}
 	if err := raw.ExecRawForTest(h.ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		top.ID, sub.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		top.ID, sub.ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("plant parent cycle: %v", err)
 	}
 	var out bytes.Buffer

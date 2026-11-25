@@ -215,7 +215,7 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 		{"created at the top past the only ranked row, all zeros", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			// The issue being created is not stored yet, so the respace around
 			// "0" finds that one row and nothing else.
-			if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.moved); err != nil {
+			if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00.000000000Z", ids.moved); err != nil {
 				t.Fatalf("delete the moved issue: %v", err)
 			}
 			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Created"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankTop})
@@ -244,7 +244,7 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			planted := map[model.ID]string{ids.lower: tc.lower, ids.moved: "z"}
 			if tc.upper != "" {
 				planted[ids.upper] = tc.upper
-			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.upper); err != nil {
+			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00.000000000Z", ids.upper); err != nil {
 				t.Fatalf("delete the upper neighbor: %v", err)
 			}
 			for id, r := range planted {
@@ -708,13 +708,13 @@ func TestWriteRankRefusesAnIssueDeletedUnderTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(before) error = %v", err)
 	}
-	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", issue.ID); err != nil {
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00.000000000Z", issue.ID); err != nil {
 		t.Fatalf("soft-delete %s: %v", issue.ID, err)
 	}
 
 	var writeErr error
 	if err := st.withMutation(ctx, "write-rank-under-lock-test", func(ctx context.Context, tx *sql.Tx) error {
-		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz", "2026-09-11T00:00:01Z")
+		writeErr = writeRankTx(ctx, tx, issue.ID, "zzzz", "2026-09-11T00:00:01.000000000Z")
 		return nil
 	}); err != nil {
 		t.Fatalf("withMutation error = %v", err)
@@ -815,7 +815,7 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	child := fx.children[0]
 
-	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00Z", child.ID); err != nil {
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`, "2026-09-11T00:00:00.000000000Z", child.ID); err != nil {
 		t.Fatalf("soft-delete %s: %v", child.ID, err)
 	}
 

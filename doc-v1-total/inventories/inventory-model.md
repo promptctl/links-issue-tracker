@@ -745,7 +745,7 @@ the Go field name when the tag name is empty. Pinned by
   identity, the birth spelled once per instant, and what the store's primary
   key holds.
 - `(Purge).Key() PurgeKey` — `purge.go`: `IssueID` and
-  `IssueCreatedAt.UTC().Format(time.RFC3339Nano)`, so one instant in two
+  `StampText(IssueCreatedAt)`, so one instant in two
   offsets is one key. Pinned by `TestPurgeKeyIsOneSpellingPerInstant`
   (`purge_test.go`), which also holds `UnionPurges` of the two spellings to one
   record.

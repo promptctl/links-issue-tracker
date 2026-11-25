@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -114,7 +113,7 @@ GROUP BY r.src_id, c.issue_type`, parentID)
 func insertPurgeTx(ctx context.Context, tx *sql.Tx, p model.Purge) error {
 	key := p.Key()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`,
-		key.IssueID, key.IssueCreatedAt, p.PurgedAt.Format(time.RFC3339Nano), p.PurgedBy); err != nil {
+		key.IssueID, key.IssueCreatedAt, model.StampText(p.PurgedAt), p.PurgedBy); err != nil {
 		return fmt.Errorf("record purge of %s: %w", p.IssueID, err)
 	}
 	return nil

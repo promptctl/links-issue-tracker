@@ -708,7 +708,7 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	for _, e := range [][2]model.ID{{a.ID, b.ID}, {b.ID, a.ID}} {
 		if _, err := st.db.ExecContext(ctx,
 			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`,
-			e[0], e[1], time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			e[0], e[1], model.StampText(time.Now())); err != nil {
 			t.Fatalf("seed cyclic edge %v error = %v", e, err)
 		}
 	}
@@ -890,7 +890,7 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
 		id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
-		firstID, "Duplicate title", "Duplicate description", "open", 1, "task", "parser", "", createdAt.Format(time.RFC3339Nano), createdAt.Format(time.RFC3339Nano))
+		firstID, "Duplicate title", "Duplicate description", "open", 1, "task", "parser", "", model.StampText(createdAt), model.StampText(createdAt))
 	if err != nil {
 		t.Fatalf("insert first issue error = %v", err)
 	}
@@ -2177,7 +2177,7 @@ func TestSchemaRejectsEpicWithNonNullStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := model.StampText(time.Now())
 	err := st.ExecRawForTest(ctx,
 		`INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2198,7 +2198,7 @@ func TestSchemaRejectsLeafWithNullStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := model.StampText(time.Now())
 	err := st.ExecRawForTest(ctx,
 		`INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

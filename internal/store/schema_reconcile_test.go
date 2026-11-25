@@ -264,7 +264,7 @@ func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 	// values bypass the canonical Store validation.
 	insert := func(id, status string) {
 		if err := first.ExecRawForTest(ctx,
-			`INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES (?, ?, '', NULL, ?, 0, 'task', 'misc', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?)`,
+			`INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES (?, ?, '', NULL, ?, 0, 'task', 'misc', '', '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z', ?)`,
 			id, id, status, "rank-"+id,
 		); err != nil {
 			_ = first.Close()
@@ -371,7 +371,7 @@ func TestReconcileBackfillsTopicDefault(t *testing.T) {
 	// only forbids NULL. Inserting topic='' directly produces the
 	// "empty topic" state pre-goose workspaces actually carried.
 	if err := first.ExecRawForTest(ctx,
-		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('topic-empty', 'no topic', '', 'open', 0, 'task', '', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'r1')`,
+		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('topic-empty', 'no topic', '', 'open', 0, 'task', '', '', '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z', 'r1')`,
 	); err != nil {
 		_ = first.Close()
 		t.Fatalf("insert empty-topic row error = %v", err)
@@ -415,7 +415,7 @@ func TestReconcileResetsLegacyPriorities(t *testing.T) {
 		t.Fatalf("add legacy priority check error = %v", err)
 	}
 	if err := first.ExecRawForTest(ctx,
-		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('p3-row', 'legacy P3', '', 'open', 3, 'task', 'misc', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'r1')`,
+		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('p3-row', 'legacy P3', '', 'open', 3, 'task', 'misc', '', '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z', 'r1')`,
 	); err != nil {
 		_ = first.Close()
 		t.Fatalf("insert legacy P3 error = %v", err)
@@ -1019,7 +1019,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	// exists" and skip.
 	if err := first.ExecRawForTest(ctx,
 		`INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		"hist-already-translated", seeded.ID, "start", "already migrated", "alice", "2026-01-01T10:00:00Z",
+		"hist-already-translated", seeded.ID, "start", "already migrated", "alice", "2026-01-01T10:00:00.000000000Z",
 	); err != nil {
 		_ = first.Close()
 		t.Fatalf("seed pre-existing event error = %v", err)
@@ -1396,7 +1396,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 		t.Fatalf("seeded ranked issue has empty item_rank — fixture invalid")
 	}
 	if err := first.ExecRawForTest(ctx,
-		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('unranked-row', 'no rank', '', 'open', 0, 'task', 'misc', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '')`,
+		`INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('unranked-row', 'no rank', '', 'open', 0, 'task', 'misc', '', '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z', '')`,
 	); err != nil {
 		_ = first.Close()
 		t.Fatalf("insert unranked row error = %v", err)
@@ -1422,6 +1422,50 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	}
 	if rankedAfter == newAfter {
 		t.Fatalf("backfilled rank %q collides with existing rank %q — seeding from MAX is broken", newAfter, rankedAfter)
+	}
+}
+
+// A pre-baseline store holds time.RFC3339Nano text, which trims trailing zeros,
+// so '...:07Z' sorts after '...:07.5Z' as text while the instant is earlier. The
+// rank backfill puts the most recently updated first, so it must order by the
+// instant, not by the text.
+func TestReconcileRankBackfillOrdersByInstantNotByTrimmedText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	hijackToPreGooseReshaping(t, first, func() {
+		for _, row := range []struct{ id, updatedAt string }{
+			{"older-whole-second", "2026-01-01T00:00:07Z"},
+			{"newer-fraction", "2026-01-01T00:00:07.5Z"},
+		} {
+			stmt := `INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, item_rank) VALUES ('` +
+				row.id + `', 'no rank', '', 'open', 0, 'task', 'misc', '', '2026-01-01T00:00:00Z', '` + row.updatedAt + `', '')`
+			if err := first.ExecRawForTest(ctx, stmt); err != nil {
+				t.Fatalf("insert %s error = %v", row.id, err)
+			}
+		}
+	})
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	st := assertReachedBaseline(t, doltRoot)
+
+	rank := func(id string) string {
+		var r string
+		if err := st.db.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ?`, id).Scan(&r); err != nil {
+			t.Fatalf("read rank of %s error = %v", id, err)
+		}
+		return r
+	}
+	newer, older := rank("newer-fraction"), rank("older-whole-second")
+	if newer >= older {
+		t.Fatalf("the more recently updated issue ranks %q, not before the older one's %q: the backfill ordered by timestamp text", newer, older)
 	}
 }
 

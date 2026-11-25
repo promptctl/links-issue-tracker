@@ -1,12 +1,15 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
@@ -1053,21 +1056,46 @@ func (s *Store) ensureIssueTopics(ctx context.Context, guard *snapshotGuard) (bo
 func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	// Assign ranks to any issues that don't have one yet, with
 	// (status, priority, updated_at, id) as the initial rank sequence.
-	rows, err := s.db.QueryContext(ctx, "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC")
+	// updated_at orders as the instant it spells: a pre-baseline store holds
+	// whatever spelling its writer produced, trimmed fractions and
+	// second-precision values mixed, and the SQL text order of those is not
+	// time order. [LAW:one-source-of-truth]
+	rows, err := s.db.QueryContext(ctx, "SELECT id, status, priority, updated_at FROM issues WHERE item_rank = ''")
 	if err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: query unranked: %w", err)
 	}
 	defer rows.Close()
-	var ids []string
+	type unranked struct {
+		id        string
+		status    string
+		priority  int
+		updatedAt time.Time
+	}
+	var pending []unranked
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var (
+			row       unranked
+			status    sql.NullString
+			updatedAt string
+		)
+		if err := rows.Scan(&row.id, &status, &row.priority, &updatedAt); err != nil {
 			return false, fmt.Errorf("ensureIssueRanks: scan: %w", err)
 		}
-		ids = append(ids, id)
+		row.status = status.String
+		if row.updatedAt, err = model.ParseStamp(updatedAt); err != nil {
+			return false, fmt.Errorf("ensureIssueRanks: %s has an unreadable updated_at %q: %w", row.id, updatedAt, err)
+		}
+		pending = append(pending, row)
 	}
 	if err := rows.Err(); err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: rows: %w", err)
+	}
+	slices.SortFunc(pending, func(a, b unranked) int {
+		return cmp.Or(strings.Compare(a.status, b.status), cmp.Compare(a.priority, b.priority), b.updatedAt.Compare(a.updatedAt), strings.Compare(a.id, b.id))
+	})
+	ids := make([]string, len(pending))
+	for i, row := range pending {
+		ids[i] = row.id
 	}
 	if len(ids) == 0 {
 		return false, nil

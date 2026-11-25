@@ -1458,7 +1458,7 @@ func (s *Store) recordQuarantine(ctx context.Context, q *QuarantineBlockError) e
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)`,
-		q.Version, q.Name, q.ErrorText, time.Now().UTC().Format(time.RFC3339Nano),
+		q.Version, q.Name, q.ErrorText, model.StampText(time.Now()),
 	)
 	if err != nil {
 		return fmt.Errorf("record quarantine for v%d: %w", q.Version, err)

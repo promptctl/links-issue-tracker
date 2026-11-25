@@ -808,16 +808,15 @@ func cellNullString(cell any) (sql.NullString, error) {
 	}
 }
 
-// parseTimestamp parses a stored timestamp string. The store writes RFC3339Nano;
-// the looser RFC3339 covers the second-precision values legacy (pre-goose)
-// workspaces carry.
+// parseTimestamp parses a stored timestamp string through model.ParseStamp,
+// which reads every spelling a store has held, the second-precision values
+// legacy (pre-goose) workspaces carry included.
 func parseTimestamp(s string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
+	t, err := model.ParseStamp(s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid timestamp %q", s)
 	}
-	return time.Time{}, fmt.Errorf("invalid timestamp %q", s)
+	return t, nil
 }
 
 // cellString renders a source cell as a domain string: SQL NULL and missing

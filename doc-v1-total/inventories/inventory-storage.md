@@ -882,9 +882,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`storage.ApplyProseFields(provisional, texts merge.ProseTexts)`** (`internal/storage/fields.go`) — states each merged text on an `UpdateIssueInput` (`ProseTitle` → `Title`, `ProseDescription` → `Description`, `ProsePrompt` → `Prompt`, `ProsePlan` → `Plan`) and returns `ApplyIssueFields(provisional, in)`, so `agent_prompt` is recorded as `prompt`. Any other field → error `issue <id>: no editable field for merged prose field "<field>"`.
 
-**`statusChanges`** (`internal/storage/memory/apply.go`) — rows, in order, for: `status` (when `StatusValue()` moved), `closed_at` (RFC3339Nano, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
+**`statusChanges`** (`internal/storage/memory/apply.go`) — rows, in order, for: `status` (when `StatusValue()` moved), `closed_at` (`model.StampText`, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
 
-**`retentionChanges`** (`internal/storage/memory/apply.go`) — projects both retentions through `model.RetentionTimestamps` and emits `archived_at` and/or `deleted_at` rows (RFC3339Nano) for whichever moved — the same encoding an export carries.
+**`retentionChanges`** (`internal/storage/memory/apply.go`) — projects both retentions through `model.RetentionTimestamps` and emits `archived_at` and/or `deleted_at` rows (`model.StampText`) for whichever moved — the same encoding an export carries.
 
 **`writeIssue`** (`internal/storage/memory/apply.go`) — the one place a mutation becomes stored state; copies `title`, `description`, `prompt`, `plan`, `issueType`, `priority`, `assignee`, `lane`, `updatedAt`, `retention`, `status = statusViewOf(issue)`. **`topic`, `id`, and `createdAt` are never written here** — topic is immutable through `Apply`.
 
@@ -894,7 +894,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **Optional-value helpers** (`internal/storage/memory/compare.go`) — shared contract: two absent values are equal, absence renders as the empty string, and absence is never conflated with a present zero.
 - `timesEqual`, `resolutionsEqual`, `stringsEqual`.
-- `formatTime` → `""` for nil, else `time.RFC3339Nano`; `formatResolution` → `""` for nil; `formatString` → `""` for nil.
+- `formatTime` → `""` for nil, else `model.StampText`; `formatResolution` → `""` for nil; `formatString` → `""` for nil.
 
 ### 2.9 Comments (`internal/storage/memory/edges.go`)
 
@@ -1434,7 +1434,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `AddPlanReview` on a missing issue → `NotFoundError{Entity: "issue"}`.
 - With the clock pinned to `earlierInstant`, `AddPlanReview{Plan: " " + DigestPlan("remove the retry") + " ", Verdict: "pass"}` judges `"remove the retry"` and cites no law.
 - Writing through the returned fail's `Laws` does not change the stored review's laws.
-- `GetIssueDetail.PlanReviews` holds the pass then the fail — oldest first by instant, though the fail was recorded first and the earlier instant's RFC3339Nano spelling sorts after the later one's. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
+- `GetIssueDetail.PlanReviews` holds the pass then the fail — oldest first by instant, though the fail was recorded first. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
 - `Export.PlanReviews` holds both, the pass first.
 
 **`labels_roundtrip`**

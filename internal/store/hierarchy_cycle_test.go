@@ -173,7 +173,7 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	// does not run the write boundary's guard.
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		chain[0].ID, chain[1].ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		chain[0].ID, chain[1].ID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("seed cyclic parent edge error = %v", err)
 	}
 
@@ -289,7 +289,7 @@ func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, paren
 	t.Helper()
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
-		childID, parentID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		childID, parentID, model.StampText(time.Now())); err != nil {
 		t.Fatalf("seed parent edge %s -> %s: %v", childID, parentID, err)
 	}
 }
@@ -459,7 +459,7 @@ func TestTheCycleRuleSeesAnEdgeThroughADeletedIssue(t *testing.T) {
 	parent, child := chain[0], chain[1]
 
 	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET deleted_at = ? WHERE id = ?`,
-		time.Now().UTC().Format(time.RFC3339Nano), child.ID); err != nil {
+		model.StampText(time.Now()), child.ID); err != nil {
 		t.Fatalf("soft-delete %s: %v", child.ID, err)
 	}
 

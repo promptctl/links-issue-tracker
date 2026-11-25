@@ -37,7 +37,7 @@ func formatTime(value *time.Time) string {
 	if value == nil {
 		return ""
 	}
-	return value.Format(time.RFC3339Nano)
+	return model.StampText(*value)
 }
 
 func formatResolution(value *model.Resolution) string {

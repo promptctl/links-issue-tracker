@@ -15,7 +15,7 @@ func commitOrphanComment(t *testing.T, ctx context.Context, st *Store) {
 		t.Fatalf("disable foreign key checks: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx,
-		`INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES ('orphan-comment', 'no-such-issue', 'b', '2026-01-01T00:00:00Z', 'import')`); err != nil {
+		`INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES ('orphan-comment', 'no-such-issue', 'b', '2026-01-01T00:00:00.000000000Z', 'import')`); err != nil {
 		t.Fatalf("seed orphan comment: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 1`); err != nil {
@@ -93,7 +93,7 @@ func TestDoctorGivesAnOrphanAuditRowOneVerdict(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	for _, q := range []string{
 		`SET FOREIGN_KEY_CHECKS = 0`,
-		`INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES ('orphan-event', 'no-such-issue', 'x', 'r', 'a', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES ('orphan-event', 'no-such-issue', 'x', 'r', 'a', '2026-01-01T00:00:00.000000000Z')`,
 		`INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES ('no-such-event', 'f', 'a', 'b')`,
 		`SET FOREIGN_KEY_CHECKS = 1`,
 	} {
@@ -132,9 +132,9 @@ func TestDoctorGivesAnOrphanAuditRowOneVerdict(t *testing.T) {
 // first test happened to seed: a committed orphan row in any of them is named.
 func TestDoctorIntegrityCheckNamesAViolationInEveryNonAuditTable(t *testing.T) {
 	for name, insert := range map[string]string{
-		"comments":  `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES ('c', 'no-such-issue', 'b', '2026-01-01T00:00:00Z', 'import')`,
-		"labels":    `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES ('no-such-issue', 'l', '2026-01-01T00:00:00Z', 'import')`,
-		"relations": `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ('no-such-src', 'no-such-dst', 'blocked-by', '2026-01-01T00:00:00Z', 'import')`,
+		"comments":  `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES ('c', 'no-such-issue', 'b', '2026-01-01T00:00:00.000000000Z', 'import')`,
+		"labels":    `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES ('no-such-issue', 'l', '2026-01-01T00:00:00.000000000Z', 'import')`,
+		"relations": `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ('no-such-src', 'no-such-dst', 'blocked-by', '2026-01-01T00:00:00.000000000Z', 'import')`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

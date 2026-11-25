@@ -609,6 +609,13 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	if err := raw.ExecRawForTest(ctx, "INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)", ahead); err != nil {
 		t.Fatalf("stamp ahead version: %v", err)
 	}
+	// The workspace this case is about declares no minimum writer schema, so
+	// it reads and writes and only its version is ahead. A store migrated by
+	// this registry carries the declarations the registry's own migrations
+	// made; take them off.
+	if err := raw.ExecRawForTest(ctx, "DELETE FROM meta WHERE meta_key = 'min_writer_schema'"); err != nil {
+		t.Fatalf("clear the minimum writer schema: %v", err)
+	}
 	// Committed, as a newer lit's finished step is: left uncommitted, the stamp
 	// is a step that died before its commit, which the next open undoes.
 	if err := raw.ExecRawForTest(ctx, "CALL DOLT_COMMIT('-Am', 'a newer lit migrated ahead')"); err != nil {

@@ -1593,7 +1593,7 @@ label `"backfill legacy issue topics"`.
 
 `internal/store/schema_reconcile.go`.
 
-- Query: `SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC`. Errors: `"ensureIssueRanks: query unranked: %w"`, `"ensureIssueRanks: scan: %w"`, `"ensureIssueRanks: rows: %w"`.
+- Query: `SELECT id, status, priority, updated_at FROM issues WHERE item_rank = ''`, ordered in Go by status, priority, `updated_at` as an instant (newest first, parsed by `model.ParseStamp`), then id. Errors: `"ensureIssueRanks: query unranked: %w"`, `"ensureIssueRanks: scan: %w"`, `"ensureIssueRanks: rows: %w"`; an `updated_at` that does not parse `"ensureIssueRanks: %s has an unreadable updated_at %q: %w"`.
 - Zero unranked rows → `(false, nil)`.
 - `guard.ensure` error → `"ensureIssueRanks: %w"`.
 - `BeginTx` error → `"ensureIssueRanks: begin tx: %w"`; deferred rollback.
