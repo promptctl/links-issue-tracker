@@ -18,7 +18,7 @@ func hydratedIssue(t *testing.T, issue Issue, status State) Issue {
 	return hydrated
 }
 
-func TestApplyRefusesContainerForEveryAction(t *testing.T) {
+func TestPlanStatusRefusesContainerForEveryAction(t *testing.T) {
 	childA := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
 	childB := hydratedIssue(t, Issue{ID: "b", IssueType: "task"}, StateOpen)
 	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{childA, childB})
@@ -26,8 +26,8 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 		t.Fatalf("HydrateAllOf() error = %v", err)
 	}
 	for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
-		if _, err := container.Apply(action); err == nil {
-			t.Fatalf("Apply(%s on epic) error = nil, want container rejection", action.Name())
+		if _, err := container.PlanStatus(action); err == nil {
+			t.Fatalf("PlanStatus(%s on epic) error = nil, want container rejection", action.Name())
 		}
 	}
 }
@@ -35,7 +35,7 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 // A frozen leaf refuses every status action with one sentence that names its
 // state and the thaw, and no action's verb: the sentence is compared whole
 // across all four actions, so a verb spliced back in fails here.
-func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
+func TestPlanStatusRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, tc := range []struct {
 		retention Retention
@@ -48,16 +48,16 @@ func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 		for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
 			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 			leaf.SetRetention(tc.retention)
-			_, err := leaf.Apply(action)
+			_, err := leaf.PlanStatus(action)
 			var frozen FrozenIssueError
 			if !errors.As(err, &frozen) {
-				t.Fatalf("Apply(%s on %T) error = %v, want FrozenIssueError", action.Name(), tc.retention, err)
+				t.Fatalf("PlanStatus(%s on %T) error = %v, want FrozenIssueError", action.Name(), tc.retention, err)
 			}
 			if frozen.Thaw != tc.thaw {
-				t.Errorf("Apply(%s on %T).Thaw = %#v, want %#v", action.Name(), tc.retention, frozen.Thaw, tc.thaw)
+				t.Errorf("PlanStatus(%s on %T).Thaw = %#v, want %#v", action.Name(), tc.retention, frozen.Thaw, tc.thaw)
 			}
 			if err.Error() != tc.want {
-				t.Errorf("Apply(%s on %T) error = %q, want %q", action.Name(), tc.retention, err.Error(), tc.want)
+				t.Errorf("PlanStatus(%s on %T) error = %q, want %q", action.Name(), tc.retention, err.Error(), tc.want)
 			}
 			var refusal Refusal
 			if !errors.As(err, &refusal) {
@@ -70,7 +70,7 @@ func TestApplyRefusesFrozenLeafNamingTheThaw(t *testing.T) {
 // Unarchiving a container would not make any status action legal, so the
 // container refusal must win: a frozen refusal there names a thaw that leads
 // only to the next refusal.
-func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
+func TestPlanStatusOnFrozenContainerRefusesAsContainer(t *testing.T) {
 	child := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
 	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{child})
 	if err != nil {
@@ -78,73 +78,132 @@ func TestApplyOnFrozenContainerRefusesAsContainer(t *testing.T) {
 	}
 	container.SetRetention(Archived{At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)})
 	var containerErr ContainerActionError
-	if _, err := container.Apply(Done{}); !errors.As(err, &containerErr) {
-		t.Fatalf("Apply(done on archived epic) error = %v, want ContainerActionError", err)
+	if _, err := container.PlanStatus(Done{}); !errors.As(err, &containerErr) {
+		t.Fatalf("PlanStatus(done on archived epic) error = %v, want ContainerActionError", err)
 	}
 }
 
-// TestApplyTargetStateOnLeafProducesTargetState exercises every (from, action)
-// pair on a hydrated leaf to confirm Issue.Apply obeys the target-state
-// contract: action determines the post-state regardless of from-state, and
-// same-state pairs succeed as no-ops.
-func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
+// TestPlanStatusTargetStateOnLeafProducesTargetState exercises every (from, action)
+// pair on a hydrated leaf to confirm a planned status change obeys the
+// target-state contract: action determines the post-state regardless of
+// from-state, same-state pairs succeed as no-ops, and the plan reports which
+// pairs move the status before any instant is handed to it.
+func TestPlanStatusTargetStateOnLeafProducesTargetState(t *testing.T) {
 	matrix := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
 	for _, from := range []State{StateOpen, StateInProgress, StateClosed} {
 		for _, action := range matrix {
 			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
 				leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, from)
-				next, err := leaf.Apply(action)
+				change, err := leaf.PlanStatus(action)
 				if err != nil {
-					t.Fatalf("Apply(%s on %s) error = %v, want success", action.Name(), from, err)
+					t.Fatalf("PlanStatus(%s on %s) error = %v, want success", action.Name(), from, err)
 				}
-				if next.State() != action.Target() {
-					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, next.State(), action.Target())
+				if got, want := change.Changed(), from != action.Target(); got != want {
+					t.Fatalf("PlanStatus(%s on %s).Changed() = %v, want %v", action.Name(), from, got, want)
+				}
+				if next, _ := change.Write(handed()); next.State() != action.Target() {
+					t.Fatalf("PlanStatus(%s on %s).Write().State() = %q, want %q", action.Name(), from, next.State(), action.Target())
 				}
 			})
 		}
 	}
 }
 
-// TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect: every assignee filter
+// TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect: every assignee filter
 // splits on commas, so a start by "Doe, J" is refused as a ValidationError
 // (exit 3) naming the start, while the same name without the comma starts.
-func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
+func TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
 
-	_, err := leaf.Apply(Start{Assignee: "Doe, J"})
+	_, err := leaf.PlanStatus(Start{Assignee: "Doe, J"})
 	var refused ValidationError
 	if !errors.As(err, &refused) {
-		t.Fatalf("Apply(start by %q) error = %v; want a ValidationError", "Doe, J", err)
+		t.Fatalf("PlanStatus(start by %q) error = %v; want a ValidationError", "Doe, J", err)
 	}
 	if !strings.Contains(err.Error(), "a start assigns the issue to whoever starts it") {
-		t.Errorf("Apply(start by %q) error = %q; want it to say the start is what assigns", "Doe, J", err)
+		t.Errorf("PlanStatus(start by %q) error = %q; want it to say the start is what assigns", "Doe, J", err)
 	}
-	if _, err := leaf.Apply(Start{Assignee: "Doe J"}); err != nil {
-		t.Errorf("Apply(start by %q) error = %v; want success", "Doe J", err)
+	if _, err := leaf.PlanStatus(Start{Assignee: "Doe J"}); err != nil {
+		t.Errorf("PlanStatus(start by %q) error = %v; want success", "Doe J", err)
 	}
 }
 
-// TestApplyCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
+// TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
 // accessor chain for the payload threading: a Close's outcome, having traveled
 // through the state machine into the closed leaf, must surface through
 // Issue.ResolutionValue(); the neutral Done records none.
-func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
+func TestPlanStatusCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
 	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
-	closed, err := leaf.Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	closing, err := leaf.PlanStatus(Close{Outcome: Duplicate{Of: "links-abc1"}})
 	if err != nil {
-		t.Fatalf("Apply(close duplicate) error = %v", err)
+		t.Fatalf("PlanStatus(close duplicate) error = %v", err)
 	}
+	closed, _ := closing.Write(handed())
 	got := closed.ResolutionValue()
 	if got == nil || *got != ResolutionDuplicate {
 		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
 	}
-
-	done, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).Apply(Done{})
-	if err != nil {
-		t.Fatalf("Apply(done) error = %v", err)
+	if closedAt := closed.ClosedAtValue(); closedAt == nil || !closedAt.Equal(phaseClock) {
+		t.Fatalf("ClosedAtValue() after close = %v, want the handed instant %v", closedAt, phaseClock)
 	}
-	if got := done.ResolutionValue(); got != nil {
+
+	finishing, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).PlanStatus(Done{})
+	if err != nil {
+		t.Fatalf("PlanStatus(done) error = %v", err)
+	}
+	finished, _ := finishing.Write(handed())
+	if got := finished.ResolutionValue(); got != nil {
 		t.Fatalf("ResolutionValue() after done = %v, want nil — done records no resolution", got)
+	}
+}
+
+// A written transition records one instant: the stamp it is handed is the
+// row's updated_at and a close's close time, and the change rows the write
+// records spell that same instant the way it is stored, its zero fraction
+// written out.
+func TestWriteRecordsTheStampOnce(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task", UpdatedAt: phaseClock.Add(-time.Hour)}, StateInProgress)
+	change, err := leaf.PlanStatus(Done{})
+	if err != nil {
+		t.Fatalf("PlanStatus(done) error = %v", err)
+	}
+	closed, changes := change.Write(handed())
+	if !closed.UpdatedAt.Equal(phaseClock) {
+		t.Errorf("UpdatedAt after done = %v, want the stamp %v", closed.UpdatedAt, phaseClock)
+	}
+	if closedAt := closed.ClosedAtValue(); closedAt == nil || !closedAt.Equal(phaseClock) {
+		t.Errorf("ClosedAtValue() after done = %v, want the stamp %v", closedAt, phaseClock)
+	}
+	want := []FieldChange{
+		{Field: "status", From: "in_progress", To: "closed"},
+		{Field: "closed_at", From: "", To: "2026-03-04T05:06:07.000000000Z"},
+	}
+	if !slices.Equal(changes, want) {
+		t.Errorf("Write(done) change rows = %+v, want %+v", changes, want)
+	}
+}
+
+// A start takes the ticket for the assignee in canonical form, so the row and
+// its change rows carry the name a filter selects, not the padding it came in.
+func TestWriteStartTakesTheTicketForTheCanonicalAssignee(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+	change, err := leaf.PlanStatus(Start{Assignee: "  bob  "})
+	if err != nil {
+		t.Fatalf("PlanStatus(start) error = %v", err)
+	}
+	if take, takes := change.Taking(); !takes || take.Assignee != "bob" {
+		t.Errorf("Taking() = %+v, %v; want bob, true", take, takes)
+	}
+	started, changes := change.Write(handed())
+	if started.Assignee != "bob" {
+		t.Errorf("Assignee after start = %q, want bob", started.Assignee)
+	}
+	want := []FieldChange{
+		{Field: "status", From: "open", To: "in_progress"},
+		{Field: "assignee", From: "", To: "bob"},
+	}
+	if !slices.Equal(changes, want) {
+		t.Errorf("Write(start) change rows = %+v, want %+v", changes, want)
 	}
 }
 

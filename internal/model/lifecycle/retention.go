@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"fmt"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 // Retention is the sealed retention axis of the issue lifecycle, orthogonal to
@@ -84,20 +86,21 @@ func RetentionName(r Retention) string {
 }
 
 // Retain is the total retention-transition function: the Retention that
-// applying action to cur at time at yields, or the reason the move is illegal.
-// Pure — no clock, no store; the caller supplies the stamp time.
+// applying action to cur yields when at is the write's stamp, or the reason the
+// move is illegal. Pure — no clock, no store; the write performing it supplies
+// its stamp, which an archive or a delete records as its time.
 // [LAW:types-are-the-program] The whole retention state machine lives in this
 // one table. Every (variant, action) cell is written out, so a rejection is an
 // exhaustive match arm here, never an imperative guard at a callsite. The
 // action arrives as the sealed RetentionAction subset, so an activity action
 // or arbitrary verb in this machine is unconstructible — there is no
 // unsupported-action row because its input cannot be expressed.
-func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, error) {
+func Retain(cur Retention, action RetentionAction, at stamp.Instant) (Retention, error) {
 	switch action.(type) {
 	case Archive:
 		switch cur.(type) {
 		case Live:
-			return Archived{At: at}, nil
+			return Archived{At: at.Time()}, nil
 		case Archived:
 			return nil, alreadyHolds("issue is already archived")
 		case Deleted:
@@ -118,7 +121,7 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 			// Deleted carries no prior-archived bit — deleting an archived
 			// issue drops the archive stamp by construction, so restore always
 			// lands on Live.
-			return Deleted{At: at}, nil
+			return Deleted{At: at.Time()}, nil
 		case Deleted:
 			return nil, alreadyHolds("issue is already deleted")
 		}

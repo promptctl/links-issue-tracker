@@ -2281,7 +2281,7 @@ func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
 		t.Fatalf("Apply(competing archive) error = %v", err)
 	}
 	if err := st.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
-		return st.applyFieldsTx(ctx, tx, w, st.clock.Now())
+		return st.applyFieldsTx(ctx, tx, w, st.stamps.Stamp(st.clock, time.Time{}))
 	}); err != nil {
 		t.Fatalf("applyFieldsTx(stale field plan) error = %v", err)
 	}

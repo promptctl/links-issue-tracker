@@ -235,8 +235,8 @@ func withoutBound(sequence []placement, start, at int) []placement {
 // already ascend strictly by significant rank. The issues it anchors are the
 // ones the repair does not write, so the count of everything else is the
 // honest answer to "how many issues did this move": the ones already in the
-// right relative order stay, and rewriting them would restamp updated_at on
-// rows that did not move.
+// right relative order stay, and rewriting them would land keys on rows that
+// did not move.
 //
 // The movers between two anchors are spaced into the gap they bound, and only
 // ranks whose rank.Anchor differs leave one and read in order.

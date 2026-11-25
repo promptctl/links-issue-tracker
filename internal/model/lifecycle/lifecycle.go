@@ -118,16 +118,6 @@ type Container interface {
 	Children() []Lifecycle
 }
 
-// Actionable marks lifecycle expressions a status action can be applied to.
-// Apply is total: StatusAction's Target names a real state, a same-state call
-// returns the receiver, so there is no error to return. The actor/reason of a
-// transition are event provenance owned by the store's write boundary — the
-// machine computes the next state and nothing else. [LAW:effects-at-boundaries]
-type Actionable interface {
-	Lifecycle
-	Apply(action StatusAction) Lifecycle
-}
-
 // Walk visits the lifecycle tree depth-first. Recursion is the substrate;
 // the model package's capability and action APIs deliberately do NOT use
 // Walk because they are root-only by policy. Only call Walk when you know

@@ -6,11 +6,36 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
+
+// A shape-mapped timestamp cell reads the way every stored instant does: in
+// UTC whatever offset its text carries, and second-precision legacy text
+// parses too.
+func TestParseTimestampReadsAStoredInstantInUTC(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 1, 2, 1, 4, 5, 600_000_000, time.UTC)
+	for _, text := range []string{"2026-01-02T03:04:05.6+02:00", "2026-01-02T01:04:05.6Z"} {
+		got, err := parseTimestamp(text)
+		if err != nil {
+			t.Fatalf("parseTimestamp(%q) error = %v", text, err)
+		}
+		if !got.Equal(want) || got.Location() != time.UTC {
+			t.Errorf("parseTimestamp(%q) = %v in %v, want %v in UTC", text, got, got.Location(), want)
+		}
+	}
+	legacy, err := parseTimestamp("2026-01-02T01:04:05Z")
+	if err != nil || !legacy.Equal(want.Truncate(time.Second)) {
+		t.Errorf("parseTimestamp(second precision) = %v, %v; want %v", legacy, err, want.Truncate(time.Second))
+	}
+	if _, err := parseTimestamp("yesterday"); err == nil || !strings.Contains(err.Error(), `invalid timestamp "yesterday"`) {
+		t.Errorf("parseTimestamp(%q) error = %v, want it named as an invalid timestamp", "yesterday", err)
+	}
+}
 
 // --- Validate: the single totality enforcer (acceptance #1) ---
 

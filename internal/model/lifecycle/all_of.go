@@ -1,11 +1,12 @@
 package lifecycle
 
-// AllOf is deliberately not Actionable: a container's state derives from its
+// AllOf is deliberately not a StatusPrimitive: a container's state derives from its
 // children, so there is no action to apply. The model dispatch boundary owns
 // the rejection (and its wording), since it holds the issue identity and
 // child-progress facts a useful message needs.
 // [LAW:types-are-the-program] "Containers cannot be acted on" is structural —
-// the type does not satisfy Actionable — not a runtime error string here.
+// the type does not satisfy StatusPrimitive, so Apply cannot be handed one —
+// not a runtime error string here.
 type AllOf struct {
 	Members []Lifecycle
 }

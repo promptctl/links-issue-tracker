@@ -4,15 +4,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
 // StampTally is where an engine reads the instant a write stamps, and the
 // record of how often history held that reading back from the clock.
 //
-// The instant is [model.NextEventInstant] over the newest instant in the
-// history the write was planned against: the clock's reading, unless that
-// history already holds an event at or past it. Both engines embed one, so the
+// The instant is [stamp.Next] over the newest instant in the history the write
+// was planned against: the clock's reading, unless that history already holds
+// an event at or past it. Both engines embed one, so the
 // rule and the account of it have one home whichever engine wrote.
 // [LAW:single-enforcer]
 //
@@ -25,12 +25,12 @@ type StampTally struct {
 
 // Stamp is the instant a write takes when clock is the clock it reads and
 // newest is the newest instant in the history it was planned against.
-func (t *StampTally) Stamp(clock Clock, newest time.Time) time.Time {
+func (t *StampTally) Stamp(clock Clock, newest time.Time) stamp.Instant {
 	now := clock.Now()
-	at := model.NextEventInstant(now, newest)
+	at := stamp.Next(now, newest)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.corrected = t.corrected.after(at.Sub(now))
+	t.corrected = t.corrected.after(at.Ahead(now))
 	return at
 }
 

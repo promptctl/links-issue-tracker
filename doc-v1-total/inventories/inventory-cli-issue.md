@@ -1253,7 +1253,7 @@ transition row runs per id — §2.21):
   (`internal/model/lifecycle/retention.go`).
 - **There is no from-state precondition on `done`.** `Store.Apply` performs no
   status-precondition check (`internal/store/store.go`), and
-  `applyStatusAction` is total over the leaf states
+  `lifecycle.Apply` is total over the leaf states
   (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
 - **`done` reads no plan review.** `doneSpec.authorize` → `withHoldGate(authorizeDone)`; past the hold gate, `authorizeDone` owes nothing: it prints no notice and records no fact. Plan reviews are recorded and read by nothing on the done path.

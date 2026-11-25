@@ -18,10 +18,11 @@ type Respace struct {
 }
 
 // RankSetAccount is what one rank set decided: the frame it wrote in, how many
-// issues it was named, and the keys it wrote for them. Touched is how many of
-// those were a named issue that moved and is stamped; the rest were rewritten
-// under an issue that stays where it stood. Minted is how many named issues took a
-// new key past the frame's top rather than one handed round from the head. An
+// issues it was named, and how many of their keys it wrote, one for each named
+// issue whose key changed. Touched is how many named issues changed place,
+// whether or not their key did: an issue can stand where it stood under a new
+// key, and move on the key it already held. Minted is how many named issues took
+// a new key past the frame's top rather than one handed round from the head. An
 // order that had already arrived writes nothing and says 0 to each.
 type RankSetAccount struct {
 	Frame     storage.Frame

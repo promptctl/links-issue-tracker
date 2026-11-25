@@ -808,11 +808,13 @@ func cellNullString(cell any) (sql.NullString, error) {
 	}
 }
 
-// parseTimestamp parses a stored timestamp string through model.ParseStamp,
-// which reads every spelling a store has held, the second-precision values
-// legacy (pre-goose) workspaces carry included.
+// parseTimestamp parses a stored timestamp cell through scanTime, the one
+// reader of a stored instant, so the shape map reads the column the way every
+// other read does: model.ParseStamp, which reads every spelling a store has
+// held, the second-precision values legacy (pre-goose) workspaces carry
+// included. [LAW:single-enforcer]
 func parseTimestamp(s string) (time.Time, error) {
-	t, err := model.ParseStamp(s)
+	t, err := scanTime(s)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid timestamp %q: %w", s, err)
 	}

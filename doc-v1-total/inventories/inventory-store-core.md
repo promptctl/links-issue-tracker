@@ -109,18 +109,13 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 #### 1.7 Other free helpers defined in store.go
 
 - `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go`).
-- `scanTime(value string) (time.Time, error)` = `model.ParseStamp(value)` (`store.go`). Single parse boundary for every timestamp column.
+- `scanTime(value string) (time.Time, error)` = `model.ParseStamp(value)`, in UTC (`store.go`). Single parse boundary for every timestamp column, so no reader re-normalizes an instant it reads.
 - `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go`).
 - `nullableTime(*time.Time) any` — nil → `nil`, else the `model.StampText` string (`store.go`).
 - `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go`).
 - `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go`).
 - `nullableStringPtr(*string) any` — nil → `NULL` (`store.go`).
 - `model.TimestampChange(field model.TimestampField, from, to *time.Time)` (`internal/model/stamp.go`) — the change row of a timestamp field: each side `""` for nil, else the stored spelling.
-- `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go`).
-- `formatNullableString(*string) string` — nil → `""` (`store.go`).
-- `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go`).
-- `resolutionsEqual(a, b *model.Resolution) bool` — same nil discipline, `*a == *b` (`store.go`).
-- `stringPointersEqual(a, b *string) bool` — same (`store.go`).
 - `retentionColumns(issue model.Issue) (archivedAt, deletedAt any)` — projects `model.RetentionTimestamps(issue.Retention())` through `nullableTime` (`store.go`). Sole feeder of the `archived_at`/`deleted_at` column pair.
 - `statusForStorage(issue model.Issue) sql.NullString` — if `issue.Capabilities().Status != nil` returns `{String: string(status.Value), Valid: true}`, else the zero `NullString` (SQL NULL) (`store.go`). Containers therefore store NULL status.
 - `retentionWord(model.Retention) string` — `"live"` / `"archived"` / `"deleted"`; **panics** `fmt.Sprintf("illegal Retention value %T", r)` on anything else (`store.go`).
@@ -392,7 +387,7 @@ Test evidence:
 `store.go`. Pre-transaction (pure/validation) phase:
 1. `in.Title.Text()` and `in.Lane.Text()` — the parsed `storage.Title` / `storage.Lane` (`internal/storage/title.go`); a zero `Title` → `model.ValidationError{Message: "title is required"}`, a `Lane` no parser made → an error (`store.go`).
 2. `issueType := in.IssueType`; if `""` → `model.TypeTask` (`store.go`).
-3. `now := time.Now().UTC()` (`store.go`).
+3. Under the commit lock, `at := s.stamps.Stamp(s.clock, filed)`, the stamp past the history the issue is filed under (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
 5. `issueid.NormalizeTopicForCreate(in.Topic)` (`store.go`) — error propagated. Missing topic yields an error containing `"topic is required"` (`store_test.go`).
 6. `createdBy := storage.Actor(in.Actor)` — the event actor, the label creator, the parent-edge creator, and the id hash's creator (`store.go`).
@@ -438,7 +433,7 @@ Defaults, restated as a table for every column the create path touches:
 | `assignee` | trimmed input via `AssigneeValue()` |
 | `item_rank` | `nextRankForPlacement` |
 | `lane` | trimmed input |
-| `created_at`/`updated_at` | same `time.Now().UTC()` `model.StampText` |
+| `created_at`/`updated_at` | the one stamp `at` (`CreatedAt: at.Time()`, then `Stamped(at)`), `model.StampText` |
 | `closed_at` | literal `NULL` |
 | `archived_at`/`deleted_at` | `retentionColumns` of a Live issue → both `NULL` |
 | `resolution`/`redirect_target` | not written |
@@ -675,87 +670,73 @@ Evidence: a start attempted amid another Apply's plan reads waits on its hold ra
 
 `store.go`. Type switch on `model.Action`:
 - `model.StatusAction` → `s.planStatusTransition(...)`;
-- `model.RetentionAction` → `planRetentionTransition(...)` (a free function, no store);
+- `model.RetentionAction` → `s.planRetentionTransition(...)`;
 - anything else → **panic** `fmt.Sprintf("illegal Action value %T", action)` (`store.go`).
 
 `lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`, `handover() *claims.Handover` (nil for every write but a status transition whose plan set one).
 
-#### 6.3 The guard: `Issue.Apply`
+#### 6.3 The guard: `Issue.PlanStatus`
 
-`planStatusTransition` calls `issue.Apply(action)` (`model.go`) and propagates its refusals: `ContainerActionError` for a container, then `FrozenIssueError` for an archived or deleted issue. The Dolt store adds no guard of its own; the memory engine's `planStatus` calls the same method, so both engines refuse with one error.
+`planStatusTransition` plans through `claims.PlanStatus`, which calls `issue.PlanStatus(action)` (`model.go`) and propagates its refusals: `ContainerActionError` for a container, then `FrozenIssueError` for an archived or deleted issue. The Dolt store adds no guard of its own; the memory engine's `planStatus` calls the same function, so both engines refuse with one error.
 
 Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
-`transitionWrite` fields (`store.go`): `issueID, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`prior.HandoverTo(post)`, left nil on a no-op). Methods at `store.go`.
+`transitionWrite` fields (`store.go`): `event model.IssueEvent; post model.Issue; noop bool; claimHandover *claims.Handover` (the write's handover, left nil on a no-op). Every column the write sets is read off `post`, and the event is minted at plan time, so the stamp is carried once in each record and nowhere else. Methods at `store.go`.
 
-`planStatusTransition(ctx, issue, actor, reason, action) (transitionWrite, error)` (`store.go`):
-1. `issue.Apply(action)` → `updated` or the rejection.
-2. `priorAssignee := issue.AssigneeValue()`; `postAssignee := priorAssignee` unless the action is `model.Start`, in which case `postAssignee = strings.TrimSpace(start.Assignee)` (`store.go`). Only `Start` rewrites the assignee.
-3. `fromStatus := issue.StatusValue()`, `toStatus := updated.StatusValue()` (`store.go`).
-4. **No-op rule**: `toStatus == fromStatus && postAssignee == priorAssignee` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
-5. `now := time.Now().UTC()` (`store.go`).
-6. `closedAtArg` = `model.StampText(*updated.ClosedAtValue())` when non-nil, else nil (`store.go`).
-7. `resolutionArg` = `string(*updated.ResolutionValue())` when non-nil, else nil (`store.go`).
-8. `redirectTargetArg` = `*updated.RedirectTargetValue()` when non-nil, else nil (`store.go`). Its integrity is deliberately **not** validated here (`store.go`).
-9. Change rows, in this order (`store.go`):
-   - `status` when `fromStatus != toStatus`;
-   - `closed_at` when `!timesEqual(prior, new)`, values via `model.TimestampChange`;
-   - `resolution` when `!resolutionsEqual(...)`, via `formatNullableResolution`;
-   - `redirect_target` when `!stringPointersEqual(...)`, via `formatNullableString`;
-   - `assignee` when `priorAssignee != postAssignee`.
-10. `updated.UpdatedAt = now` (`store.go`) and the struct is returned with `post: updated`.
+`planStatusTransition(issue, history, at, actor, reason, action) (transitionWrite, error)` (`store.go`):
+1. `plan := claims.PlanStatus(issue, history, action, s.attribution)` → the plan or the rejection.
+2. **No-op rule**: `write, records := plan.Write(at)`; `!records` → `transitionWrite{noop: true, post: issue}` — no write, no event (`store.go`).
+3. Otherwise `event: s.newEvent(id, action name, reason, actor, at, write.Changes)`, `post: write.Issue`, `claimHandover: write.Handover`: the post-state carries `at`, the write's stamp, as its `UpdatedAt` and a close's `closed_at`, and the change rows are read off it — `status`, `closed_at`, `resolution`, `redirect_target`, `assignee`, each when it moved.
 
 Evidence: each of the six non-identity (from→to) pairs records exactly one event carrying the action's own name (`store_test.go`); a same-state `Start` with a new assignee records one `start` event with the calling actor and **no** status change row, and persists the new assignee (`store_test.go`); a same-state, same-assignee `Start` records zero events and does not bump `UpdatedAt` (`store_test.go`).
 
 #### 6.5 `applyTransitionTx`
 
 `store.go`:
-1. `validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue())` — on the **same tx** as the write (`store.go`).
+1. `storage.ValidateRedirectTarget(post, …)` with `currentRetentionTx` — on the **same tx** as the write (`store.go`).
 2. The UPDATE (`store.go`):
 ```sql
 UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?
 ```
-bound `w.toStatus, w.postAssignee, model.StampText(w.now), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID`. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
-3. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go`).
+bound from `w.post`: its status, assignee, `UpdatedAt` (`model.StampText`), and close time, resolution and redirect target through `nullableTime`, `nullableResolution` and `nullableStringPtr`, and id. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
+3. `insertEventTx(ctx, tx, w.event)` (`store.go`).
 
 The UPDATE touches only the status-axis columns — a transition restates no retention column (`store.go`).
 
 #### 6.6 `retentionWrite` and `planRetentionTransition`
 
-`retentionWrite` fields (`store.go`): `issueID string; now time.Time; nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
+`retentionWrite` fields (`store.go`): `event model.IssueEvent; post model.Issue`; every column the write sets is read off `post`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
 
-`planRetentionTransition(issue, actor, reason, action)` (`store.go`):
-- `now := time.Now().UTC()`;
-- reads `model.RetentionTimestamps(issue.Retention())` for the change-row diff;
-- `model.Retain(issue.Retention(), action, now)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
-- `post := issue; post.SetRetention(next); post.UpdatedAt = now`;
-- change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `model.TimestampChange` (`store.go`).
+`(s *Store) planRetentionTransition(issue, actor, reason, action, at stamp.Instant)` (`store.go`):
+- `model.Retain(issue.Retention(), action, at)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
+- `post := issue.Stamped(at); post.SetRetention(next)`;
+- change rows: `model.RetentionChanges(issue.Retention(), next)`, recorded on the event `s.newEvent` mints at `at`.
 
 `retentionWrite.applyTx` (`store.go`):
 ```sql
 UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?
 ```
-bound `model.StampText(w.now), w.nextArchived, w.nextDeleted, w.issueID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
+bound `model.StampText(w.post.UpdatedAt), archivedAt, deletedAt, w.post.ID` (the pair is `retentionColumns(w.post)`); exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `insertEventTx(ctx, tx, w.event)` (`store.go`).
 
 Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 
-#### 6.7 `validateRedirectTarget`
+#### 6.7 Redirect-target validation
 
-`store.go` — a free function of `(ctx, tx, closingID string, resolution *model.Resolution, target *string)`:
-- `target == nil` and `resolution != nil && resolution.RedirectsToCanonical()` → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`;
-- `target == nil` otherwise → `nil`;
-- `*target == closingID` → `fmt.Errorf("cannot redirect %s to itself", closingID)`;
-- `currentRetentionTx(ctx, tx, *target)` — a missing row surfaces as `storage.NotFoundError`;
-- target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)`;
-- `Archived` targets are accepted (matched as the specific `Deleted` variant only, `store.go`).
+`storage.ValidateRedirectTarget` (`internal/storage/redirect.go`), the rule both engines call; the Dolt store hands it `currentRetentionTx` on the write's tx:
+- target nil and the resolution redirects to a canonical → `fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)`;
+- target nil otherwise → `nil`;
+- target is the closing issue → `fmt.Errorf("cannot redirect %s to itself", closing.ID)`;
+- the target's retention read — a missing row surfaces as `storage.NotFoundError`;
+- target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closing.ID, *target)`;
+- `Archived` targets are accepted (matched as the specific `Deleted` variant only).
 
 Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go`); self-redirect rejected (`store_test.go`); redirect to an **archived** canonical succeeds (`store_test.go`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go`); a redirecting outcome with an empty target is rejected (`store_test.go`).
 
 #### 6.8 In-tx read helpers
 
-`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`), read by `validateRedirectTarget` (§6.7): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
+`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`), read by `storage.ValidateRedirectTarget` (§6.7): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
 
 `requireIssueExistsTx(ctx, tx, issueID) error` (`store.go`): `SELECT 1 FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("check issue exists: %w", err)`. Accepts archived/deleted rows — no `deleted_at` filter (`store.go`).
 
@@ -798,12 +779,12 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 ### 7. Event / attribution rows
 
-`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — a mutation's history: `insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, changes))` (`store.go`). `newEvent(issueID, action, reason, actor, changes) model.IssueEvent` mints every event the store writes (`store.go`); `stampEdit(issue, reason, actor, changes) (model.Issue, model.IssueEvent)` mints an edit's event with an empty action and sets `issue.UpdatedAt = event.CreatedAt`, for `applyFieldsTx` and for the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`). `insertEventTx` (`import_export.go`) is the one writer of `issue_events` and `issue_event_changes`.
+`recordEvent(ctx, tx, issueID, action, reason, actor string, at stamp.Instant, changes []model.FieldChange) error` — a mutation's history: `insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, at, changes))` (`store.go`). `newEvent(issueID, action, reason, actor, at, changes) model.IssueEvent` mints every event the store writes (`store.go`); `stampEdit(issue, at, reason, actor, changes) (model.Issue, model.IssueEvent)` mints an edit's event with an empty action and returns `issue.Stamped(at)`, so the event and the row share the stamp, for `applyFieldsTx` and for the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`). `insertEventTx` (`import_export.go`) is the one writer of `issue_events` and `issue_event_changes`.
 
 Constructed event (`store.go`):
 - `ID = "evt-" + uuid.NewString()`;
 - `Action`, `Reason` each `strings.TrimSpace`d; `Actor = storage.Actor(actor)`;
-- `CreatedAt = time.Now().UTC()`;
+- `CreatedAt = at.Time()`, the write's stamp;
 - `Attribution = s.attribution` — read off the store, never passed in;
 - `Changes = changes`.
 
@@ -2235,7 +2216,7 @@ This runs after the totality and problem phases, so a shape fault masks an arity
 | Transform | NULL (`nil`) input | `string` input | other Go type input |
 |---|---|---|---|
 | `identity` | returns `nil` | returns the value unchanged | returns the value unchanged (shapemap.go) |
-| `timestamp` | returns `nil, nil` (shapemap.go) | `parseTimestamp` → `time.Time`, or error `invalid timestamp %q` (shapemap.go) | error: `%s requires a string cell, got %T` with `%s` = `"timestamp"` (shapemap.go) |
+| `timestamp` | returns `nil, nil` (shapemap.go) | `parseTimestamp` → `time.Time` in UTC, or error `invalid timestamp %q` (shapemap.go) | error: `%s requires a string cell, got %T` with `%s` = `"timestamp"` (shapemap.go) |
 | `legacy_status_value` | `cellNullString` → invalid → `canonicalLegacyStatus` keeps invalid → `nullableSQLString` → `nil` | canonicalized string (table below) | error `legacy_status_value: expected a string or NULL cell, got %T` (shapemap.go) |
 | `event_action` | `canonicalEventAction(invalid)` → `nil` | `strings.TrimSpace`; empty after trim → `nil`; else trimmed string | error `event_action: expected a string or NULL cell, got %T` |
 | `event_reason` | → `""` | `strings.TrimSpace(v)` | error `event_reason: expected a string or NULL cell, got %T` |
@@ -2244,7 +2225,7 @@ This runs after the totality and problem phases, so a shape fault masks an arity
 
 `cellNullString` (shapemap.go): `nil` → `sql.NullString{}`; `string` → `{Valid:true, String:v}`; anything else → error `expected a string or NULL cell, got %T`.
 
-`parseTimestamp(s)` (shapemap.go): reads it with `model.ParseStamp`; on failure returns `time.Time{}, fmt.Errorf("invalid timestamp %q: %w", s, err)`.
+`parseTimestamp(s)` (shapemap.go): `scanTime(s)`, the one reader of a stored instant (`model.ParseStamp`, which also takes second-precision text, in UTC); on failure returns `time.Time{}, fmt.Errorf("invalid timestamp %q: %w", s, err)`.
 
 `canonicalLegacyStatus` (schema_reconcile.go), exact-match switch:
 
@@ -2696,7 +2677,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 `Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go`:
 1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`. Note this self-check is only for related-to at this point.
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted.
-3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `storage.Actor(in.CreatedBy)` (empty → `"unknown"`).
+3. `now := s.clock.Now()`, UTC by the clock; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `storage.Actor(in.CreatedBy)` (empty → `"unknown"`).
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
    - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `rejectHeldRelationTx` (see Duplicate handling below); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
@@ -2777,7 +2758,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 `Store.SetParent(ctx, storage.SetParentInput{ChildID, ParentID, CreatedBy})` — `internal/store/relations.go`:
 - Blank check: either id empty after `strings.TrimSpace` → `model.ValidationError{Message: "child and parent ids are required"}`.
 - `in.ChildID == in.ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
-- Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"`.
+- Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: s.clock.Now(), CreatedBy: trimmed}`, UTC by the clock; empty CreatedBy → `"unknown"`.
 - In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the refusal of a parent that is not an epic (`storage.RejectNonContainerParentEdge`, `model.ValidationError`), the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
 - Returns the relation value.
 
@@ -2926,7 +2907,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
 - In `mutationValue(ctx, s, "rank to "+edge.name, …)`, so the frame and its edge are read under the same commit lock as the write:
   - `frameOfTx` resolves the issue's own frame; the end is that frame's, not the workspace's.
   - `frameEdgeHolderTx(ctx, tx, f, edge)` names the issue holding the frame's edge. If that is this issue, returns `storage.RankEnd{Frame: f, Moved: false}` with no write.
-  - Otherwise its new rank is `edge.ranksBeyondTx(ctx, tx, f, 1, issueID)`, which measures room beside the edge holder's rank; error → `fmt.Errorf("rank to %s: %w", edge.name, err)`. Then `writeRankTx(ctx, tx, issueID, newRank, now)`, with `now` from the store's clock in RFC3339Nano, and `smoothRanksIfNeededTx(ctx, tx, newRank)`.
+  - Otherwise its new rank is `edge.ranksBeyondTx(ctx, tx, f, 1, issueID)`, which measures room beside the edge holder's rank; error → `fmt.Errorf("rank to %s: %w", edge.name, err)`. Then `writeRankTx(ctx, tx, issueID, newRank)` and `smoothRanksIfNeededTx(ctx, tx, newRank)`.
 
 **RankAbove(issueID, targetID)** — `internal/store/ranking.go`:
 - `resolveRankPair` first (all its errors propagate).
@@ -2938,7 +2919,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
   bound `(anchorRank)` and read through `rankRows`; `item_rank < ? ORDER BY item_rank DESC` is `topEdge.outside`. Error → `fmt.Errorf("query the key outside the %s: %w", e.name, err)`, with `e.name` `"top"`, which the `rank-above: %w` wrap prefixes. The read is **not** scoped to the pair's frame — it searches the whole workspace. The frame's say in the move is choosing the anchor, which `rankPairTx` already did. The nearest of the two rows that is not `move.MovedID` is the key outside: the moving issue holds at most one of the two, which leaves the key it is about to vacate out of its own bounds with the same read every time, and `item_rank != ''` keeps unranked rows out.
 - `topEdge.beside` orders the pair `(outsideRank, anchorRank)`, so the key found is the lower bound and the anchor the upper. No such row reads as `""`, which happens only when nothing in the whole workspace but the moving issue sorts before the anchor; the lower bound is then open and the new rank is `rank.Between("", anchorRank, 1)`.
 - The anchor's rank is read through `anchorRankTx` (`internal/store/ranking.go`): `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, so only a live, ranked anchor returns a row. No row → `fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied, or it has no rank", anchorID)`, which `bounds` and `rankBetweenTx` return unwrapped, so the `rank-above: %w` wrap prefixes it. An unranked or deleted anchor therefore fails the move.
-- `writeRankTx(ctx, tx, move.MovedID, newRank, now)` with `now` from `s.clock`; after `requireLiveTx` it writes the key and the timestamp through `writeRanksTx` with one touched `rankWrite`, the same batched statement rank set runs, so the `deleted_at IS NULL` predicate on the key write lives in one place.
+- `writeRankTx(ctx, tx, move.MovedID, newRank)`; after `requireLiveTx` it writes the key through `writeRanksTx` with one `rankWrite`, the same batched statement rank set runs, so the `deleted_at IS NULL` predicate on the key write lives in one place.
 - `smoothRanksIfNeededTx(ctx, tx, newRank)`. Returns the `RankMove` regardless of which id the caller named.
 
 **RankBelow(issueID, targetID)** — `internal/store/ranking.go`: mirror image — the `bounds` closure returns `bottomEdge.roomBesideTx(ctx, tx, anchorRank, move.MovedID)`, whose `outside` fragment is `item_rank > ? ORDER BY item_rank ASC` and whose `e.name` is `"bottom"`; `bottomEdge.beside` orders the pair `(anchorRank, outsideRank)`, so the anchor is the lower bound and the key found the upper. The closure's error → `fmt.Errorf("rank-below: %w", err)`; the write is the same `writeRankTx` and the smoothing the same `smoothRanksIfNeededTx`. This read is likewise unscoped to the frame, so it reads `""` only when nothing in the whole workspace sorts after the anchor, and the new rank is then `rank.Between(anchorRank, "", 1)`. The anchor's rank is read through the same `anchorRankTx`, so an unranked or deleted anchor fails the move with `"rank-below: cannot rank against %s: it was deleted while the move was being applied, or it has no rank"`.
@@ -2964,7 +2945,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `refuseReversedTie(places, ranked)` reads the first `len(ranked)` rows of the head. Where two adjacent names both stand there on one key and the later name's id sorts before the earlier one's, the set is refused with a `model.ValidationError`: ``fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)``.
 - `rankSetLeadingRun(head, ranked)` is the rows ahead of the head's first unnamed row, up to the first key two rows share: a listing breaks a tie by id, so a shared key cannot pass to another issue. The run stops there, so it stays the frame's first rows. Every other representative joins, an unranked one included.
 - `topEdge.ranksBeyondTx(ctx, tx, f, n, "")` places one key per joining issue past the frame's top, once for the whole set, and the run's keys are read again through `frameHeadTx`, because making room rewrites keys. The slots are those keys and then the run's, ascending, and the representatives take them in the order named.
-- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written if it moved or its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative that moved; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
+- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written only if its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END WHERE deleted_at IS NULL AND id IN (…)`, the key and nothing else, so no rank write moves `updated_at`; error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. The representatives that moved are counted as `RankSetAccount.Touched`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 
@@ -2992,7 +2973,7 @@ SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = ?
 
 `smoothRanksTx(ctx, tx, triggerRank)` — `internal/store/ranking.go`:
 1. `rank.Respace(triggerRank, read)`, with `read` calling `rankWindowTx`; error → `fmt.Errorf("smooth: %w", err)`. A `whole` result takes every ranked row in place of the window's.
-2. Each row whose new key differs from the old is written through `writeRanksTx` as an untouched `rankWrite`, so `updated_at` is **not** changed; error → `fmt.Errorf("smooth: %w", err)`. No window read admits an unranked row, so a respace never ranks an issue.
+2. Each row whose new key differs from the old is written through `writeRanksTx`; error → `fmt.Errorf("smooth: %w", err)`. No window read admits an unranked row, so a respace never ranks an issue.
 3. The respace is owed to the `RankObserver` as a `Respace{Rows, Rewritten, LongestKey, Ceiling}`.
 
 `rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. A respace's reads bound themselves by `LIMIT` and cost the window, and a rank set's reads the frame it reorders.
@@ -3056,7 +3037,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `rankRewrites(sequence []placement)` — `internal/store/rank_repair.go`: walks `sequence` as runs of movers delimited by the placements marked `anchored`, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a sequence with no anchors at all — needs no special case. A run with no room inside `rank.MaxLength` widens: `withoutBound(sequence, start, at)` makes the anchor bounding it a mover marked `respaced`, the upper one, or the lower at the open end, and the rewrite starts over, so a landing or repair is not stopped by a gap. With no anchors left the run is the whole sequence between open ends, which always has room, and the walk stays pure, so two clones landing one export write the same rows (`TestRankRewritesWidenPastAGapWithNoRoom`). Any other error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
 
-`anchorRun(target []rankedIssue) []placement` — `internal/store/rank_repair.go`: marks `anchored` a longest subsequence of `target` strictly increasing by `rank.Anchor` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place and their `updated_at`, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same `rank.Anchor` (`"V"` and `"V0"`, or two keys tied on the index prefix) leave none or read in the wrong order, so an anchor's `rank.Anchor` must sort strictly above the one before it, and tied keys come out with one holder and the rest spaced past it (`TestARepairSeparatesKeysTiedOnTheIndexPrefix`). It must also satisfy `rank.Valid`, which the empty `rank.Anchor` of an unranked, malformed or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
+`anchorRun(target []rankedIssue) []placement` — `internal/store/rank_repair.go`: marks `anchored` a longest subsequence of `target` strictly increasing by `rank.Anchor` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same `rank.Anchor` (`"V"` and `"V0"`, or two keys tied on the index prefix) leave none or read in the wrong order, so an anchor's `rank.Anchor` must sort strictly above the one before it, and tied keys come out with one holder and the rest spaced past it (`TestARepairSeparatesKeysTiedOnTheIndexPrefix`). It must also satisfy `rank.Valid`, which the empty `rank.Anchor` of an unranked, malformed or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
 
 `holdKeys(sequence, held)` — `internal/store/rank_repair.go`: merges each `held` issue with a non-empty rank, in key order, into `sequence` before the first anchor whose `rank.Anchor` is above its own, as an anchor when its significant rank is `rank.Valid` and above the latest anchor's and as a mover otherwise; so a held issue keeps its key unless an anchor or an earlier held issue holds it or the key is malformed or all zeros, and one holder of a shared key keeps it. A held issue with an empty rank is left out and never written.
 
@@ -3084,10 +3065,10 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
    - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)`.
    - `live := liveEdges(edges, liveIDs)`; `blocksCycle(order, live)` non-empty → `fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path})`, before any write.
    - `constraints := storage.NewDependencyOrder(ancestry, live).Constraints()`; `ordered, held := splitRankOrder(order, liveIDs, constraints)`; `repairRankOrder(ordered, held, constraints)`; error → `fmt.Errorf("fix rank inversions: %w", err)`. Edges inside a group constrain nothing.
-   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, touched unless it is `respaced`, which kept its place and only gave a gap room, stamped `model.StampText(s.clock.Now())`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
+   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, and is counted as moved unless it is `respaced`, which kept its place and only gave a gap room; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
    - `rerankedCount` is the rewrites that are not `respaced`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
-3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues the repair moved, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order or `updated_at`, and those are not counted.
+3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues the repair moved, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order, and those are not counted.
 
 Test-pinned behavior in `internal/store/store_test.go`:
 - One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` reports 1, 0 after —.
