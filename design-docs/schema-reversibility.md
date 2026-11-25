@@ -74,7 +74,7 @@ A stamp is an instant, and its valid spelling is UTC (`storage.Clock`
 normalizes every stamp to UTC). Up to v11 the store spelled it with
 `time.RFC3339Nano`, which trims trailing zeros; v12 spells it with
 `model.StampText`, UTC with exactly nine fractional digits, so text order is
-instant order, and guards every timestamp column with a CHECK. Rule 1 holds
+instant order, and guards every timestamp column of the store's data with a CHECK. Rule 1 holds
 over every store whose stamps are in the UTC `Z` spelling: v12's Down returns
 exactly the trimmed text `time.RFC3339Nano` wrote, whole second included.
 

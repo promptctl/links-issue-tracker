@@ -894,7 +894,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **Optional-value helpers** (`internal/storage/memory/compare.go`) — shared contract: two absent values are equal, absence renders as the empty string, and absence is never conflated with a present zero.
 - `timesEqual`, `resolutionsEqual`, `stringsEqual`.
-- `formatTime` → `""` for nil, else `model.StampText`; `formatResolution` → `""` for nil; `formatString` → `""` for nil.
+- `formatResolution` → `""` for nil; `formatString` → `""` for nil.
 
 ### 2.9 Comments (`internal/storage/memory/edges.go`)
 

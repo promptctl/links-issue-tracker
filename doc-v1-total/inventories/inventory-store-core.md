@@ -109,13 +109,13 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 #### 1.7 Other free helpers defined in store.go
 
 - `dirExists(path string) bool` — `os.Stat` + `IsDir` (`store.go`).
-- `scanTime(value string) (time.Time, error)` = `time.Parse(time.RFC3339Nano, value)` (`store.go`). Single parse boundary for every timestamp column.
+- `scanTime(value string) (time.Time, error)` = `model.ParseStamp(value)` (`store.go`). Single parse boundary for every timestamp column.
 - `scanNullableTime(sql.NullString) (*time.Time, error)` — invalid → `(nil, nil)` (`store.go`).
-- `nullableTime(*time.Time) any` — nil → `nil`, else `RFC3339Nano` string (`store.go`).
+- `nullableTime(*time.Time) any` — nil → `nil`, else the `model.StampText` string (`store.go`).
 - `nullableString(string) any` — `""` → SQL `NULL`, else the string (`store.go`).
 - `nullableResolution(*model.Resolution) any` — nil → `NULL` (`store.go`).
 - `nullableStringPtr(*string) any` — nil → `NULL` (`store.go`).
-- `formatNullableTime(*time.Time) string` — nil → `""` (`store.go`).
+- `model.TimestampChange(field, from, to *time.Time)` (`internal/model/stamp.go`) — the change row of a timestamp field: each side `""` for nil, else the stored spelling.
 - `formatNullableResolution(*model.Resolution) string` — nil → `""` (`store.go`).
 - `formatNullableString(*string) string` — nil → `""` (`store.go`).
 - `timesEqual(a, b *time.Time) bool` — both nil equal; one nil unequal; else `a.Equal(*b)` (`store.go`).
@@ -701,7 +701,7 @@ Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 8. `redirectTargetArg` = `*updated.RedirectTargetValue()` when non-nil, else nil (`store.go`). Its integrity is deliberately **not** validated here (`store.go`).
 9. Change rows, in this order (`store.go`):
    - `status` when `fromStatus != toStatus`;
-   - `closed_at` when `!timesEqual(prior, new)`, values via `formatNullableTime`;
+   - `closed_at` when `!timesEqual(prior, new)`, values via `model.TimestampChange`;
    - `resolution` when `!resolutionsEqual(...)`, via `formatNullableResolution`;
    - `redirect_target` when `!stringPointersEqual(...)`, via `formatNullableString`;
    - `assignee` when `priorAssignee != postAssignee`.
@@ -731,7 +731,7 @@ The UPDATE touches only the status-axis columns — a transition restates no ret
 - reads `model.RetentionTimestamps(issue.Retention())` for the change-row diff;
 - `model.Retain(issue.Retention(), action, now)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
 - `post := issue; post.SetRetention(next); post.UpdatedAt = now`;
-- change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `formatNullableTime` (`store.go`).
+- change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `model.TimestampChange` (`store.go`).
 
 `retentionWrite.applyTx` (`store.go`):
 ```sql

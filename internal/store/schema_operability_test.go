@@ -104,8 +104,9 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 		want     int64
 	}{
 		// The newer migration declares nothing of its own, so the store keeps
-		// the declaration the registry's own migrations left in it.
-		"none declared":       {"", -1},
+		// the declaration the registry's own migrations left in it: the
+		// timestamps migration declares its own version.
+		"none declared":       {"", timestampsMigrationVersion},
 		"one this binary has": {fmt.Sprint(registryMax), registryMax},
 		"an older one it has": {"7", 7},
 	} {
@@ -113,18 +114,9 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			doltRoot := migratedDoltDir(t)
-			wantMinWriter := tc.want
-			if tc.declared == "" {
-				withStore(t, ctx, doltRoot, func(st *Store) {
-					var err error
-					if wantMinWriter, _, err = st.minWriterSchema(ctx); err != nil {
-						t.Fatalf("minWriterSchema() error = %v", err)
-					}
-				})
-			}
 			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
 			withStore(t, ctx, doltRoot, func(st *Store) {
-				want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: wantMinWriter}
+				want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: tc.want}
 				if got := st.Migrated().SchemaAhead; got != want {
 					t.Errorf("write open reported %+v, want %+v", got, want)
 				}

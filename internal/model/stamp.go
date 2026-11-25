@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"slices"
+	"time"
+)
 
 // StampLayout is the one spelling a stored timestamp has: UTC, whole seconds,
 // and always nine fractional digits. The width is fixed so that comparing two
@@ -8,14 +12,16 @@ import "time"
 // trailing zeros, which is why it cannot be stored: "…:07Z" would sort after
 // "…:07.5Z", and "…:07.000000001Z" before "…:07Z".
 //
-// The store holds a CHECK on every timestamp column that admits only this
-// shape, so a writer that spells an instant any other way is refused by the
-// store itself. [LAW:types-are-the-program]
+// The store holds a CHECK on every timestamp column of its data, and on the
+// from/to values of the change rows TimestampChangeFields names, that admits
+// only this shape, so a writer that spells an instant any other way is refused
+// by the store itself. [LAW:types-are-the-program]
 const StampLayout = "2006-01-02T15:04:05.000000000Z"
 
 // StampText spells an instant the one way it is stored. Every writer of a
-// stored timestamp — a column, a change row's from/to value, a key — goes
-// through it. [LAW:single-enforcer]
+// stored timestamp — a column, a key — goes through it, and a change row's
+// from/to value goes through TimestampChange or FieldChange.Stamped, which
+// call it. [LAW:single-enforcer]
 //
 // It lives here because every writer can import model and model imports
 // nothing above lifecycle: Purge.Key spells a stored key, and a home in a
@@ -25,15 +31,72 @@ func StampText(t time.Time) string {
 	return t.UTC().Format(StampLayout)
 }
 
-// ParseStamp reads a stored timestamp back into the instant it spells, in UTC.
-// It accepts any RFC3339 spelling, not only the stored one: a value arrives
-// here from an import, an older export, or a store a migration has not yet
-// reached, and rejecting it would strand the data rather than protect the
-// store. Everything it returns, StampText spells one way.
+// ParseStamp reads a timestamp back into the instant it spells, in UTC. It
+// accepts any RFC3339 spelling, not only the stored one: a value arrives here
+// from an import, an older export, or a store a migration has not yet reached,
+// and rejecting it would strand the data rather than protect the store. The
+// CHECKs, not this reader, keep a store's own columns canonical. Everything it
+// returns, StampText spells one way.
 func ParseStamp(text string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		return time.Time{}, err
 	}
 	return t.UTC(), nil
+}
+
+// TimestampChangeFields names the FieldChange fields whose from/to values are
+// instants rather than text a person wrote. It is the one list: the writers
+// build these changes through TimestampChange, an imported change is respelled
+// through FieldChange.Stamped, and the store's CHECKs on issue_event_changes
+// name the same three fields. [LAW:one-source-of-truth]
+func TimestampChangeFields() []string {
+	return []string{"closed_at", "archived_at", "deleted_at"}
+}
+
+// TimestampChange is the change of a timestamp field from one instant to
+// another, either of which may be absent (""). The values are spelled the
+// stored way, so no writer can record an instant any other way.
+func TimestampChange(field string, from, to *time.Time) FieldChange {
+	return FieldChange{Field: field, From: stampOrAbsent(from), To: stampOrAbsent(to)}
+}
+
+func stampOrAbsent(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return StampText(*t)
+}
+
+// Stamped is the change with its values spelled the stored way when its field
+// holds instants, and the change unchanged otherwise. It is the checkpoint for
+// a change that arrives from outside: an export written by an older release
+// spells these values the trimmed way. A value that is no instant is an error,
+// never stored. [LAW:parse-dont-validate]
+func (c FieldChange) Stamped() (FieldChange, error) {
+	if !slices.Contains(TimestampChangeFields(), c.Field) {
+		return c, nil
+	}
+	from, err := respell(c.From)
+	if err != nil {
+		return FieldChange{}, fmt.Errorf("change %s from %q: %w", c.Field, c.From, err)
+	}
+	to, err := respell(c.To)
+	if err != nil {
+		return FieldChange{}, fmt.Errorf("change %s to %q: %w", c.Field, c.To, err)
+	}
+	return FieldChange{Field: c.Field, From: from, To: to}, nil
+}
+
+// respell is a stamp's stored spelling. The empty value is the absence of an
+// instant, not a spelling of one, and stays empty.
+func respell(text string) (string, error) {
+	if text == "" {
+		return "", nil
+	}
+	t, err := ParseStamp(text)
+	if err != nil {
+		return "", err
+	}
+	return StampText(t), nil
 }

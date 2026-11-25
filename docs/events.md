@@ -226,7 +226,9 @@ working directory's.
 | `migration.schema_hold` | The schema version the store's schema hold (`meta.schema_hold`, written by a remote downgrade) keeps it at, as the open read it, or `0` when the store holds none. A migrating open raises no held store past its hold. |
 | `migration.v8_rows_renamed` | Recorded only when the open applied migration 8, which renames the dependency edge from `blocks` to `blocked-by`: how many edges it renamed. |
 | `migration.v8_dropped_check` | Recorded with `migration.v8_rows_renamed`: the name of the CHECK constraint migration 8 dropped from the relations table, `relations_type_check`, or the name the database engine gave it (`relations_chk_<suffix>`) on a store created before lit versioned its schema. |
-| `migration.probe_error` | Recorded instead of those two when the open applied migration 8 but could not read them first: why. |
+| `migration.v12_stamps_respelled` | Recorded only when the open applied migration 12, which stores every timestamp as UTC with nine fractional digits: how many stored timestamps it respelled, those not already spelled that way. |
+| `migration.v12_offsets_to_utc` | Recorded with `migration.v12_stamps_respelled`: how many of those carried a UTC offset that migration 12 converted to UTC, so the offset is no longer recorded. |
+| `migration.probe_error` | Recorded instead of the facts of migration 8 or 12 when the open applied that migration but could not read them first: why. |
 | `temp_table_files.files` | How many temp table files a dead Dolt process left the open removed from `links/.dolt/temptf`; `null` when the open did not look. |
 | `temp_table_files.bytes` | How many bytes those files held, or `null` when the open did not look. |
 | `temp_table_files.error` | Why some could not be removed, or `null`. The command runs all the same, and prints a `warning: temp table files a dead writer left were not all removed:` line on stderr; the next open that changes tickets tries again. |

@@ -33,13 +33,6 @@ func stringsEqual(a, b *string) bool {
 	return *a == *b
 }
 
-func formatTime(value *time.Time) string {
-	if value == nil {
-		return ""
-	}
-	return model.StampText(*value)
-}
-
 func formatResolution(value *model.Resolution) string {
 	if value == nil {
 		return ""

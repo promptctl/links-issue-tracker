@@ -2000,7 +2000,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	priorClosedAt := issue.ClosedAtValue()
 	newClosedAt := updated.ClosedAtValue()
 	if !timesEqual(priorClosedAt, newClosedAt) {
-		changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
+		changes = append(changes, model.TimestampChange("closed_at", priorClosedAt, newClosedAt))
 	}
 	priorResolution := issue.ResolutionValue()
 	if !resolutionsEqual(priorResolution, postResolution) {
@@ -2109,10 +2109,10 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 	nextArchived, nextDeleted := retentionColumns(post)
 	var changes []model.FieldChange
 	if !timesEqual(priorArchivedAt, nextArchivedAt) {
-		changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(nextArchivedAt)})
+		changes = append(changes, model.TimestampChange("archived_at", priorArchivedAt, nextArchivedAt))
 	}
 	if !timesEqual(priorDeletedAt, nextDeletedAt) {
-		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
+		changes = append(changes, model.TimestampChange("deleted_at", priorDeletedAt, nextDeletedAt))
 	}
 	return retentionWrite{
 		issueID:      issue.ID,
@@ -2502,7 +2502,7 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID model.ID) ([]mode
 // newestInLaneFamily is the newest instant in issueID's lane family's history,
 // the instant a write to issueID is stamped past.
 func (s *Store) newestInLaneFamily(ctx context.Context, issueID model.ID) (time.Time, error) {
-	selection, args, err := s.laneFamilyEvents(ctx, `e.created_at`, issueID)
+	selection, args, err := s.laneFamilyEvents(ctx, `MAX(e.created_at)`, issueID)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -2517,16 +2517,18 @@ func (s *Store) newestInLaneFamily(ctx context.Context, issueID model.ID) (time.
 // under parentID: the instant a create filed there is stamped past. No issue
 // is filed under the empty parent.
 func (s *Store) newestFiledUnder(ctx context.Context, parentID model.ID) (time.Time, error) {
-	newest, err := s.newestInstant(ctx, filedUnderEvents(`e.created_at`), parentID, string(model.RelParentChild))
+	newest, err := s.newestInstant(ctx, filedUnderEvents(`MAX(e.created_at)`), parentID, string(model.RelParentChild))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read the newest instant filed under %q: %w", parentID, err)
 	}
 	return newest, nil
 }
 
-// newestInstant is the latest of the event stamps selection reads, the zero
-// time for none. Each stamp is parsed and compared here, as an instant, the way
-// every other ordering in this file reads one.
+// newestInstant is the latest of the stamps selection reads, the zero time for
+// none. Each row of selection is one branch's MAX(created_at): the store
+// spells a stamp so that its text order is its instant's order, so the branch
+// needs no history read to find its newest. A branch with no events yields NULL,
+// and the branches are combined here, as instants.
 func (s *Store) newestInstant(ctx context.Context, selection string, args ...any) (time.Time, error) {
 	rows, err := s.db.QueryContext(ctx, selection, args...)
 	if err != nil {
@@ -2535,11 +2537,14 @@ func (s *Store) newestInstant(ctx context.Context, selection string, args ...any
 	defer rows.Close()
 	var newest time.Time
 	for rows.Next() {
-		var stamp string
+		var stamp sql.NullString
 		if err := rows.Scan(&stamp); err != nil {
 			return time.Time{}, err
 		}
-		instant, err := scanTime(stamp)
+		if !stamp.Valid {
+			continue
+		}
+		instant, err := scanTime(stamp.String)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -3202,15 +3207,6 @@ func nullableString(value string) any {
 	return value
 }
 
-// formatNullableTime renders a *time.Time for storage in a FieldChange's
-// from/to value: nil → "" (SQL NULL via nullableString), non-nil → the stored stamp spelling.
-func formatNullableTime(value *time.Time) string {
-	if value == nil {
-		return ""
-	}
-	return model.StampText(*value)
-}
-
 // timesEqual compares two *time.Time pointers by value (both nil is equal,
 // nil vs non-nil is not, two non-nil compared with .Equal).
 func timesEqual(a, b *time.Time) bool {
@@ -3244,7 +3240,7 @@ func resolutionsEqual(a, b *model.Resolution) bool {
 }
 
 // formatNullableString renders an optional string for a FieldChange's from/to
-// value: nil → "" (SQL NULL via nullableString), matching formatNullableTime.
+// value: nil → "" (SQL NULL via nullableString), as model.TimestampChange does.
 func formatNullableString(value *string) string {
 	if value == nil {
 		return ""

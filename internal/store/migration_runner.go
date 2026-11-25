@@ -1145,7 +1145,7 @@ type migrationProbe func(ctx context.Context, db *sql.DB) (map[string]any, error
 
 // migrationProbes holds the probe of each migration that has one, by version.
 // A migration whose effect needs no reading has none.
-var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
+var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge, 12: probeTimestampSpelling}
 
 // probeOutcome is what one step's probe read, or why it could not; zero when
 // the step's migration has no probe.

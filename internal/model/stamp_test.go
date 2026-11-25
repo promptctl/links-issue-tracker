@@ -1,7 +1,6 @@
 package model
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,18 +90,54 @@ func TestParseStampReadsEverySpellingTheStoreHasHeld(t *testing.T) {
 	}
 }
 
-func TestStampTextSortsAsTheInstantsDoUnderSlicesSort(t *testing.T) {
-	base := time.Date(2026, time.November, 24, 10, 0, 7, 0, time.UTC)
-	instants := []time.Time{base.Add(time.Second), base.Add(500 * time.Millisecond), base, base.Add(time.Nanosecond)}
-	texts := make([]string, len(instants))
-	for i, instant := range instants {
-		texts[i] = StampText(instant)
+// v1 history ids are derived from the trimmed RFC3339Nano spelling, which is
+// not the stored one. Changing what is hashed would give an event already
+// imported a second id on the next merge, so one known id pins it.
+func TestV1EventIDIsFrozen(t *testing.T) {
+	at := time.Date(2026, time.November, 24, 10, 0, 7, 500000000, time.UTC)
+	got := v1EventID("test-abc", "close", "open", "closed", "alice", at)
+	if want := ID("evt-v1-d17ae08c41a70224"); got != want {
+		t.Errorf("v1EventID = %q, want %q", got, want)
 	}
-	slices.Sort(texts)
-	slices.SortFunc(instants, time.Time.Compare)
-	for i := range instants {
-		if texts[i] != StampText(instants[i]) {
-			t.Fatalf("position %d: text sort gave %q, instant sort gave %q", i, texts[i], StampText(instants[i]))
+}
+
+// A timestamp change is spelled the stored way, an absent side staying absent.
+func TestTimestampChangeSpellsItsInstantsTheStoredWay(t *testing.T) {
+	at := time.Date(2026, time.November, 24, 10, 0, 7, 500000000, time.UTC)
+	got := TimestampChange("closed_at", nil, &at)
+	want := FieldChange{Field: "closed_at", From: "", To: "2026-11-24T10:00:07.500000000Z"}
+	if got != want {
+		t.Errorf("TimestampChange = %+v, want %+v", got, want)
+	}
+}
+
+func TestStampedRespellsAnOlderReleasesTimestampChange(t *testing.T) {
+	for _, field := range TimestampChangeFields() {
+		got, err := FieldChange{Field: field, From: "2026-11-24T10:00:07Z", To: "2026-11-24T12:00:07.5+02:00"}.Stamped()
+		if err != nil {
+			t.Fatalf("%s: Stamped() error = %v", field, err)
 		}
+		want := FieldChange{Field: field, From: "2026-11-24T10:00:07.000000000Z", To: "2026-11-24T10:00:07.500000000Z"}
+		if got != want {
+			t.Errorf("%s: Stamped() = %+v, want %+v", field, got, want)
+		}
+	}
+}
+
+func TestStampedLeavesWhatIsNotATimestampAlone(t *testing.T) {
+	for _, change := range []FieldChange{
+		{Field: "title", From: "2026-11-24T10:00:07Z", To: "not a time"},
+		{Field: "closed_at", From: "", To: ""},
+	} {
+		got, err := change.Stamped()
+		if err != nil || got != change {
+			t.Errorf("Stamped(%+v) = %+v, %v; want it unchanged", change, got, err)
+		}
+	}
+}
+
+func TestStampedRefusesATimestampValueThatIsNoInstant(t *testing.T) {
+	if _, err := (FieldChange{Field: "closed_at", To: "yesterday"}).Stamped(); err == nil {
+		t.Error("Stamped() accepted a closed_at value that is no instant")
 	}
 }

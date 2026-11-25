@@ -814,7 +814,7 @@ func cellNullString(cell any) (sql.NullString, error) {
 func parseTimestamp(s string) (time.Time, error) {
 	t, err := model.ParseStamp(s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid timestamp %q", s)
+		return time.Time{}, fmt.Errorf("invalid timestamp %q: %w", s, err)
 	}
 	return t, nil
 }

@@ -1375,7 +1375,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges", Src: "interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "invalid character", Src: "rank: invalid character in bounds"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "invalid related-to ordering rows: %d", Src: "invalid related-to ordering rows: %d"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "invalid timestamp %q", Src: "invalid timestamp %q"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "invalid timestamp %q", Src: "invalid timestamp %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "isolation level not supported '%d'", Src: "isolation level not supported '%d'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issue %s has no hydrated lifecycle", Src: "issue %s has no hydrated lifecycle"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issue %s requires store hydration", Src: "issue %s requires store hydration"},

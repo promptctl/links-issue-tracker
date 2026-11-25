@@ -1059,7 +1059,10 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	// updated_at orders as the instant it spells: a pre-baseline store holds
 	// whatever spelling its writer produced, trimmed fractions and
 	// second-precision values mixed, and the SQL text order of those is not
-	// time order. [LAW:one-source-of-truth]
+	// time order. The sort is the SQL one it replaces: a NULL status (an epic's)
+	// is "" here and sorts first, as NULL does in ASC; and an updated_at that
+	// is no timestamp fails the open, naming the row, rather than ranking it
+	// by a guess. [LAW:one-source-of-truth] [LAW:no-silent-failure]
 	rows, err := s.db.QueryContext(ctx, "SELECT id, status, priority, updated_at FROM issues WHERE item_rank = ''")
 	if err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: query unranked: %w", err)
