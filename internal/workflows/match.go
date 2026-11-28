@@ -11,8 +11,9 @@ import (
 // the context is absent — no single acted-on ticket, nothing crossed — and a
 // definition constrained on an absent context does not fire.
 type Occasion struct {
-	// Moments are what happened: the one event a read fires, or every
-	// crossing a transition made. A transition can cross several states at
+	// Moments are what happened: the one event a read fires, a creation's
+	// event and the states the new ticket starts in, or every crossing a
+	// transition made. A transition can cross several states at
 	// once, because a state can sit inside another — a phase is a state
 	// inside in_progress, so a start from open exits open and enters both
 	// in_progress and plan. Empty when a transition left the ticket where it

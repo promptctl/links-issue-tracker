@@ -14,10 +14,10 @@ import (
 // workflowsDryRunLeaf answers "what would inject when a ticket labeled
 // <label> enters closed?" without a real occasion ever happening: it builds an
 // Occasion from flags alone, matches it against the loaded Set, and prints
-// every match with why it matched (Definition.MatchReasons) and the body
-// that would be injected. This is the same "why" computation a real firing's
-// trace uses (internal/workflows/trace.go), so a hypothetical here and a real
-// firing explain themselves identically. [LAW:single-enforcer]
+// every match with why it matched (Match.Reasons) and the body that would be
+// injected. These are the reasons a real firing's trace records
+// (internal/workflows/trace.go), so a hypothetical here and a real firing
+// explain themselves identically. [LAW:single-enforcer]
 //
 // Each flag is read as a definition's own key reads its entries
 // (readKeyFlags), so a dry-run is asked in the spelling a definition is
