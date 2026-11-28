@@ -44,7 +44,7 @@ A piece declares the set it belongs to with one frontmatter key:
 ---
 id: phase-plan
 set: plan-review
-states: [plan]
+when: [enter plan]
 ---
 ```
 

@@ -114,9 +114,9 @@ func (e BulkError) Error() string {
 }
 
 // runBulkOver applies op to each issue ID in order, writing to stdout, per
-// landed item, the notice op returned for it and then one "id ok" line — the
-// data channel carries results only — and collecting every item that did not
-// land. A stdout that refuses a landed item's report stops the run there: the
+// landed item, what op said for it — what the single verb prints for that
+// ticket, the guidance its workflows fired included — and then one "id ok"
+// line, and collecting every item that did not land. A stdout that refuses a landed item's report stops the run there: the
 // rest would land with reports nobody reads. The report is the command's
 // result, not a banner trailing it, so losing it fails the run, where
 // printMutationSyncStalenessWarning's lost banner leaves the exit code alone.
@@ -134,18 +134,18 @@ func (e BulkError) Error() string {
 // the event itself, the second item's facts would replace the first's. The
 // event's fact bulk.not_run lists the ids the run never reached, [] when it
 // reached them all. [LAW:nothing-unseen]
-func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []model.ID, op func(ctx context.Context, issueID model.ID) (notice string, err error)) error {
+func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []model.ID, op func(ctx context.Context, issueID model.ID) (said string, err error)) error {
 	var unlanded []unlandedItem
 	var stopped *bulkStop
 	reached := 0
 	for ; reached < len(issueIDs) && stopped == nil; reached++ {
 		issueID := issueIDs[reached]
 		itemCtx, closeScope := telemetry.Occurrence(ctx)
-		notice, err := op(itemCtx, issueID)
+		said, err := op(itemCtx, issueID)
 		errFacts, errCounts := model.ErrorRecord(err)
 		telemetry.Record(itemCtx, errFacts, errCounts)
 		facts, counts := closeScope()
-		report := fmt.Sprintf("%s%s ok\n", notice, issueID)
+		report := fmt.Sprintf("%s%s ok\n", said, issueID)
 		printed, reportErr := 0, error(nil)
 		if err == nil {
 			printed, reportErr = io.WriteString(stdout, report)
@@ -275,9 +275,10 @@ func bulkCommentLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor(inv.Env)
+		flows := loadWorkflows(ctx, inv, ap.Workspace)
 		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
-			comment, _, err := addComment(ctx, ap, issueID, commentBody, actor)
-			return commentLine(comment), err
+			comment, guidance, err := addComment(ctx, ap, flows, issueID, commentBody, actor)
+			return guidance + commentLine(comment), err
 		})
 	}}
 }
@@ -307,9 +308,10 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			if err != nil {
 				return err
 			}
+			flows := loadWorkflows(ctx, inv, ap.Workspace)
 			return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
-				did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
-				return did.notice, err
+				did, err := applyTransition(ctx, inv, ap, flows, issueID, action, actor, *reason, authorize)
+				return did.said, err
 			})
 		}}
 	}

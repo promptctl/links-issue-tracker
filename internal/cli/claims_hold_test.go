@@ -219,7 +219,7 @@ func TestPhaseAndDoneRefusedForAnotherCheckoutUnlessTake(t *testing.T) {
 			if err != nil {
 				h.t.Fatalf("read %s: %v", id, err)
 			}
-			return state.phase == model.PhaseReview
+			return state.phase() == model.PhaseReview
 		}},
 		{"done", doneSpec, nil, takesOver, "", func(h readyTestHarness, id model.ID) bool {
 			return h.issueDetail(id).State() == model.StateClosed

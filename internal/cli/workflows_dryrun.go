@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -12,35 +11,39 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// workflowsDryRunLeaf answers "what would inject on <event> for a ticket
-// labeled <label>?" without a real occasion ever happening: it builds an
+// workflowsDryRunLeaf answers "what would inject when a ticket labeled
+// <label> enters closed?" without a real occasion ever happening: it builds an
 // Occasion from flags alone, matches it against the loaded Set, and prints
-// every match with why it matched (Definition.MatchReasons) and the body
-// that would be injected. This is the same "why" computation Dispatch's real
-// firing trace uses (internal/workflows/trace.go), so a hypothetical here
-// and a real firing explain themselves identically. [LAW:single-enforcer]
+// every match with why it matched (Match.Reasons) and the body that would be
+// injected. These are the reasons a real firing's trace records
+// (internal/workflows/trace.go), so a hypothetical here and a real firing
+// explain themselves identically. [LAW:single-enforcer]
 //
-// Never writes a firing trace itself — nothing actually fired, there is
-// nothing to record — and needs no store access, only the loaded definition
-// Set, so it stays a wsCmd like the rest of `lit workflows`.
+// Each flag is read as a definition's own key reads its entries
+// (readKeyFlags), so a dry-run is asked in the spelling a definition is
+// written in and compared in the form a real occasion carries. A value naming
+// no moment lit fires, or no label a ticket can carry, is refused rather than
+// explained: no real occasion carries it, so a match on it would describe
+// nothing that can happen. [LAW:parse-dont-validate]
+//
+// It loads the definitions as a firing command does (loadWorkflows), so the
+// load's warnings reach stderr and the event here too: the surface that
+// explains why something fires names what can never fire.
+// [LAW:nothing-unseen] It never writes a firing trace — nothing actually
+// fired, there is nothing to record — and needs no store access, so it stays
+// a wsCmd like the rest of `lit workflows`.
 func workflowsDryRunLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows dry-run")
-	event := fs.String("event", "", "Semantic event the hypothetical occasion fires (see the event catalog in 'lit workflows')")
+	when := fs.StringArray("when", "A moment the hypothetical occasion carries, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable: a start from open is exit open, enter in_progress, enter plan)")
 	labels := fs.StringArray("label", "Label the hypothetical ticket carries (repeatable)")
-	enter := fs.StringArray("enter", "State the hypothetical ticket enters (repeatable: a start enters in_progress and plan)")
-	exit := fs.StringArray("exit", "State the hypothetical ticket exits (repeatable)")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
-	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
-
-		occasion := workflows.Occasion{
-			Event:   workflows.Event(*event),
-			IssueID: model.ID(*issue),
-			Labels:  *labels,
-			Entered: *enter,
-			Exited:  *exit,
+	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
+		moments, carried, err := readKeyFlags(*when, *labels)
+		if err != nil {
+			return err
 		}
-		set := workflows.Load(inv.Env, ws.RootDir)
-		matched := set.Matching(occasion)
+		occasion := workflows.Occasion{Moments: moments, IssueID: model.ID(*issue), Labels: carried}
+		matched := loadWorkflows(ctx, inv, ws).set.Matching(occasion)
 
 		if err := printDryRunOccasion(inv.Stdout, occasion); err != nil {
 			return err
@@ -50,24 +53,12 @@ func workflowsDryRunLeaf() wsLeaf {
 }
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
-	_, err := fmt.Fprintf(w, "occasion: event=%s labels=%s entered=%s exited=%s issue=%s\n\n",
-		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), stateList(o.Entered), stateList(o.Exited), orDash(fmt.Sprint(o.IssueID)))
+	_, err := fmt.Fprintf(w, "occasion: when=%s labels=%s issue=%s\n\n",
+		orDash(strings.Join(workflows.Spellings(o.Moments), ",")), orDash(strings.Join(o.Labels, ",")), orDash(fmt.Sprint(o.IssueID)))
 	return err
 }
 
-// stateList renders states as a list of quoted names, [] when there are none.
-// Labels can join on a bare comma because a label cannot contain one; a state
-// name is an open string that can, so each name is quoted to keep one state
-// named "foo,bar" apart from the two states foo and bar.
-func stateList(states []string) string {
-	quoted := make([]string, len(states))
-	for i, state := range states {
-		quoted[i] = strconv.Quote(state)
-	}
-	return "[" + strings.Join(quoted, ",") + "]"
-}
-
-func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows.Occasion) error {
+func printDryRunMatches(w io.Writer, matched []workflows.Match, o workflows.Occasion) error {
 	if _, err := fmt.Fprintf(w, "Fired (%d)\n", len(matched)); err != nil {
 		return err
 	}
@@ -75,12 +66,11 @@ func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows
 		_, err := fmt.Fprintln(w, "  (none)")
 		return err
 	}
-	for _, def := range matched {
-		reasons := def.MatchReasons(o)
-		if _, err := fmt.Fprintf(w, "  %s  [%s]\n", formatDefinitionRef(def), strings.Join(reasons, ", ")); err != nil {
+	for _, match := range matched {
+		if _, err := fmt.Fprintf(w, "  %s  [%s]\n", formatDefinitionRef(match.Definition), strings.Join(match.Reasons, ", ")); err != nil {
 			return err
 		}
-		body := workflows.Interpolate(def.Body, o.IssueID)
+		body := workflows.Interpolate(match.Definition.Body, o.IssueID)
 		for _, line := range strings.Split(body, "\n") {
 			if _, err := fmt.Fprintf(w, "    %s\n", line); err != nil {
 				return err

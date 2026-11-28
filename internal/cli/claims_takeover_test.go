@@ -46,12 +46,7 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 	if strings.Contains(out.String(), "claim transferred") {
 		t.Fatalf("start %s = %q, want no transfer line: the lane names this checkout, not the one that finished the ticket", finished.ID, out.String())
 	}
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, recorder.Finish(telemetry.End{})) {
-		if strings.HasPrefix(key, "start.") {
-			facts[key] = value
-		}
-	}
+	facts := prefixed(writtenFacts(t, recorder.Finish(telemetry.End{})), "start.")
 	if want := map[string]any{"start.lane_family_issues": float64(2), "start.lane_held": true, "start.handover": true, "start.transfer_announced": false}; !reflect.DeepEqual(facts, want) {
 		t.Fatalf("start event facts = %v, want %v", facts, want)
 	}

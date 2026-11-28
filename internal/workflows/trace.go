@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/trace"
@@ -14,8 +15,8 @@ import (
 const firingTraceKind = "workflows"
 
 // FiredDefinition is one definition that fired on an occasion, and which
-// specific values in its declared dimensions matched — the "why" half of a
-// firing trace.
+// specific values in its declared keys matched — the "why" half of a firing
+// trace.
 type FiredDefinition struct {
 	ID      string   `json:"id"`
 	Source  string   `json:"source"`
@@ -23,44 +24,43 @@ type FiredDefinition struct {
 	Reasons []string `json:"reasons"`
 }
 
-// FiringRecord is one real occasion's Dispatch outcome: the occasion and
-// every definition that fired on it. Written only when at least one
-// definition fires — see Dispatch.
+// FiringRecord is one real occasion's Fire outcome: the occasion and every
+// definition that fired on it. Written only when at least one definition
+// fires — see Fire. When is always present, [] for an occasion that crossed
+// nothing, so a record of no moments reads apart from one missing the field.
+// [LAW:nothing-unseen]
 type FiringRecord struct {
 	ID          string            `json:"id"`
 	RecordedAt  string            `json:"recorded_at"`
 	WorkspaceID string            `json:"workspace_id"`
-	Event       string            `json:"event,omitempty"`
+	When        []string          `json:"when"`
 	IssueID     string            `json:"issue_id,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
-	Entered     []string          `json:"entered,omitempty"`
-	Exited      []string          `json:"exited,omitempty"`
 	Fired       []FiredDefinition `json:"fired"`
 }
 
 // recordFiring writes one FiringRecord for an occasion that matched at least
 // one definition, reusing the collision-safe writer every trace kind in this
 // codebase shares (internal/trace). [LAW:one-source-of-truth]
-func recordFiring(ws workspace.Info, o Occasion, matched []Definition) (string, error) {
+func recordFiring(ws workspace.Info, o Occasion, matched []Match) error {
 	fired := make([]FiredDefinition, len(matched))
-	for i, def := range matched {
+	for i, match := range matched {
 		fired[i] = FiredDefinition{
-			ID:      def.ID,
-			Source:  string(def.Source),
-			Path:    def.Path,
-			Reasons: def.MatchReasons(o),
+			ID:      match.Definition.ID,
+			Source:  string(match.Definition.Source),
+			Path:    match.Definition.Path,
+			Reasons: match.Reasons,
 		}
 	}
-	_, path, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(string(o.Event)), func(id string, recordedAt time.Time) ([]byte, error) {
+	when := Spellings(o.Moments)
+	_, _, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(strings.Join(when, " ")), func(id string, recordedAt time.Time) ([]byte, error) {
 		record := FiringRecord{
 			ID:          id,
 			RecordedAt:  recordedAt.Format(time.RFC3339Nano),
 			WorkspaceID: ws.WorkspaceID,
-			Event:       string(o.Event),
+			When:        when,
 			IssueID:     o.IssueID.Raw(),
 			Labels:      o.Labels,
-			Entered:     o.Entered,
-			Exited:      o.Exited,
 			Fired:       fired,
 		}
 		payload, err := json.MarshalIndent(record, "", "  ")
@@ -69,5 +69,5 @@ func recordFiring(ws workspace.Info, o Occasion, matched []Definition) (string, 
 		}
 		return append(payload, '\n'), nil
 	})
-	return path, err
+	return err
 }

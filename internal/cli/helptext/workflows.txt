@@ -24,7 +24,9 @@ Where definitions live
   relative path at two layers overrides without declaring an id at all.
   Within one layer a duplicate id keeps the first file in lexical order and
   warns about the rest. Loading never fails a lit command: an unreadable or
-  malformed file becomes a warning instead.
+  malformed file never fires and becomes a warning instead. It still holds
+  its id, so a farther layer's definition of that id does not fire in its
+  place.
 
 Format
 
@@ -33,129 +35,139 @@ Format
     ---
     id: done
     name: Post-close capture reminder
-    events: [work_finished]
+    when: [enter closed]
     labels: [user-facing]
     ---
     Ticket <id> is closed. Capture what the next agent needs to know
     before moving on.
 
-  Every key is optional. In the body, <id> is replaced with the acted-on
-  ticket's id when the moment has one. Unrecognized keys are tolerated, so
-  a file authored against a newer lit still loads here.
+  lit reads four keys: id, name, when and labels, each optional. A file
+  carrying any other key never fires, with a warning naming the key: lit
+  cannot tell whether a key it does not read was meant to narrow when the
+  definition fires, so it does not guess. Such a file still holds its id,
+  so a farther layer's definition of that id does not fire in its place. In
+  the body, <id> is replaced with the acted-on ticket's id when the moment
+  has one.
 
 Activation
 
-  Three dimensions decide when a definition fires.
+  when     The moments the definition fires at. Each entry is one of:
 
-  labels   Fires when the acted-on ticket carries any listed label. Labels
-           are lowercased on both sides, so case never matters. A label
-           that no ticket could carry (one containing a comma) is dropped
-           with a warning rather than silently never matching.
+             enter <state>   the ticket's state changes into <state>
+             exit <state>    the ticket's state changes out of <state>
+             <event>         lit shows or records something (see below)
 
-  states   Fires when the ticket enters or exits a listed state. Two
-           authored shapes, usable in one list:
+           The built-in states are the statuses open, in_progress and
+           closed, the phases plan, impl, review and merge inside
+           in_progress (see lit phase), and the retentions live, archived
+           and deleted. A ticket is in one status, its phase while in
+           progress, and one retention at once. A state inside another
+           moves with it, and a change exits the innermost state first and
+           enters the outermost first: lit start from open exits open and
+           enters in_progress, then plan; lit done from review exits
+           review, then in_progress, and enters closed; lit phase exits one
+           phase and enters another without leaving in_progress. lit new
+           and lit followup enter open and live. A crossing fires whichever
+           command makes it, single or bulk: lit done and lit close both
+           enter closed, lit open exits closed and enters open, lit archive
+           exits live and enters archived, and lit delete exits live or
+           archived and enters deleted. A call that leaves the ticket's
+           state where it was — a move to the phase it is in, a takeover —
+           crosses nothing, so only a definition bound by labels alone
+           fires on it.
 
-             states:
-               - open                        # fires ENTERING open
-               - {name: closed, when: exit}  # fires EXITING closed
+           An entry naming no state above and no event below — a typo, a
+           blank, an event another lit fires — never fires, and is reported
+           as a warning.
 
-           A bare name means enter. State names are open strings, not a
-           closed enum: the built-in states and any custom stage a
-           project adopts are the same shape here. The built-in states
-           are open, in_progress and closed, and the phases plan, impl,
-           review and merge inside in_progress (see lit phase). A
-           transition is exit-of-some plus enter-of-others; there is no
-           separate transition concept. A state inside another moves
-           with it: lit start from open enters in_progress and plan,
-           lit done exits the ticket's phase along with in_progress,
-           and lit phase exits one phase and enters another without
-           leaving in_progress. A call that leaves the ticket where it
-           was, such as a move to the phase it is in, enters and exits
-           nothing. A moment carrying no transition never satisfies a
-           state binding.
+  labels   The acted-on ticket carries any listed label. Labels are
+           lowercased on both sides, so case never matters. A label that no
+           ticket could carry (a blank, or one containing a comma) is
+           dropped with a warning rather than silently never matching.
 
-  events   Fires when a listed semantic event is dispatched. Commands
-           dispatch events and definitions bind to events, never to
-           command names, so a command can be renamed without breaking an
-           authored definition. An event outside this binary's catalog
-           still loads — it may target a newer lit — but can never fire
-           here, and is reported as a warning.
-
-  Within one dimension the listed values are alternatives (OR). Across
-  dimensions, every dimension the definition declares must be satisfied
-  (AND) — labels plus events fires only on a ticket carrying one of those
-  labels at one of those events. A dimension left out entirely constrains
-  nothing. A definition declaring none of the three is inert: it loads and
-  is listed, but it can never fire, and lit workflows flags it under
+  The entries of one key are alternatives (OR), and an entry written twice
+  counts once. A definition declaring both keys fires only when both hold
+  (AND): when: [enter closed] plus labels: [user-facing] fires as a ticket
+  carrying user-facing closes. A key left out constrains nothing, but a key
+  written with no entry lit can read — labels: [], a bare when:, or entries
+  all refused — never holds, so the definition never fires rather than
+  firing on the other key alone. A definition declaring neither key never
+  fires either: it loads and holds its id, and lit workflows flags it under
   Warnings.
 
-Event catalog
+Events
 
-  Every event lit can dispatch, and what dispatches it today:
+  The moments lit fires that are not a change of state, and what fires each
+  one today:
 
     show_backlog       lit backlog
     next_pulled        lit next, when it has a ticket to hand back
     show_ticket        lit show
-    work_started       lit start
-    phase_set          lit phase, whether or not the phase moves
-    work_finished      lit done
-    ticket_closed      lit close
-    ticket_reopened    lit open
     ticket_created     lit new, lit followup
     ticket_updated     lit update
-    comment_added      lit comment add
+    comment_added      lit comment add, lit bulk comment
 
 The subcommands
 
-  Bare lit workflows prints the lifecycle spine — every catalog event; the
-  built-in states, with the phases after in_progress, plus any custom stage
-  a loaded definition binds to, each with its enter and exit sides; and
-  every label a loaded definition binds to — annotated with the
-  definitions active at each point and the layer each resolved from, then
-  a Warnings section naming every file that loaded but cannot fully fire:
-  inert, unknown event, malformed frontmatter, duplicate id.
+  Bare lit workflows prints every moment a when: entry can name, spelled as
+  one — each event, then entering and exiting each built-in state, the
+  phases after in_progress — and every label a loaded definition binds to,
+  annotated with the definitions active at each and the layer each resolved
+  from. A Warnings section follows, naming every file that loaded but cannot
+  fully fire: no keys, a key written empty, an entry naming nothing lit
+  fires, a key lit does not read, malformed frontmatter, duplicate id. Every
+  command that fires a moment, and dry-run, prints the same warnings on
+  stderr, one line each, once per command.
 
   show <id> prints one resolved definition: id, name, source layer, path,
-  its three activation dimensions, and its body.
+  its when and labels entries — or fires: never, for a definition lit
+  cannot fire — the warnings for its file, and its body.
 
-  edit <id-or-point> scaffolds a project-layer file and prints its path. It
-  resolves the argument two ways:
+  edit <id> opens a definition's project-layer file and prints its path. A
+  project-layer definition already is its own file, so edit just opens it;
+  a global or embedded one is copied verbatim into .lit/workflows/ at the
+  same relative path, the override, ready to change. An id nothing loaded
+  holds is refused; new scaffolds a definition that does not exist yet.
 
-    An existing definition's id — override it. A project-layer definition
-    already is the override, so edit just opens it; a global or embedded
-    one is copied verbatim into .lit/workflows/ at the same relative path,
-    ready to change.
+  new --when <moment> --label <name> scaffolds a new definition firing on
+  the keys it names, each flag repeatable and read as a definition reads
+  its entries, and refused when a definition's entry would be: a --when
+  naming no moment lit fires, a --label no ticket could carry. At least one
+  flag is required. The file shows each key it names live, and a key it
+  leaves out as a comment. Its name is the entries it binds, the moments in
+  the order bare lit workflows lists them, then the labels sorted, joined by
+  +, so new --when "enter in-progress" writes enter-in_progress.md, and the
+  flags in any order write one file. The name is the new definition's id,
+  so a name a loaded definition already holds is refused, naming that
+  definition: new --label done would otherwise replace the shipped done.
 
-    Anything else is a lifecycle point with nothing bound there yet,
-    resolved in this order: <state>:enter or <state>:exit; a catalog event
-    name; a built-in state or phase bare (meaning enter); anything else, a
-    label. The fresh file is scaffolded with every dimension shown
-    as a comment and the requested one live.
+  Neither edit nor new overwrites — an occupied path fails with a conflict
+  message, so edit that file directly. Each always prints the path, and
+  additionally opens $EDITOR only when stdout is a terminal and $EDITOR is
+  set; an agent, a pipe or a script gets the path alone.
 
-  edit never overwrites — an occupied path fails with a conflict message,
-  so edit that file directly or pick another point. It always prints the
-  path, and additionally opens $EDITOR only when stdout is a terminal and
-  $EDITOR is set; an agent, a pipe or a script gets the path alone.
-
-  The guidance printed after lit done is the embedded definition with id
-  done, bound to events: [work_finished]. Run lit workflows edit done to
-  copy it into .lit/workflows/done.md and rewrite the body; add a labels
-  key there to narrow it to matching tickets, since the two dimensions then
-  AND together. Delete that file to fall back to the embedded default.
+  The guidance printed after lit done and lit close is the embedded
+  definition with id done, bound to when: [enter closed]. Run lit workflows
+  edit done to copy it into .lit/workflows/done.md and rewrite the body; add
+  a labels key there to narrow it to matching tickets, since the two keys
+  then AND together. Delete that file to fall back to the embedded default.
 
   dry-run answers "what would inject here" without a real occasion. The
   flags describe a hypothetical one; the output names every definition that
-  would fire, which specific label, event or state activation matched it,
-  and the body that would be injected, with <id> interpolated from --issue.
-  Pass --event to exercise an event-bound definition and --enter or --exit
-  for a state-bound one; both repeat, since one transition can enter or
-  exit several states (--enter in_progress --enter plan is a start). A
-  dimension left unset satisfies no definition that declares it. A
-  hypothetical matching nothing exits cleanly with Fired (0). dry-run
-  writes nothing and reads no ticket data.
+  would fire, which when entry or label matched it, and the body that would
+  be injected, with <id> interpolated from --issue. --when takes an entry
+  spelled as in a definition and repeats, since one transition makes several
+  crossings (--when "exit open" --when "enter in_progress" --when "enter
+  plan" is a start); --label repeats too, and a value given twice counts
+  once. A key left unset satisfies no definition that declares it. A --when
+  naming no moment lit fires, blank included, is refused, as is a --label no
+  ticket could carry; a --label is lowercased as a ticket's is. A
+  hypothetical matching nothing exits cleanly with Fired (0). dry-run writes
+  nothing and reads no ticket data.
 
   A real occasion that fires at least one definition records a JSON trace —
   the occasion, every definition that fired, and the same reasons dry-run
   prints — under traces/workflows/ in the workspace storage directory that
   lit workspace reports as storage_dir. An occasion matching nothing leaves
-  no trace.
+  no trace. A trace that cannot be written never fails the command: it is
+  reported on stderr and as workflows.trace_error on the command's event.

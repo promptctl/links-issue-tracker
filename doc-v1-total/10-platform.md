@@ -59,7 +59,7 @@ Every variable the shipped binary reads:
 | `LNKS_AUTOMATION_REASON` | Default `Reason` on the automation trace when the caller supplied none (`automation_trace.go`) |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | Non-empty → the recorded trace's path is appended (mode 0644) to that file (`automation_trace.go`) |
 | `LINKS_DEBUG_DOLT_SYNC_BRANCH` | Overrides the resolved sync branch ahead of the remote's default branch (`internal/cli/sync.go`) |
-| `EDITOR` | Split on whitespace to form the editor command for `lit workflows edit` (`internal/cli/workflows_edit.go`) |
+| `EDITOR` | Split on whitespace to form the editor command for `lit workflows edit` and `new` (`internal/cli/workflows_edit.go`) |
 
 Variables the binary **writes** for children: the detached background mirror runs in the invocation's environment with the three `LNKS_AUTOMATION_*` variables stripped, then re-set to `TRIGGER=on-change` / `REASON=on-change cadence mirrored after a mutating command` (`internal/cli/sync_bg.go`). The owner-notify hook runs as `sh -c <hook>` in the repo root with `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO` added, time-boxed with a `WaitDelay` so a backgrounded child cannot hold the pipe (`internal/cli/owner_notify.go`).
 

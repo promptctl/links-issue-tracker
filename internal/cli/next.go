@@ -65,7 +65,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, inv, ap.Workspace, occasion)
 	}}
 }
 
@@ -144,7 +144,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 	if err := printNextSummary(w, row, cc, lane); err != nil {
 		return workflows.Occasion{}, err
 	}
-	return nextPulledOccasion(row.Issue), nil
+	return ticketOccasion(workflows.EventNextPulled, row.Issue), nil
 }
 
 // resumeAdvice is what `next` says when it hands back work already in flight in

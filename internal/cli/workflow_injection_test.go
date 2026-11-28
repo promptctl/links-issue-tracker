@@ -14,8 +14,8 @@ import (
 
 // writeProjectWorkflow authors a workflow definition file under the app's
 // workspace at .lit/workflows/<rel>, creating parent directories as needed —
-// the arbitrary-nested-path project layer runTransition (via
-// workflows.Dispatch) reads from.
+// the arbitrary-nested-path project layer a transition's workflows load
+// reads from.
 func writeProjectWorkflow(t *testing.T, ap *app.App, rel, content string) {
 	t.Helper()
 	path := filepath.Join(ap.Workspace.RootDir, ".lit", "workflows", filepath.FromSlash(rel))
@@ -30,12 +30,12 @@ func writeProjectWorkflow(t *testing.T, ap *app.App, rel, content string) {
 // TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath is the
 // end-to-end done-claim: a project workflow file, authored under a
 // nested path with no meaning of its own, fires through the real command path
-// (not just workflows.Dispatch called directly) and its body reaches stdout.
+// (not just workflows.Fire called directly) and its body reaches stdout.
 func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	writeProjectWorkflow(t, ap, "reviews/deep/nested/close.md", "---\nevents: [ticket_closed]\n---\nTicket <id> closed without finishing — check for a duplicate.")
+	writeProjectWorkflow(t, ap, "reviews/deep/nested/close.md", "---\nwhen: [enter closed]\n---\nTicket <id> closed without finishing — check for a duplicate.")
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: storage.MustParseTitle("Injection test"), Lane: storage.SharedLane, Topic: "workflows", IssueType: "task", Priority: 0,
@@ -62,7 +62,7 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	writeProjectWorkflow(t, ap, "done.md", "---\nid: done\nevents: [work_finished]\n---\nCUSTOM: <id> wrapped up.")
+	writeProjectWorkflow(t, ap, "done.md", "---\nid: done\nwhen: [enter closed]\n---\nCUSTOM: <id> wrapped up.")
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: storage.MustParseTitle("Override test"), Lane: storage.SharedLane, Topic: "workflows", IssueType: "task", Priority: 0,

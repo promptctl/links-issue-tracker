@@ -568,7 +568,7 @@ The `%s` in both non-empty arms is the rows clause.
 - `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; nothing printed.
 - default → `panic(fmt.Sprintf("renderNextOutcome: unhandled NextOutcome %T", outcome))`.
 
-For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
+For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `ticketOccasion(workflows.EventNextPulled, row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
 
 ### 9.3 Surfaces that render but do not gate
 

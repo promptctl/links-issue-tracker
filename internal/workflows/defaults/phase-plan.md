@@ -1,7 +1,7 @@
 ---
 id: phase-plan
 name: Plan the ticket, then record when the code starts
-states: [plan]
+when: [enter plan]
 ---
 ## Order
 1. Plan it: run the `lit:plan` skill with the ticket id (`/lit:plan <id>`). It holds the procedure, and ends with the plan recorded on the ticket (`lit show <id>` prints it).

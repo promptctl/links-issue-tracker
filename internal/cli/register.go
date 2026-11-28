@@ -681,7 +681,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.wsCmdAcquiring(initLeaf)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(quickstartLeaf)},
-		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)", GroupID: "guidance",
+		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id>` to customize, `new --when <moment>` to add one, `dry-run` to explain a hypothetical)", GroupID: "guidance",
 			Run: r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return workflowsDispatch(r.ctx, args) })), Subcommands: workflowsFamily.subcommandSpecs()},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun, Subcommands: completionFamily.subcommandSpecs()},

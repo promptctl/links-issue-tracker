@@ -1,43 +1,36 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// runWorkflowsEdit is `lit workflows edit <id-or-point>`'s whole job:
-// scaffold a project-layer file to customize guidance, then hand it to the
-// user. Two shapes, chosen by whether target resolves against an already-
-// loaded definition: [LAW:dataflow-not-control-flow] both run the same
-// scaffold-then-open pipeline; only which content gets scaffolded varies.
+// runWorkflowsEdit is `lit workflows edit <id>`: hand the user the
+// project-layer file of the definition with that id. A project-layer
+// definition is already its own file — open it directly. A global or embedded
+// one is copied verbatim into a new project-layer file at its own relative
+// path, the override, ready to edit. An id nothing loaded holds is refused,
+// naming the command that scaffolds a new definition (newDefinition).
 //
-//   - An existing id: override it. A project-layer definition is already the
-//     override — open it directly. A global/embedded one gets copied
-//     verbatim into a new project-layer file at its own relative path, ready
-//     to edit.
-//   - Anything else: treated as a lifecycle point (an event name, a state
-//     name optionally suffixed `:enter`/`:exit`, or — falling through — a
-//     label) with no definition bound there yet. A fresh file is scaffolded
-//     under `.lit/workflows/`, commented to show every activation dimension,
-//     with the requested one live.
-//
-// Neither shape ever overwrites an existing file — scaffolding always writes
-// only under the project's `.lit/workflows/`, never into the global or
-// embedded layers, and never clobbers unrelated project content silently.
-// [LAW:no-silent-failure]
-func runWorkflowsEdit(inv Invocation, ws workspace.Info, target string) error {
-	set := workflows.Load(inv.Env, ws.RootDir)
-	if def, ok := set.Lookup(target); ok {
-		return editExistingDefinition(inv, ws, def)
+// Scaffolding never overwrites an existing file — it writes only under the
+// project's `.lit/workflows/`, never into the global or embedded layers, and
+// never clobbers unrelated project content silently. [LAW:no-silent-failure]
+func runWorkflowsEdit(inv Invocation, ws workspace.Info, id string) error {
+	def, ok := workflows.Load(inv.Env, ws.RootDir).Lookup(id)
+	if !ok {
+		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows new --when \"enter closed\"`, `--label needs-design`, or both", id)}
 	}
-	return editFreshDefinition(inv, ws, target)
+	return editExistingDefinition(inv, ws, def)
 }
 
 func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Definition) error {
@@ -61,13 +54,32 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
-func editFreshDefinition(inv Invocation, ws workspace.Info, point string) error {
-	dimension, liveLine, slug := classifyWorkflowPoint(point)
-	projectPath := projectWorkflowPath(ws, slug+".md")
-	if err := refuseExistingFile(projectPath, point); err != nil {
+// newDefinition is `lit workflows new --when <moment> --label <name>`:
+// scaffold a new project-layer definition firing on the keys the flags name,
+// read as a definition's own keys are (readKeyFlags), in a file named after
+// them.
+//
+// The file's name is its id, and a name is a slug, so distinct bindings can
+// share one (`--label "needs design"` and `--label needs-design`), and a
+// binding can share a shipped definition's id (`--label done` and the embedded
+// done). [LAW:single-enforcer] Definitions resolve by id across every layer,
+// so the loaded set judges whether the id is free: a held id would make the new
+// file replace the definition holding it, or lose to it, rather than add one.
+func newDefinition(inv Invocation, ws workspace.Info, whenTexts, labelTexts []string) error {
+	when, labels, err := readKeyFlags(whenTexts, labelTexts)
+	if err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(dimension, liveLine)); err != nil {
+	when, labels = bindingOrder(when, labels)
+	name := scaffoldName(when, labels)
+	if held, ok := workflows.Load(inv.Env, ws.RootDir).Lookup(workflows.DefaultID(name + ".md")); ok {
+		return MergeConflictError{Message: fmt.Sprintf("cannot scaffold %q: the %s definition %s already holds that id, and two definitions of one id never both fire (run `lit workflows edit %s` to change that one)", name, held.Source, held.Path, held.ID)}
+	}
+	projectPath := projectWorkflowPath(ws, name+".md")
+	if err := refuseExistingFile(projectPath, name); err != nil {
+		return err
+	}
+	if err := writeWorkflowScaffold(projectPath, name, workflows.ScaffoldFresh(when, labels)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
@@ -85,7 +97,7 @@ func projectWorkflowPath(ws workspace.Info, relPath string) string {
 // put it there. It gives a quick, friendly rejection for the common
 // (non-racing) case; writeWorkflowScaffold's O_EXCL open is the actual
 // enforcer, since a stat-then-write here would leave a TOCTOU gap a
-// concurrent `lit workflows edit` could win. [LAW:single-enforcer]
+// concurrent scaffold could win. [LAW:single-enforcer]
 func refuseExistingFile(path string, subject string) error {
 	if _, err := os.Stat(path); err == nil {
 		return conflictError(subject, path)
@@ -155,101 +167,43 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 
 // unsafeScaffoldFilenameChars is everything a fresh scaffold's filename
 // strips: anything but lowercase letters, digits, underscore, and hyphen —
-// deliberately keeping underscore so an event name like "work_started"
-// scaffolds to the readable "work_started.md" rather than "work-started.md".
+// deliberately keeping underscore so an event name like "show_ticket"
+// scaffolds to the readable "show_ticket.md" rather than "show-ticket.md",
+// and "enter in_progress" to "enter-in_progress.md".
 var unsafeScaffoldFilenameChars = regexp.MustCompile(`[^a-z0-9_-]+`)
 
-func scaffoldFilenameSlug(input string) string {
-	slug := strings.ToLower(strings.TrimSpace(input))
-	slug = unsafeScaffoldFilenameChars.ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
+// bindingOrder is a binding's entries in one order, whatever order its flags
+// came in: the moments as `lit workflows` lists them (workflows.Moments), then
+// the labels sorted. A key's entries are alternatives, so a binding is a set.
+// [LAW:one-source-of-truth] the scaffold built from it, its name and its keys,
+// is the same for every ordering of the flags.
+func bindingOrder(when []workflows.Moment, labels []string) ([]workflows.Moment, []string) {
+	moments := workflows.Moments()
+	slices.SortFunc(when, func(a, b workflows.Moment) int {
+		return cmp.Compare(slices.Index(moments, a), slices.Index(moments, b))
+	})
+	slices.Sort(labels)
+	return when, labels
+}
+
+// scaffoldName is a fresh scaffold's file name, without its .md: each entry
+// it binds, in bindingOrder, made filename-safe, joined by "+".
+// [LAW:one-source-of-truth] the name comes from what the file binds, so every
+// spelling and ordering of one binding (`enter in-progress`, `Enter
+// In_Progress`) names one file, and the second scaffold is refused as the
+// conflict it is.
+func scaffoldName(when []workflows.Moment, labels []string) string {
+	parts := append(workflows.Spellings(when), labels...)
+	for i, part := range parts {
+		parts[i] = scaffoldFilenameSlug(part)
+	}
+	return strings.Join(parts, "+")
+}
+
+func scaffoldFilenameSlug(entry string) string {
+	slug := strings.Trim(unsafeScaffoldFilenameChars.ReplaceAllString(entry, "-"), "-")
 	if slug == "" {
-		return "point"
-	}
-	return slug
-}
-
-// classifyWorkflowPoint turns a `lit workflows edit` target that matched no
-// loaded definition into the activation dimension it names, in one
-// deterministic order, the one `lit workflows --help` documents:
-//
-//  1. Explicit `<state>:enter` / `<state>:exit` — states are open strings by
-//     design, so this needs no validation against a known set.
-//  2. A name in the event catalog — an event.
-//  3. One of the built-in lifecycle states or phases, bare (defaults to enter).
-//  4. Anything else — a label; labels are open vocabulary too.
-//
-// [LAW:dataflow-not-control-flow] one function, one ordered set of checks;
-// which branch fires is decided entirely by the input, never by a caller
-// flag.
-func classifyWorkflowPoint(point string) (dimension string, liveLine string, filenameSlug string) {
-	if state, when, ok := parseStatePointSuffix(point); ok {
-		return "states", stateActivationLine(state, when), stateFilenameSlug(state, when)
-	}
-	if workflows.Event(point).Known() {
-		return "events", fmt.Sprintf("events: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
-	}
-	if isBuiltinState(point) {
-		return "states", stateActivationLine(point, workflows.WhenEnter), stateFilenameSlug(point, workflows.WhenEnter)
-	}
-	return "labels", fmt.Sprintf("labels: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
-}
-
-// yamlDoubleQuoted wraps a value as a YAML double-quoted scalar — the one
-// style whose only special characters are `\` and `"` (a flow-context
-// character like `,` or `]` is literal inside the quotes) — so a point
-// containing a comma, bracket, or colon embeds safely into the flow sequence
-// ScaffoldFresh's live dimension line renders. [LAW:single-enforcer] every
-// value embedded into scaffolded frontmatter routes through this one
-// escaper, applied uniformly rather than only when a special character
-// happens to be present.
-func yamlDoubleQuoted(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	return `"` + replacer.Replace(value) + `"`
-}
-
-// parseStatePointSuffix splits at the LAST colon, not the first: state names
-// are open strings with no restriction against containing one (e.g.
-// "deploy:staging"), so splitting on the first colon would misparse
-// "deploy:staging:enter" as name "deploy", suffix "staging:enter" and fall
-// through to misclassifying the whole point as a label.
-func parseStatePointSuffix(point string) (state string, when workflows.When, ok bool) {
-	i := strings.LastIndex(point, ":")
-	if i < 0 {
-		return "", "", false
-	}
-	name, suffix := point[:i], point[i+1:]
-	switch strings.ToLower(strings.TrimSpace(suffix)) {
-	case "enter":
-		return strings.TrimSpace(name), workflows.WhenEnter, true
-	case "exit":
-		return strings.TrimSpace(name), workflows.WhenExit, true
-	default:
-		return "", "", false
-	}
-}
-
-func isBuiltinState(point string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(point))
-	for _, state := range builtinStates {
-		if state == normalized {
-			return true
-		}
-	}
-	return false
-}
-
-func stateActivationLine(state string, when workflows.When) string {
-	if when == workflows.WhenExit {
-		return fmt.Sprintf("states: [{name: %s, when: exit}]", yamlDoubleQuoted(state))
-	}
-	return fmt.Sprintf("states: [%s]", yamlDoubleQuoted(state))
-}
-
-func stateFilenameSlug(state string, when workflows.When) string {
-	slug := scaffoldFilenameSlug(state)
-	if when == workflows.WhenExit {
-		return slug + "_exit"
+		return "definition"
 	}
 	return slug
 }

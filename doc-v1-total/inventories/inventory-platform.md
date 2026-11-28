@@ -213,7 +213,7 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
 | `LNKS_AUTOMATION_REASON` | const `internal/cli/automation_trace.go`; read | Default `Reason` on the automation trace when the caller supplied none (`internal/cli/automation_trace.go`). |
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | const `internal/cli/automation_trace.go`; read | When non-empty, the recorded trace's path is written (plus newline, mode 0644) to that file (`internal/cli/automation_trace.go`). |
 | `LINKS_DEBUG_DOLT_SYNC_BRANCH` | const `internal/cli/sync.go`; read `internal/cli/sync.go` | Overrides the resolved sync branch ahead of the remote's default branch (`internal/cli/sync.go`); named in the failure message when no branch can be resolved (`internal/cli/sync.go`). |
-| `EDITOR` | `internal/cli/workflows_edit.go` | Split on whitespace to form the editor command for `lit workflows edit`; named verbatim in the failure message. |
+| `EDITOR` | `internal/cli/workflows_edit.go` | Split on whitespace to form the editor command for `lit workflows edit` and `new`; named verbatim in the failure message. |
 | (whole environment) | `internal/environ/environ.go` | Every child process, git included, is built by `Env.Command`, `Env.CommandContext` or `Env.Git`, which run it in the invocation's environment — see 3.2. |
 
 ### 3.2 Environment variables the binary **writes** for child processes

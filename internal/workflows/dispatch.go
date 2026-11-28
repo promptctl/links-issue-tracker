@@ -2,81 +2,55 @@ package workflows
 
 import (
 	"fmt"
-	"io"
-	"path/filepath"
 	"strings"
 
-	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// Dispatch is the one seam every curated command routes its occasions
-// through: synchronous, in-process, called directly from the command path —
-// no bus, no async queue, no subscriber list. [LAW:no-mode-explosion] There
-// is exactly one Dispatch, not a registry other packages add themselves to.
+// Firing is what one occasion fired: the definitions, in Set.Matching's
+// stable ID order, the guidance they inject, and why the firing trace was not
+// recorded, nil when it was or when nothing fired.
+type Firing struct {
+	Fired    []Match
+	Guidance string
+	Untraced error
+}
+
+// Fire is the one seam every command fires an occasion through: synchronous,
+// in-process, called directly from the command path — no bus, no async queue,
+// no subscriber list. [LAW:no-mode-explosion] There is exactly one Fire, not a
+// registry other packages add themselves to.
 //
-// It loads the workspace's full definition Set, matches it against the
-// occasion, and writes every match's body to w — the same agent-facing
-// stream the calling command already writes to — in Set.Matching's stable ID
-// order, each with <id> interpolated to the occasion's IssueID.
-// [LAW:effects-at-boundaries] w, errOut, and ws are the only effects; the
-// matching itself stays the pure logic in match.go. errOut is the diagnostic
-// stream a trace-write failure goes to — a workflows package function never
-// hardcodes os.Stderr itself; every CLI call site passes it explicitly, so
-// the decision of where diagnostics land lives at the boundary, not inside
-// this leaf/matching package, and a test can capture or discard it freely.
+// It matches the occasion against set, which the command loaded once for its
+// whole run (Load). The guidance is each fired body with <id> interpolated to
+// the occasion's IssueID, one line after another, which the command prints
+// where its own output puts it. [LAW:effects-at-boundaries] matching and the
+// guidance are values; Fire's one effect is the firing trace.
 //
-// When at least one definition fires, Dispatch also records a firing trace
-// (trace.go) — which definitions fired and why (Definition.MatchReasons) —
-// under the workspace's shared trace storage, so `lit workflows dry-run` and
-// a real invocation explain "why did this fire" through the same mechanism.
-// An occasion nothing matches leaves no trace: the directory stays
-// proportional to guidance actually injected, not to every lit invocation.
-// Recording is skipped outright when ws.StorageDir isn't an absolute path: a
-// workspace.Info resolved the real way (workspace.Resolve, always rooted at
-// git-common-dir) is never relative, so this only guards against a caller
-// holding a partially-populated workspace.Info with no trustworthy place to
-// write — never a state real usage can reach.
-// [LAW:no-defensive-null-guards] the guard sits at Dispatch's own trust
-// boundary (an arbitrary caller-supplied struct), not around an invariant
-// this package could enforce on its own input type.
-// A trace-write failure never fails Dispatch — the guidance was already
-// written to w — it goes to stderr instead, the same best-effort shape
-// recordMirrorTraceError uses for the sibling automation trace.
-// [LAW:no-silent-failure] the failure is never swallowed, only kept off the
-// agent-facing stream.
-//
-// Load/parse problems surface as Set.Warnings, not here: a malformed
-// definition must never break the command that triggered this Dispatch, so
-// this function never inspects or prints them, and none are surfaced to the
-// user yet — a known, tracked gap, not a silent design claim.
-// [LAW:no-silent-failure] Dispatch deliberately doesn't fill that gap itself:
-// w is the calling command's own agent-facing stdout, so printing an
-// unrelated workflow-authoring warning into it would surface a config
-// diagnostic on every single invocation, not just the ones that touch
-// workflows. Displaying Set.Warnings with real detail (source layer, path,
-// which definition) is promptctl-orchestration-ffqz.4's job ("the see-it
-// surface"); a partial version here would leave two places deciding how
-// workflow warnings render. [LAW:single-enforcer]
-//
-// It returns the definitions that fired, so the caller can say on its own
-// record what fired; they are returned with a write error too, since they
-// fired whether or not their bodies reached w.
-func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error) {
-	set := Load(env, ws.RootDir)
-	matched := set.Matching(o)
-	for _, def := range matched {
-		if _, err := fmt.Fprintln(w, Interpolate(def.Body, o.IssueID)); err != nil {
-			return matched, err
-		}
+// When at least one definition fires, Fire records a firing trace (trace.go)
+// — which definitions fired and why (Match.Reasons) — under the
+// workspace's shared trace storage, so `lit workflows dry-run` and a real
+// invocation explain "why did this fire" through the same mechanism. An
+// occasion nothing matches leaves no trace: the directory stays proportional
+// to guidance actually fired, not to every lit invocation. A trace-write
+// failure never fails the command — the definitions fired all the same — so
+// it comes back as Untraced, for the command to report beside the firing it
+// failed to trace. [LAW:no-silent-failure]
+func Fire(set Set, ws workspace.Info, o Occasion) Firing {
+	firing := Firing{Fired: set.Matching(o)}
+	var guidance strings.Builder
+	for _, match := range firing.Fired {
+		guidance.WriteString(Interpolate(match.Definition.Body, o.IssueID) + "\n")
 	}
-	if len(matched) > 0 && filepath.IsAbs(ws.StorageDir) {
-		if _, err := recordFiring(ws, o, matched); err != nil {
-			fmt.Fprintf(errOut, "lit: workflow firing trace could not be recorded (%v); guidance was still injected\n", err)
-		}
+	firing.Guidance = guidance.String()
+	// [LAW:dataflow-not-control-flow] exception: the trace is skipped when
+	// nothing fired, so the trace directory grows with guidance fired, not
+	// with every lit invocation.
+	if len(firing.Fired) > 0 {
+		firing.Untraced = recordFiring(ws, o, firing.Fired)
 	}
-	return matched, nil
+	return firing
 }
 
 // Interpolate replaces the <id> placeholder in an injected body with the
@@ -84,7 +58,7 @@ func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info,
 // sync, and a break in it would forge lines in the guidance an agent reads.
 // It is the one substitution workflow bodies get.
 // Exported so `lit workflows dry-run` can preview the same interpolated body
-// Dispatch would actually inject.
+// Fire actually injects.
 func Interpolate(body string, issueID model.ID) string {
 	return strings.ReplaceAll(body, "<id>", fmt.Sprint(issueID))
 }

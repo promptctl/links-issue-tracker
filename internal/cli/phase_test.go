@@ -15,71 +15,159 @@ import (
 // phaseFacts is what the last invocation's event says its phase move did.
 func phaseFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "phase.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "phase.")
 }
 
 // workflowFacts is what the last invocation's event says about the workflow
 // occasion it fired.
 func workflowFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "workflows.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "workflows.")
 }
 
-// Workflow definitions bound to a phase fire as the work moves through it:
-// lit start enters plan inside in_progress, a phase move exits one phase and
-// enters the next without leaving in_progress, a move to the phase the ticket
-// is in exits and enters nothing, and lit done exits the phase along with
-// in_progress.
-// The command's event names the occasion and what fired on it.
-func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
+// bulkItemWorkflowFacts is what the last bulk run's one item says about the
+// workflow occasion its transition fired.
+func bulkItemWorkflowFacts(t *testing.T) map[string]any {
+	t.Helper()
+	items := writtenEvent(t, lastEvent(t)).Occurrences["bulk.items"]
+	if len(items) != 1 {
+		t.Fatalf("bulk.items = %v, want one item", items)
+	}
+	return prefixed(items[0].(map[string]any)["bulk.item.facts"].(map[string]any), "workflows.")
+}
+
+// A definition bound to `enter <state>` or `exit <state>` fires on every
+// transition that makes that crossing, through every command that makes one,
+// single or bulk, and on nothing else. The crossings run as a statechart takes
+// them, exits innermost first and entries outermost first: lit new enters
+// open and live, lit start exits open and enters in_progress and the plan
+// inside it, a phase move exits one phase and enters the next without leaving
+// in_progress, a move to the phase the ticket is in crosses nothing, lit done
+// and lit close both enter closed — so both print the shipped done guidance —
+// lit open exits it, and the retention verbs move the ticket between live,
+// archived and deleted. The command's event names the crossings and what
+// fired on them, the shipped defaults among them.
+func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
-	dir, first, _ := statuslineCheckout(t)
-	bound := map[string]string{
-		"enter-plan":   "states: [plan]",
-		"enter-review": "states: [review]",
-		"exit-impl":    "states: [{name: impl, when: exit}]",
-		"exit-review":  "states: [{name: review, when: exit}]",
-		"working":      "states: [in_progress]",
-	}
-	for id, activation := range bound {
-		writeCLIWorkflow(t, dir, id+".md", "---\n"+activation+"\n---\nFIRED "+id+" on <id>")
+	dir, first, second := statuslineCheckout(t)
+	var bound []string
+	for _, state := range model.StateNodes() {
+		for _, side := range []string{"enter", "exit"} {
+			id := side + "-" + state.String()
+			bound = append(bound, id)
+			writeCLIWorkflow(t, dir, id+".md", "---\nwhen: ["+side+" "+state.String()+"]\n---\nFIRED "+id+" on <id>")
+		}
 	}
 	for _, step := range []struct {
-		args    []string
-		event   string
-		exited  []any
-		entered []any
-		fired   []any
+		args   []string
+		ticket string
+		facts  func(*testing.T) map[string]any
+		when   []any
+		fired  []any
 	}{
-		{[]string{"start", first, "--by", "agent"}, "work_started", []any{"open"}, []any{"in_progress", "plan"}, []any{"enter-plan", "phase-plan", "working"}},
-		{[]string{"phase", first, "--to", "impl"}, "phase_set", []any{"plan"}, []any{"impl"}, []any{"phase-impl"}},
-		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{"impl"}, []any{"review"}, []any{"enter-review", "exit-impl", "phase-review"}},
-		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{}, []any{}, []any{}},
-		{[]string{"done", first}, "work_finished", []any{"in_progress", "review"}, []any{"closed"}, []any{"done", "exit-review"}},
+		// The new ticket's id is not known ahead, so its guidance is matched
+		// up to the id.
+		{[]string{"new", "--title", "Third", "--topic", "demo", "--type", "epic"}, "", workflowFacts,
+			[]any{"ticket_created", "enter open", "enter live"}, []any{"enter-live", "enter-open"}},
+		{[]string{"start", first, "--by", "agent"}, first, workflowFacts,
+			[]any{"exit open", "enter in_progress", "enter plan"}, []any{"enter-in_progress", "enter-plan", "exit-open", "phase-plan"}},
+		{[]string{"phase", first, "--to", "impl"}, first, workflowFacts,
+			[]any{"exit plan", "enter impl"}, []any{"enter-impl", "exit-plan", "phase-impl"}},
+		{[]string{"phase", first, "--to", "review"}, first, workflowFacts,
+			[]any{"exit impl", "enter review"}, []any{"enter-review", "exit-impl", "phase-review"}},
+		{[]string{"phase", first, "--to", "merge"}, first, workflowFacts,
+			[]any{"exit review", "enter merge"}, []any{"enter-merge", "exit-review", "phase-merge"}},
+		{[]string{"phase", first, "--to", "merge"}, first, workflowFacts,
+			[]any{}, []any{}},
+		{[]string{"done", first}, first, workflowFacts,
+			[]any{"exit merge", "exit in_progress", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-merge"}},
+		{[]string{"open", first}, first, workflowFacts,
+			[]any{"exit closed", "enter open"}, []any{"enter-open", "exit-closed"}},
+		{[]string{"close", first, "--resolution", "wontfix"}, first, workflowFacts,
+			[]any{"exit open", "enter closed"}, []any{"done", "enter-closed", "exit-open"}},
+		{[]string{"archive", first}, first, workflowFacts,
+			[]any{"exit live", "enter archived"}, []any{"enter-archived", "exit-live"}},
+		{[]string{"unarchive", first}, first, workflowFacts,
+			[]any{"exit archived", "enter live"}, []any{"enter-live", "exit-archived"}},
+		{[]string{"delete", first}, first, workflowFacts,
+			[]any{"exit live", "enter deleted"}, []any{"enter-deleted", "exit-live"}},
+		{[]string{"restore", first}, first, workflowFacts,
+			[]any{"exit deleted", "enter live"}, []any{"enter-live", "exit-deleted"}},
+		{[]string{"bulk", "start", "--ids", second, "--by", "agent"}, second, bulkItemWorkflowFacts,
+			[]any{"exit open", "enter in_progress", "enter plan"}, []any{"enter-in_progress", "enter-plan", "exit-open", "phase-plan"}},
+		{[]string{"bulk", "done", "--ids", second}, second, bulkItemWorkflowFacts,
+			[]any{"exit plan", "exit in_progress", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-plan"}},
 	} {
 		out := runCLIInDir(t, dir, step.args...)
-		for id := range bound {
-			body := "FIRED " + id + " on " + first
+		for _, id := range bound {
+			body := "FIRED " + id + " on " + step.ticket
 			if want := slices.Contains(step.fired, any(id)); strings.Contains(out, body) != want {
 				t.Errorf("lit %v printed %q; want %q printed: %v", step.args, out, body, want)
 			}
 		}
-		want := map[string]any{"workflows.event": step.event, "workflows.exited": step.exited, "workflows.entered": step.entered, "workflows.fired": step.fired}
-		if got := workflowFacts(t); !reflect.DeepEqual(got, want) {
+		// Entering closed prints the shipped done default's post-close
+		// capture reminder, whichever command closed the ticket.
+		if slices.Contains(step.fired, any("done")) {
+			t.Logf("lit %v printed:\n%s", step.args, out)
+			if body := "Ticket " + step.ticket + " has been closed. Before moving on"; !strings.Contains(out, body) {
+				t.Errorf("lit %v printed %q; want the done guidance %q", step.args, out, body)
+			}
+		}
+		// The load's warnings are the command's, said once however many
+		// tickets it ran over; a bulk item carries only what it fired.
+		if got := workflowFacts(t)["workflows.warnings"]; !reflect.DeepEqual(got, []any{}) {
+			t.Errorf("lit %v workflows.warnings = %v, want none", step.args, got)
+		}
+		want := map[string]any{"workflows.when": step.when, "workflows.fired": step.fired, "workflows.trace_error": nil}
+		got := step.facts(t)
+		if step.args[0] != "bulk" {
+			delete(got, "workflows.warnings")
+		}
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("lit %v event facts = %v, want %v", step.args, got, want)
+		}
+	}
+}
+
+// A definition written for the lit that named transitions — an `events:` or
+// `states:` key, or one of the transition events listed under `when:` — never
+// fires, and every command it would have fired on says so on stderr and on its
+// event, naming the spelling this lit reads; the command still succeeds.
+func TestDefinitionsInTheRetiredSpellingsWarnAndNeverFire(t *testing.T) {
+	t.Parallel()
+	isolateEvents(t)
+	dir, first, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	for name, activation := range map[string]string{
+		"old-events": "events: [work_finished]",
+		"old-states": "states: [closed]",
+		"old-when":   "when: [work_finished]",
+	} {
+		writeCLIWorkflow(t, dir, name+".md", "---\n"+activation+"\n---\nOLD "+name+" fired")
+	}
+
+	stdout, stderr, err := runCLIInDirSplit(t, dir, "done", first)
+	if err != nil {
+		t.Fatalf("lit done error = %v, want it to succeed past the unreadable definitions; stderr %q", err, stderr)
+	}
+	if strings.Contains(stdout, "OLD ") {
+		t.Errorf("lit done printed %q; want no retired-spelling definition to fire", stdout)
+	}
+	if !strings.Contains(stdout, "has been closed") {
+		t.Errorf("lit done printed %q; want the shipped done guidance beside the warnings", stdout)
+	}
+	warnings := workflowFacts(t)["workflows.warnings"].([]any)
+	if len(warnings) != 3 {
+		t.Fatalf("workflows.warnings = %v, want one per retired-spelling file", warnings)
+	}
+	for _, warning := range warnings {
+		line := "lit: workflow " + warning.(string) + "\n"
+		if !strings.Contains(stderr, line) {
+			t.Errorf("stderr = %q, want the warning line %q", stderr, line)
+		}
+		if !strings.Contains(warning.(string), "when: [enter closed]") {
+			t.Errorf("warning %q does not name the spelling this lit reads", warning)
 		}
 	}
 }

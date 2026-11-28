@@ -1,28 +1,29 @@
 package cli
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
-// This file is the command surface's half of the event layer described in
-// promptctl-orchestration-ffqz.2: one pure occasion-builder function per
-// semantic event, so the payload a command hands to workflows.Dispatch is
-// unit-testable with no store, no app, no mocks. [LAW:effects-at-boundaries]
-// The commands themselves (cli.go, workable.go) call these and dispatch the
-// result, through dispatchOccasion, at the point their mutation or read
-// already succeeded — a rename of the command touches only its registration,
-// never the event it fires.
+// This file is the command surface's half of the occasion layer: the pure
+// builders of what each command fires — one for a ticket a command read or
+// changed, one for the backlog, one for a created ticket, one for every
+// transition — so the payload a command fires is unit-testable with no store,
+// no app, no mocks. [LAW:effects-at-boundaries] A read, `lit update` and a
+// creation fire through dispatchOccasion; a transition or a comment, which a
+// bulk run makes once per ticket, fires through its command's
+// loadedWorkflows.fire, which dispatchOccasion also calls.
 // [LAW:one-source-of-truth]
 
-// showTicketOccasion is what `lit show` fires: it always names one ticket, so
-// labels travel with it, and viewing carries no state transition of its own.
-func showTicketOccasion(issue model.Issue) workflows.Occasion {
+// ticketOccasion is what a command fires for the one ticket it acted on: the
+// event it fires, and the ticket's id and labels. `lit show` fires
+// show_ticket, `lit next` next_pulled, `lit update` ticket_updated (status
+// never moves through update) and `lit comment add` comment_added.
+func ticketOccasion(event workflows.Event, issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
-		Event:   workflows.EventShowTicket,
+		Moments: []workflows.Moment{event},
 		IssueID: issue.ID,
 		Labels:  model.RawTexts(issue.Labels),
 	}
@@ -32,124 +33,83 @@ func showTicketOccasion(issue model.Issue) workflows.Occasion {
 // moment with no single acted-on ticket (Occasion's own doc comment names
 // this exact case), so it carries no IssueID or Labels.
 func backlogOccasion() workflows.Occasion {
-	return workflows.Occasion{Event: workflows.EventShowBacklog}
+	return workflows.Occasion{Moments: []workflows.Moment{workflows.EventShowBacklog}}
 }
 
-// nextPulledOccasion is what `lit next` fires when it has a ticket to hand
-// back — the only case it is ever called, since the empty-selection path
-// returns an error before any occasion is built.
-func nextPulledOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Event:   workflows.EventNextPulled,
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// ticketCreatedOccasion is what `lit new` and `lit followup` fire once the
-// issue exists, carrying whatever labels it was created with.
-func ticketCreatedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Event:   workflows.EventTicketCreated,
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// ticketUpdatedOccasion is what `lit update` fires. Status never moves
-// through update (runUpdate rejects --status), so this never carries a
-// transition — Entered/Exited stay empty.
-func ticketUpdatedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Event:   workflows.EventTicketUpdated,
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// commentAddedOccasion is what `lit comment add` fires, naming the ticket the
-// comment landed on.
-func commentAddedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Event:   workflows.EventCommentAdded,
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// transitionEvents maps every lifecycle action to the event it fires: the
-// four status actions and the phase move. Retention actions fire nothing and
-// have no entry (see transitionOccasion).
-var transitionEvents = map[model.ActionName]workflows.Event{
-	model.ActionStart:  workflows.EventWorkStarted,
-	model.ActionPhase:  workflows.EventPhaseSet,
-	model.ActionDone:   workflows.EventWorkFinished,
-	model.ActionClose:  workflows.EventTicketClosed,
-	model.ActionReopen: workflows.EventTicketReopened,
+// createdOccasion is what `lit new` and `lit followup` fire once the ticket
+// exists: ticket_created, then the entries into every state it starts in, as
+// a statechart's initial transition enters its initial configuration — so a
+// ticket created open enters open and live. [LAW:one-source-of-truth] the
+// entries are crossings from nothing to the ticket's configuration, so a new
+// ticket enters exactly the states a later transition reads it as leaving.
+func createdOccasion(issue model.Issue) workflows.Occasion {
+	occasion := ticketOccasion(workflows.EventTicketCreated, issue)
+	occasion.Moments = append(occasion.Moments, crossings(nil, model.ConfigurationOf(issue, nil))...)
+	return occasion
 }
 
 // ticketState is where a ticket stands at one moment: its row, which carries
-// its status, the history read beside it, and the phase that history puts it
-// in — empty when it has none, which is every ticket not in progress.
+// its status and retention, and the history read beside it, which carries its
+// phase. [LAW:one-source-of-truth] everything else about where it stands is
+// derived from those two, never stored beside them.
 type ticketState struct {
 	issue  model.Issue
 	events []model.IssueEvent
-	phase  model.Phase
 }
 
-// states is every state the ticket is in, outermost first: its status, then
-// the phase inside it.
-func (t ticketState) states() []string {
-	states := []string{string(t.issue.State())}
-	if t.phase != "" {
-		states = append(states, string(t.phase))
-	}
-	return states
+// phase is the phase the ticket's history puts it in (model.PhaseOf), empty
+// when it has none, which is every ticket not in progress.
+func (t ticketState) phase() model.Phase {
+	phase, _ := model.PhaseOf(t.issue, t.events)
+	return phase
 }
 
-// transitionOccasion is the single builder every lifecycle transition routes
-// through — transitionLeaf in cli.go is already the one enforcer of the
-// transition itself; this is the one place that turns a completed transition
-// into the event it fires. [LAW:single-enforcer] before and after are where
-// the ticket stood on either side of the write.
+// configuration is every state node the ticket is in (model.ConfigurationOf).
+func (t ticketState) configuration() []model.StateNode {
+	return model.ConfigurationOf(t.issue, t.events)
+}
+
+// transitionOccasion is the single builder every transition routes through —
+// applyTransition in cli.go is the one step every transition verb runs,
+// single or bulk, and it calls this — so it is the one place that turns a
+// completed transition into what it fires. [LAW:single-enforcer] before and
+// after are where the ticket stood on either side of the write.
 //
-// The states are read as a statechart reads nested states, a phase being a
-// state inside in_progress: a transition exits the states the ticket was in
-// and no longer is, and enters the ones it is in now and was not. So a start
-// from open enters in_progress and plan, a done from review exits in_progress
-// and review, and a phase move exits and enters one phase each, never leaving
-// in_progress. A call that leaves the ticket where it was — a reclaim, a move
-// to the phase it is in — exits and enters nothing, while its event still
-// fires: history records mutations that happened, not calls that were made.
-//
-// A retention action (archive/unarchive/delete/restore) is no lifecycle
-// transition and fires nothing, so fires is false. Any other action without
-// an entry in transitionEvents is a variant added to the lifecycle package
-// without a decision here — a maintenance bug, not a state transitionLeaf can
-// construct today — so it panics rather than dispatching an eventless
-// occasion or skipping silently. [LAW:no-silent-failure]
-func transitionOccasion(action model.Action, before, after ticketState) (occasion workflows.Occasion, fires bool) {
-	if _, retention := action.(model.RetentionAction); retention {
-		return workflows.Occasion{}, false
-	}
-	event, ok := transitionEvents[action.Name()]
-	if !ok {
-		// string(), not Verb(): this names the EVENT MAPPING's key, which is the
-		// persisted encoding, and it is a developer diagnostic rather than
-		// guidance an agent will run. The conversion is written out so the gate
-		// in internal/model/lifecycle can hold one rule with no exceptions.
-		panic(fmt.Sprintf("workflow_events: no event mapped for lifecycle action %q", string(action.Name())))
-	}
+// What a transition fires is the crossings it made, never a name for the
+// command: `lit done` and `lit close` both enter closed, and a definition
+// bound to `enter closed` cannot tell them apart. So a start from open exits
+// open and enters in_progress and plan, a done from review exits review and
+// in_progress and enters closed, a phase move exits and enters one phase each,
+// never leaving in_progress, and an archive exits live and enters archived. A
+// transition that leaves the ticket where it was — a reclaim, a move to the
+// phase it is in — crosses nothing, so only a definition bound by labels alone
+// fires on it. [LAW:dataflow-not-control-flow] every transition builds its
+// occasion the same way; what it crossed is the value that varies.
+func transitionOccasion(before, after ticketState) workflows.Occasion {
 	return workflows.Occasion{
-		Event:   event,
+		Moments: crossings(before.configuration(), after.configuration()),
 		IssueID: after.issue.ID,
 		Labels:  model.RawTexts(after.issue.Labels),
-		Exited:  difference(before.states(), after.states()),
-		Entered: difference(after.states(), before.states()),
-	}, true
+	}
 }
 
-// difference is the set difference from \ to, kept in from's order.
-func difference(from, to []string) []string {
-	return slices.DeleteFunc(slices.Clone(from), func(state string) bool { return slices.Contains(to, state) })
+// crossings are the moves from one configuration to another in the order a
+// statechart makes them: the exits of every node from has and to lacks,
+// innermost first, then the entries of every node to has and from lacks,
+// outermost first. [LAW:one-source-of-truth] the nesting is
+// model.ConfigurationOf's order, which lists each region outermost first, so a
+// done from review exits review, then in_progress, then enters closed.
+func crossings(from, to []model.StateNode) []workflows.Moment {
+	var out []workflows.Moment
+	for _, node := range slices.Backward(from) {
+		if !slices.Contains(to, node) {
+			out = append(out, workflows.Crossing{Side: workflows.Exit, State: node})
+		}
+	}
+	for _, node := range to {
+		if !slices.Contains(from, node) {
+			out = append(out, workflows.Crossing{Side: workflows.Enter, State: node})
+		}
+	}
+	return out
 }

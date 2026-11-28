@@ -12,13 +12,7 @@ import (
 // recorded.
 func verdictFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "verdict.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "verdict.")
 }
 
 // A plan is written with lit update --plan, and each edit is a version. lit

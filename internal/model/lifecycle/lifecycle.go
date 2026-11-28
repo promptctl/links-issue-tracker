@@ -12,6 +12,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -22,6 +23,13 @@ const (
 	InProgress State = "in_progress"
 	Closed     State = "closed"
 )
+
+// States lists every status in the order the work moves through them.
+// ParseState's admissible set and every listing of the statuses derive from
+// it. [LAW:one-source-of-truth]
+func States() []State {
+	return []State{Open, InProgress, Closed}
+}
 
 // Display renders the state for human-readable error messages and CLI output.
 // Wire formats and storage continue to use the underscored State value.
@@ -134,17 +142,27 @@ func Walk(l Lifecycle, visit func(Lifecycle) bool) {
 	}
 }
 
-func ParseState(value string) (State, error) {
+// stateName is a state's name as every state parser reads it: any case,
+// surrounding space ignored, and in-progress for in_progress.
+// [LAW:one-source-of-truth] ParseState and ParseStateNode spell names alike.
+func stateName(value string) string {
 	normalized := strings.TrimSpace(strings.ToLower(value))
 	if normalized == "in-progress" {
-		normalized = "in_progress"
+		return string(InProgress)
 	}
-	switch State(normalized) {
-	case Open, InProgress, Closed:
+	return normalized
+}
+
+func ParseState(value string) (State, error) {
+	normalized := stateName(value)
+	if slices.Contains(States(), State(normalized)) {
 		return State(normalized), nil
-	default:
-		return "", fmt.Errorf("invalid status %q (valid: open, in_progress, closed)", value)
 	}
+	names := make([]string, 0, len(States()))
+	for _, state := range States() {
+		names = append(names, string(state))
+	}
+	return "", fmt.Errorf("invalid status %q (valid: %s)", value, strings.Join(names, ", "))
 }
 
 // ParseStates turns however a caller spelled a set of states into the set the

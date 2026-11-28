@@ -10,6 +10,7 @@ import (
 
 type Phase = lifecycle.Phase
 type SetPhase = lifecycle.SetPhase
+type StateNode = lifecycle.StateNode
 
 const (
 	PhasePlan   = lifecycle.PhasePlan
@@ -18,12 +19,17 @@ const (
 	PhaseMerge  = lifecycle.PhaseMerge
 
 	ActionPhase = lifecycle.ActionPhase
+
+	PhasedState = lifecycle.PhasedState
 )
 
 var (
 	Phases     = lifecycle.Phases
 	ParsePhase = lifecycle.ParsePhase
 	JoinPhases = lifecycle.JoinPhases
+
+	StateNodes     = lifecycle.StateNodes
+	ParseStateNode = lifecycle.ParseStateNode
 )
 
 // PhaseField is the change-row field a phase move records, on an event whose
@@ -61,7 +67,7 @@ func NewestInstant(events []IssueEvent) time.Time {
 // name rather than as an older phase it has left. [LAW:one-source-of-truth]
 func PhaseOf(issue Issue, events []IssueEvent) (Phase, bool) {
 	caps := issue.Capabilities()
-	if caps.Status == nil || caps.Status.Value != StateInProgress {
+	if caps.Status == nil || caps.Status.Value != PhasedState {
 		return "", false
 	}
 	phase := PhasePlan
@@ -80,7 +86,7 @@ func PhaseOf(issue Issue, events []IssueEvent) (Phase, bool) {
 // into in_progress enters plan, and a phase move enters the phase it names.
 func phaseSetBy(event IssueEvent) (Phase, bool) {
 	for _, change := range event.Changes {
-		if change.Field == "status" && change.To == string(StateInProgress) {
+		if change.Field == "status" && change.To == string(PhasedState) {
 			return PhasePlan, true
 		}
 		if event.Action == string(ActionPhase) && change.Field == PhaseField {
@@ -88,6 +94,20 @@ func phaseSetBy(event IssueEvent) (Phase, bool) {
 		}
 	}
 	return "", false
+}
+
+// ConfigurationOf is every state node issue's row and history put it in,
+// outermost first within each region: its status, then the phase PhaseOf
+// reads while it has one, then its retention. A transition's crossings are
+// the difference between the configurations on either side of its write, and
+// they read this order as the nesting: walked backward it is innermost first,
+// the order a statechart exits in. [LAW:one-source-of-truth]
+func ConfigurationOf(issue Issue, events []IssueEvent) []StateNode {
+	nodes := []StateNode{lifecycle.StatusNode(issue.State())}
+	if phase, ok := PhaseOf(issue, events); ok {
+		nodes = append(nodes, lifecycle.PhaseNode(phase))
+	}
+	return append(nodes, lifecycle.RetentionNode(issue.Retention()))
 }
 
 // PhaseChange is a planned phase move: the phase the ticket is in and the one

@@ -40,9 +40,9 @@ func mustSub(fsys embed.FS, dir string) fs.FS {
 // by ID with the nearer layer winning.
 //
 // Load cannot fail: an absent layer contributes nothing, and every per-file
-// problem — unreadable entry, malformed frontmatter, inert or unknown-event
-// definitions — is returned as a Warning instead of an error, because a
-// broken workflow file must never break a lit invocation.
+// problem — an unreadable entry, malformed frontmatter, no keys, an entry
+// naming nothing lit fires — is returned as a Warning instead of an error,
+// because a broken workflow file must never break a lit invocation.
 func Load(env environ.Env, workspaceRoot string) Set {
 	type layer struct {
 		fsys   fs.FS
@@ -112,16 +112,8 @@ func loadLayer(fsys fs.FS, source templates.Source) ([]Definition, []Warning) {
 		if entry.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}
-		raw, readErr := fs.ReadFile(fsys, path)
-		if readErr != nil {
-			warnings = append(warnings, Warning{Source: source, Path: path, Message: "cannot read: " + readErr.Error()})
-			return nil
-		}
-		def, parseWarns, ok := parseDefinition(string(raw), path, source)
-		warnings = append(warnings, parseWarns...)
-		if !ok {
-			return nil
-		}
+		def, fileWarns := readDefinition(fsys, path, source)
+		warnings = append(warnings, fileWarns...)
 		if prior, dup := claimedBy[def.ID]; dup {
 			warnings = append(warnings, Warning{Source: source, Path: path, Message: fmt.Sprintf("duplicate id %q (already defined by %s): file ignored", def.ID, prior)})
 			return nil
@@ -131,6 +123,19 @@ func loadLayer(fsys fs.FS, source templates.Source) ([]Definition, []Warning) {
 		return nil
 	})
 	return definitions, warnings
+}
+
+// readDefinition is one *.md file as a definition. A file that cannot be read
+// never fires, under the id its path gives, like any file lit cannot fire on.
+// [LAW:no-silent-failure] it still holds that id, so a farther layer's
+// definition of that id does not fire in its place.
+func readDefinition(fsys fs.FS, path string, source templates.Source) (Definition, []Warning) {
+	raw, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		def := Definition{ID: DefaultID(path), Source: source, Path: path}
+		return def, []Warning{{Source: source, Path: path, Message: "cannot read: " + err.Error()}}
+	}
+	return parseDefinition(string(raw), path, source)
 }
 
 func projectWorkflowsDir(workspaceRoot string) pathspec.PathSpec {

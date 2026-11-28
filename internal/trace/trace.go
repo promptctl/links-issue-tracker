@@ -1,6 +1,6 @@
 // Package trace is the one place a durable, timestamped JSON trace record is
 // written to disk. It owns only the filename/collision mechanics — directory
-// layout, unique id minting, atomic create-exclusive write, retry on
+// layout, unique id minting, an exclusive create of the record's file, retry on
 // collision — never the record shape, which stays each caller's own type.
 // [LAW:one-source-of-truth] Every trace kind (automation traces today,
 // workflow firing traces alongside them) shares this one writer instead of
@@ -25,13 +25,22 @@ func Dir(storageDir string, kind string) string {
 }
 
 // Write mints a unique, timestamp-ordered id for a new trace record, lets
-// build marshal the caller's record shape for that id, and writes it
-// atomically under Dir(storageDir, kind). On a filename collision (two
+// build marshal the caller's record shape for that id, and writes it to a
+// file it creates exclusively under Dir(storageDir, kind), so no record
+// overwrites another; the create is atomic, the write that fills it is not.
+// On a filename collision (two
 // records minted in the same nanosecond) it retries with a fresh timestamp;
 // build runs again each attempt so the record's stamped id/timestamp always
 // matches the file it lands in. [LAW:no-silent-failure] every failure mode
 // (mkdir, marshal, write) returns a wrapped error naming the trace kind.
+//
+// A storageDir that is not absolute is refused: it would land the record
+// wherever the process happens to run. [LAW:single-enforcer] every trace kind
+// writes through here, so none needs a guard of its own.
 func Write(storageDir string, kind string, slug string, build func(id string, recordedAt time.Time) ([]byte, error)) (id string, path string, err error) {
+	if !filepath.IsAbs(storageDir) {
+		return "", "", fmt.Errorf("write %s trace: storage dir %q is not an absolute path", kind, storageDir)
+	}
 	dir := Dir(storageDir, kind)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", fmt.Errorf("create %s trace dir: %w", kind, err)

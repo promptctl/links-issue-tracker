@@ -147,12 +147,7 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 func statuslineEvent(t *testing.T) (map[string]any, int) {
 	t.Helper()
 	ev := lastEvent(t)
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, ev) {
-		if strings.HasPrefix(key, "statusline.") {
-			facts[key] = value
-		}
-	}
+	facts := prefixed(writtenFacts(t, ev), "statusline.")
 	bytes, ok := ev.Counts["statusline.bytes"]
 	if !ok {
 		t.Fatalf("%s event has no statusline.bytes count: %v", ev.Event, ev.Counts)
