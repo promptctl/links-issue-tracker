@@ -131,7 +131,7 @@ func loadLayer(fsys fs.FS, source templates.Source) ([]Definition, []Warning) {
 func readDefinition(fsys fs.FS, path string, source templates.Source) (Definition, []Warning) {
 	raw, err := fs.ReadFile(fsys, path)
 	if err != nil {
-		def := Definition{ID: defaultID(path), Source: source, Path: path}
+		def := Definition{ID: DefaultID(path), Source: source, Path: path}
 		return def, []Warning{{Source: source, Path: path, Message: "cannot read: " + err.Error()}}
 	}
 	return parseDefinition(string(raw), path, source)

@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -56,12 +58,23 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 // scaffold a new project-layer definition firing on the keys the flags name,
 // read as a definition's own keys are (readKeyFlags), in a file named after
 // them.
+//
+// The file's name is its id, and a name is a slug, so distinct bindings can
+// share one (`--label "needs design"` and `--label needs-design`), and a
+// binding can share a shipped definition's id (`--label done` and the embedded
+// done). [LAW:single-enforcer] Definitions resolve by id across every layer,
+// so the loaded set judges whether the id is free: a held id would make the new
+// file replace the definition holding it, or lose to it, rather than add one.
 func editFreshDefinition(inv Invocation, ws workspace.Info, whenTexts, labelTexts []string) error {
 	when, labels, err := readKeyFlags(whenTexts, labelTexts)
 	if err != nil {
 		return err
 	}
+	when, labels = bindingOrder(when, labels)
 	name := scaffoldName(when, labels)
+	if held, ok := workflows.Load(inv.Env, ws.RootDir).Lookup(workflows.DefaultID(name + ".md")); ok {
+		return MergeConflictError{Message: fmt.Sprintf("cannot scaffold %q: the %s definition %s already holds that id, and two definitions of one id never both fire (run `lit workflows edit %s` to change that one)", name, held.Source, held.Path, held.ID)}
+	}
 	projectPath := projectWorkflowPath(ws, name+".md")
 	if err := refuseExistingFile(projectPath, name); err != nil {
 		return err
@@ -159,11 +172,26 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 // and "enter in_progress" to "enter-in_progress.md".
 var unsafeScaffoldFilenameChars = regexp.MustCompile(`[^a-z0-9_-]+`)
 
+// bindingOrder is a binding's entries in one order, whatever order its flags
+// came in: the moments as `lit workflows` lists them (workflows.Moments), then
+// the labels sorted. A key's entries are alternatives, so a binding is a set.
+// [LAW:one-source-of-truth] the scaffold built from it, its name and its keys,
+// is the same for every ordering of the flags.
+func bindingOrder(when []workflows.Moment, labels []string) ([]workflows.Moment, []string) {
+	moments := workflows.Moments()
+	slices.SortFunc(when, func(a, b workflows.Moment) int {
+		return cmp.Compare(slices.Index(moments, a), slices.Index(moments, b))
+	})
+	slices.Sort(labels)
+	return when, labels
+}
+
 // scaffoldName is a fresh scaffold's file name, without its .md: each entry
-// it binds, as the file spells it, made filename-safe, joined by "+".
-// [LAW:one-source-of-truth] the name comes from what the file binds, so two
-// spellings of one binding (`enter in-progress`, `Enter In_Progress`) name one
-// file, and the second scaffold is refused as the conflict it is.
+// it binds, in bindingOrder, made filename-safe, joined by "+".
+// [LAW:one-source-of-truth] the name comes from what the file binds, so every
+// spelling and ordering of one binding (`enter in-progress`, `Enter
+// In_Progress`) names one file, and the second scaffold is refused as the
+// conflict it is.
 func scaffoldName(when []workflows.Moment, labels []string) string {
 	parts := append(workflows.Spellings(when), labels...)
 	for i, part := range parts {

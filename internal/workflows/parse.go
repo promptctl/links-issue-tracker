@@ -120,7 +120,7 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 
 	meta, body, err := readFrontmatter(content)
 	def := Definition{
-		ID:     precedence.First(strings.TrimSpace(meta.ID), defaultID(path)),
+		ID:     precedence.First(strings.TrimSpace(meta.ID), DefaultID(path)),
 		Name:   strings.TrimSpace(meta.Name),
 		Body:   strings.TrimSpace(body),
 		Source: source,
@@ -226,10 +226,10 @@ func unreadKeysMessage(keys []string) string {
 	return fmt.Sprintf("this lit does not read %s, so the definition never fires; it reads when: for the moments a definition fires at (when: [enter closed], when: [show_ticket]) and labels: for the tickets it fires on", strings.Join(quoted, ", "))
 }
 
-// defaultID derives a definition's ID from its layer-relative path: the ".md"
+// DefaultID derives a definition's ID from its layer-relative path: the ".md"
 // suffix dropped and spaces replaced by underscores. Same relative path at
 // two layers therefore defaults to the same ID, which is what makes layer
 // override work without authoring an explicit id.
-func defaultID(path string) string {
+func DefaultID(path string) string {
 	return strings.ReplaceAll(strings.TrimSuffix(path, ".md"), " ", "_")
 }

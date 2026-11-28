@@ -46,13 +46,19 @@ func createdOccasion(issue model.Issue) workflows.Occasion {
 }
 
 // ticketState is where a ticket stands at one moment: its row, which carries
-// its status and retention, the history read beside it, and the phase that
-// history puts it in — empty when it has none, which is every ticket not in
-// progress.
+// its status and retention, and the history read beside it, which carries its
+// phase. [LAW:one-source-of-truth] everything else about where it stands is
+// derived from those two, never stored beside them.
 type ticketState struct {
 	issue  model.Issue
 	events []model.IssueEvent
-	phase  model.Phase
+}
+
+// phase is the phase the ticket's history puts it in (model.PhaseOf), empty
+// when it has none, which is every ticket not in progress.
+func (t ticketState) phase() model.Phase {
+	phase, _ := model.PhaseOf(t.issue, t.events)
+	return phase
 }
 
 // configuration is every state node the ticket is in (model.ConfigurationOf).

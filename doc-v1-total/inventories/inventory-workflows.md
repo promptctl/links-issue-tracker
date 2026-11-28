@@ -83,7 +83,7 @@ warning).
 - Trimmed of surrounding whitespace (`internal/workflows/parse.go`, via
   `strings.TrimSpace(meta.ID)`; pinned `internal/workflows/parse_test.go` — `'  spaced  '`
   → `spaced`).
-- If empty/absent, it defaults to `defaultID(path)`: the **layer-relative file path** with the
+- If empty/absent, it defaults to `DefaultID(path)`: the **layer-relative file path** with the
   `.md` suffix removed and every space replaced by `_` (`internal/workflows/parse.go`).
   Example: `review tasks/design check.md` → `review_tasks/design_check`
   (`internal/workflows/parse_test.go`). Directory separators are **preserved** in the ID.
@@ -458,7 +458,7 @@ then the entries of every node `to` has and `from` lacks, outermost first
 
 A transition that crosses nothing still fires; only a definition bound by labels alone can
 fire on it (§4).
-Each side's row and history are read by `readTicketState` (through `ticketStateOf`) before and
+Each side's row and history are read by `readTicketState` before and
 after `Store.Apply` (`internal/cli/cli.go`).
 
 `transitionOccasion` is total: every transition builds its occasion the same way, with no
@@ -976,28 +976,42 @@ definition firing on exactly the keys the flags name:
    `--when "exit in progress"`, `--when "enter closed" --label a,b`, and `--label "  "`).
    A `--label` is a label whatever it reads like: `--label "exit plan"` binds the label
    `exit plan`.
-2. `scaffoldName(when, labels)` names the file (below); `refuseExistingFile` refuses an existing
-   one (§8.4), with the name as its subject.
+2. `bindingOrder(when, labels)` puts the entries in one order, the moments in
+   `workflows.Moments()` order and the labels sorted, since a key's entries are a set;
+   `scaffoldName(when, labels)` names the file (below). The name is the new definition's id
+   (`workflows.DefaultID`), so the loaded set is asked for it first, and an id a loaded
+   definition holds is a `MergeConflictError` (exit 5) naming it:
+   ``cannot scaffold %q: the %s definition %s already holds that id, and two definitions of one id never both fire (run `lit workflows edit %s` to change that one)``
+   (pinned `TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds`: `--label done` and
+   `--label Phase-Impl` name the embedded default, and `--when "enter closed"` names a project
+   `notes.md` declaring `id: enter-closed`). Then `refuseExistingFile` refuses an existing file
+   (§8.4), with the name as its subject.
 3. `writeWorkflowScaffold` writes `workflows.ScaffoldFresh(when, labels)` (§8.3), then stdout gets
    `scaffolded a new definition at %s`, and the file is opened/printed (§8.5).
 
 Filename:
-- `scaffoldName(when, labels)` is each moment's `Spellings` entry, then each label, as the file
-  spells them, each made filename-safe by `scaffoldFilenameSlug` and joined by `+`, plus `.md`
+- `scaffoldName(when, labels)` is each moment's `Spellings` entry, then each label, in
+  `bindingOrder`, each made filename-safe by `scaffoldFilenameSlug` and joined by `+`, plus `.md`
   (`internal/cli/workflows_edit.go`). `scaffoldFilenameSlug` replaces every run of characters
   outside `[a-z0-9_-]` with `-` (`unsafeScaffoldFilenameChars`), trims leading/trailing `-`, and
   falls back to `"definition"` if empty; the entries reach it already canonical, lowercase
   included. **Underscore is deliberately kept** so `show_ticket` → `show_ticket.md` and
   `enter in_progress` → `enter-in_progress.md` (`internal/cli/workflows_edit.go`).
-- The name comes from what the file binds, so two spellings of one binding name one file: after
-  `--when "enter in_progress"`, `--when "Enter In-Progress"` is refused as a `MergeConflictError`
-  (exit 5) (pinned `TestWorkflowsEditScaffoldsOneFilePerBinding`).
+- The name comes from what the file binds, so every spelling and ordering of one binding names
+  one file: after `--when "enter in_progress"`, `--when "Enter In-Progress"` is refused as a
+  `MergeConflictError` (exit 5), as is `--when show_ticket --when "enter closed"` after
+  `--when "enter closed" --when show_ticket`, and `--label a --label b` after
+  `--label b --label a` (pinned `TestWorkflowsEditScaffoldsOneFilePerBinding`). A slug is lossy,
+  so distinct bindings can share a name (`--label "needs design"`, `--label needs-design`); the
+  second is refused naming the first.
 - Worked examples (pinned `TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames`, each loading
   with no warning and binding exactly its keys): `--when show_ticket` → `show_ticket.md`;
   `--when "enter review"` → `enter-review.md`; `--when "Enter  In_Progress"` →
   `enter-in_progress.md`; `--when "exit in-progress"` → `exit-in_progress.md`;
-  `--when "enter archived" --when "exit live"` → `enter-archived+exit-live.md`;
-  `--label Needs-Design` → `needs-design.md`; `--label "exit plan"` → `exit-plan.md`;
+  `--when "enter archived" --when "exit live"` → `exit-live+enter-archived.md`;
+  `--when "enter closed" --when show_ticket` → `show_ticket+enter-closed.md`;
+  `--label Needs-Design` → `needs-design.md`; `--label needs-design --label blocked` →
+  `blocked+needs-design.md`; `--label "exit plan"` → `exit-plan.md`;
   `--when "enter closed" --label needs-design` → `enter-closed+needs-design.md`.
 
 ### 8.3 Fresh-scaffold file content

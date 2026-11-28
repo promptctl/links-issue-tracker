@@ -234,8 +234,10 @@ func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 		{[]string{"--when", "enter review"}, "enter-review.md", []string{"enter review"}, nil},
 		{[]string{"--when", "Enter  In_Progress"}, "enter-in_progress.md", []string{"enter in_progress"}, nil},
 		{[]string{"--when", "exit in-progress"}, "exit-in_progress.md", []string{"exit in_progress"}, nil},
-		{[]string{"--when", "enter archived", "--when", "exit live"}, "enter-archived+exit-live.md", []string{"enter archived", "exit live"}, nil},
+		{[]string{"--when", "enter archived", "--when", "exit live"}, "exit-live+enter-archived.md", []string{"exit live", "enter archived"}, nil},
+		{[]string{"--when", "enter closed", "--when", "show_ticket"}, "show_ticket+enter-closed.md", []string{"show_ticket", "enter closed"}, nil},
 		{[]string{"--label", "Needs-Design"}, "needs-design.md", nil, []string{"needs-design"}},
+		{[]string{"--label", "needs-design", "--label", "blocked"}, "blocked+needs-design.md", nil, []string{"blocked", "needs-design"}},
 		{[]string{"--label", "exit plan"}, "exit-plan.md", nil, []string{"exit plan"}},
 		{[]string{"--when", "enter closed", "--label", "needs-design"}, "enter-closed+needs-design.md", []string{"enter closed"}, []string{"needs-design"}},
 	} {
@@ -276,18 +278,65 @@ func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 	}
 }
 
-// One binding is one file whatever spelling asked for it, so a second scaffold
-// of it is refused as the conflict it is rather than written beside the first.
+// A binding is a set of entries, so every spelling and every ordering of one
+// binding names one file, and scaffolding it again is refused as the conflict
+// it is rather than written as a second definition firing beside the first.
 func TestWorkflowsEditScaffoldsOneFilePerBinding(t *testing.T) {
 	t.Parallel()
-	root := tempRepo(t)
-	if _, err := runLit(t, root, "workflows", "edit", "--when", "enter in_progress"); err != nil {
-		t.Fatalf("Run(workflows edit --when enter in_progress) error = %v", err)
+	for _, tc := range []struct{ first, again []string }{
+		{[]string{"--when", "enter in_progress"}, []string{"--when", "Enter In-Progress"}},
+		{[]string{"--when", "enter closed", "--when", "show_ticket"}, []string{"--when", "show_ticket", "--when", "enter closed"}},
+		{[]string{"--label", "b", "--label", "a"}, []string{"--label", "a", "--label", "b"}},
+	} {
+		t.Run(strings.Join(tc.again, " "), func(t *testing.T) {
+			t.Parallel()
+			root := tempRepo(t)
+			if _, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.first...)...); err != nil {
+				t.Fatalf("Run(workflows edit %v) error = %v", tc.first, err)
+			}
+			_, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.again...)...)
+			var conflict MergeConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("Run(workflows edit %v) error = %v (%T), want MergeConflictError", tc.again, err, err)
+			}
+			if entries, readErr := os.ReadDir(filepath.Join(root, ".lit", "workflows")); readErr != nil || len(entries) != 1 {
+				t.Fatalf("ReadDir(.lit/workflows) = %v, %v; want the one file the first scaffold wrote", entries, readErr)
+			}
+		})
 	}
-	_, err := runLit(t, root, "workflows", "edit", "--when", "Enter In-Progress")
-	var conflict MergeConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("Run(workflows edit --when Enter In-Progress) error = %v (%T), want MergeConflictError", err, err)
+}
+
+// A new definition's file name is its id, so a name a loaded definition
+// already holds is refused, naming that definition: written, the file would
+// silently replace a shipped default (`--label done` and the post-close
+// reminder) or lose to a project file declaring that id.
+func TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		args    []string
+		project map[string]string
+		holder  string
+	}{
+		{[]string{"--label", "done"}, nil, "embedded definition done.md"},
+		{[]string{"--label", "Phase-Impl"}, nil, "embedded definition phase-impl.md"},
+		{[]string{"--when", "enter closed"}, map[string]string{"notes.md": "---\nid: enter-closed\nwhen: [show_ticket]\n---\nnotes"}, "project definition notes.md"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			t.Parallel()
+			root := tempRepo(t)
+			for rel, content := range tc.project {
+				writeCLIWorkflow(t, root, rel, content)
+			}
+			_, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.args...)...)
+			var conflict MergeConflictError
+			if !errors.As(err, &conflict) || !strings.Contains(err.Error(), tc.holder+" already holds that id") {
+				t.Fatalf("Run(workflows edit %v) error = %v (%T), want a MergeConflictError naming the %s", tc.args, err, err, tc.holder)
+			}
+			entries, _ := os.ReadDir(filepath.Join(root, ".lit", "workflows"))
+			if len(entries) != len(tc.project) {
+				t.Fatalf("ReadDir(.lit/workflows) = %v, want nothing scaffolded", entries)
+			}
+		})
 	}
 }
 

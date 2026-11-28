@@ -1319,7 +1319,9 @@ any bound labels, annotated with the definitions active at each and their source
 copies a global or embedded one into the project as its override.
 `edit --when <moment> --label <name>` scaffolds a fresh definition firing on the keys
 it names, each flag repeatable and refused where a definition's entry would be, in a
-file named after what it binds. Both print the file's path,
+file named after what it binds, whatever order the flags came in. That name is the new
+definition's id, so a name a loaded definition already holds is refused, naming that
+definition. Both print the file's path,
 and additionally open it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
 fire, why, and the body each would inject — without anything actually firing — and

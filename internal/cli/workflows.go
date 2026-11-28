@@ -201,7 +201,7 @@ func printSpinePoint(w io.Writer, label string, at []workflows.Definition) error
 }
 
 // formatDefinitionRef is the one rendering of "which definition, from where"
-// every spine point and the warnings list shares.
+// the overview's points and dry-run's matches share.
 // [LAW:one-source-of-truth]
 func formatDefinitionRef(def workflows.Definition) string {
 	if def.Name != "" {

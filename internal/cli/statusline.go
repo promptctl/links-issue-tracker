@@ -57,7 +57,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(started(evidence.LaneProgressWith(o.Row.Issue), o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
+		facts.Record(started(evidence.LaneProgressWith(o.Row.Issue), o.Row.Issue), phaseRead(ticketState{issue: o.Row.Issue, events: evidence.IssueEvents(o.Row.Issue.ID)}))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -99,5 +99,5 @@ func started(progress claims.LaneProgress, worked model.Issue) statusline.Starte
 // lit show prints, so the file and lit agree when the file is written;
 // docs/statusline.md says when it goes stale. [LAW:one-source-of-truth]
 func phaseRead(worked ticketState) statusline.PhaseRead {
-	return statusline.PhaseRead{ID: worked.issue.ID.Raw(), Phase: string(worked.phase)}
+	return statusline.PhaseRead{ID: worked.issue.ID.Raw(), Phase: string(worked.phase())}
 }

@@ -1952,7 +1952,7 @@ func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, p
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
 	}
-	move := model.PhaseChange{From: prior.phase, To: set.Phase}
+	move := model.PhaseChange{From: prior.phase(), To: set.Phase}
 	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
 		telemetry.Set(ctx, "phase.from", string(move.From))
 		telemetry.Set(ctx, "phase.to", string(move.To))
@@ -2029,14 +2029,7 @@ func readTicketState(ctx context.Context, st storage.Store, issue model.Issue) (
 	if err != nil {
 		return ticketState{}, err
 	}
-	return ticketStateOf(issue, events), nil
-}
-
-// ticketStateOf is where issue stands given its history: the row, and the
-// phase events put it in, empty when it is not in progress.
-func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
-	phase, _ := model.PhaseOf(issue, events)
-	return ticketState{issue: issue, events: events, phase: phase}
+	return ticketState{issue: issue, events: events}, nil
 }
 
 // transitionDone is what one transition did to one ticket: where it left the

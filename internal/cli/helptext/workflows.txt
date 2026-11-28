@@ -134,8 +134,12 @@ The subcommands
   its entries, and refused when a definition's entry would be: a --when
   naming no moment lit fires, a --label no ticket could carry. The file
   shows each key it names live, and a key it leaves out as a comment. Its
-  name is the entries it binds, joined by +, so edit --when "enter
-  in-progress" writes enter-in_progress.md.
+  name is the entries it binds, the moments in the order bare lit workflows
+  lists them, then the labels sorted, joined by +, so edit --when "enter
+  in-progress" writes enter-in_progress.md, and the flags in any order write
+  one file. The name is the new definition's id, so a name a loaded
+  definition already holds is refused, naming that definition: edit --label
+  done would otherwise replace the shipped done.
 
   edit never overwrites — an occupied path fails with a conflict message,
   so edit that file directly. It always prints the path, and additionally

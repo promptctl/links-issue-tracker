@@ -7,7 +7,10 @@ import (
 )
 
 // The state nodes are every status, phase and retention the lifecycle has,
-// the phases after the status they nest inside, then the retentions.
+// the phases after the status they nest inside, then the retentions. Each
+// name is one node's: a node is its name, and `enter <state>` names no axis,
+// so a name two axes shared would be one node, and crossing it in one axis
+// would read as crossing it in the other.
 func TestStateNodesNestThePhasesInsideThePhasedState(t *testing.T) {
 	var got []string
 	for _, node := range StateNodes() {
@@ -16,6 +19,9 @@ func TestStateNodesNestThePhasesInsideThePhasedState(t *testing.T) {
 	want := []string{"open", "in_progress", "plan", "impl", "review", "merge", "closed", "live", "archived", "deleted"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("StateNodes() = %v, want %v", got, want)
+	}
+	if distinct := slices.Compact(slices.Sorted(slices.Values(got))); len(distinct) != len(got) {
+		t.Fatalf("StateNodes() = %v, want each name once", got)
 	}
 }
 
