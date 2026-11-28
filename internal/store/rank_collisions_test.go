@@ -193,7 +193,7 @@ func plantRank(t *testing.T, ctx context.Context, st *Store, id model.ID, key st
 
 func listedIDs(t *testing.T, ctx context.Context, st *Store) []model.ID {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}

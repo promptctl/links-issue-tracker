@@ -54,7 +54,7 @@ func TestListIssuesByIDsAnswersForEveryID(t *testing.T) {
 	const count = manyIDs
 	ids := makeEpics(t, ctx, st, count, "subject %d")
 
-	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
+	got, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(ids...)}})
 	if err != nil {
 		t.Fatalf("ListIssues(%d ids) error = %v", len(ids), err)
 	}
@@ -92,7 +92,7 @@ func TestListIssuesByParentIDsAnswersForEveryParent(t *testing.T) {
 		children = append(children, child.ID)
 	}
 
-	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: parents})
+	got, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(parents...)}})
 	if err != nil {
 		t.Fatalf("ListIssues(%d parents) error = %v", len(parents), err)
 	}
@@ -127,7 +127,7 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	wanted := []model.ID{children[0], children[count/2], children[count-1]}
 	asked := append(slices.Clone(wanted), parents[0])
 
-	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: asked, ParentIDs: parents})
+	got, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.And(storage.IssueID.Is(asked...), storage.IssueParent.Is(parents...))}})
 	if err != nil {
 		t.Fatalf("ListIssues(ids+parents) error = %v", err)
 	}
@@ -136,33 +136,22 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	}
 }
 
-// An id filter that narrows to nothing means no rows, and a filter of nothing
-// but blanks means no narrowing. The two are one line apart in the code and
-// opposite in effect, which is why they are pinned together: reading "empty set
-// of ids" as "no filter" turns `lit ls --parent <childless-epic>` into a listing
-// of the whole backlog.
-func TestListIssuesEmptySelectionVersusBlankFilter(t *testing.T) {
+// A selection that narrows to nothing means no rows: reading "no issue has
+// this parent" as "no selection" turns `lit ls --parent <childless-epic>` into
+// a listing of the whole backlog.
+func TestListIssuesUnderAChildlessParentListsNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	all := makeEpics(t, ctx, st, 3, "row %d")
-	childless := all[0]
+	childless := makeEpics(t, ctx, st, 3, "row %d")[0]
 
-	narrowed, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{childless}})
+	narrowed, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(childless)}})
 	if err != nil {
 		t.Fatalf("ListIssues(childless parent) error = %v", err)
 	}
 	if len(narrowed) != 0 {
-		t.Fatalf("ListIssues(childless parent) = %v, want no rows — an empty selection is not an absent filter", issueIDs(narrowed))
-	}
-
-	blank, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: []model.ID{"", "   "}})
-	if err != nil {
-		t.Fatalf("ListIssues(blank ids) error = %v", err)
-	}
-	if len(blank) != len(all) {
-		t.Fatalf("ListIssues(blank ids) returned %d issues, want all %d — a whitespace-only filter constrains nothing", len(blank), len(all))
+		t.Fatalf("ListIssues(childless parent) = %v, want no rows — an empty selection is not an absent one", issueIDs(narrowed))
 	}
 }
 
@@ -183,7 +172,7 @@ func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 		if _, err := st.RankSet(ctx, stack); err != nil {
 			t.Fatalf("RankSet(round %d) error = %v", round, err)
 		}
-		listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+		listed, err := st.ListIssues(ctx, storage.Listing{})
 		if err != nil {
 			t.Fatalf("ListIssues(round %d) error = %v", round, err)
 		}

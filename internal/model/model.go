@@ -65,7 +65,8 @@ const (
 
 var (
 	ParseState      = lifecycle.ParseState
-	ParseStates     = lifecycle.ParseStates
+	States          = lifecycle.States
+	Resolutions     = lifecycle.Resolutions
 	ParseAction     = lifecycle.ParseAction
 	Actions         = lifecycle.Actions
 	DefaultOpen     = lifecycle.DefaultOpen
@@ -391,7 +392,7 @@ func (e ContainerActionError) Unfinished() int {
 // exit-code mappings read this one predicate.
 //
 // Matching the target is not enough on its own, because two derived states
-// match one while work remains. AllOf.State returns InProgress only when
+// match one while work remains. A container's state is InProgress only when
 // Closed < Total, so `start` on a part-done epic would match its own target
 // with every child still to do; and it returns Open for a childless epic as a
 // fallback carrying no information, so `open` would match there too. Both
@@ -461,13 +462,10 @@ func (FrozenIssueError) RefusesCommand() {}
 var _ Refusal = FrozenIssueError{}
 
 // PlanStatus is root-only: it plans action against the root lifecycle primitive.
-// Multi-leaf composition (AllOf containing multiple actionable members)
-// is intentionally unsupported here; that requires a dedicated disambiguation
-// design before containers ever become actionable. Containers reject every
-// action because their state is derived from children — structurally: AllOf
-// is not a lifecycle.StatusPrimitive, and the Container branch here composes
-// the epic-aware rejection from the issue ID and child progress that only this
-// boundary holds.
+// Containers reject every action because their state is derived from their
+// leaves — structurally: a lifecycle.Tally is not a lifecycle.StatusPrimitive,
+// and the container branch here composes the epic-aware rejection from the
+// issue ID and leaf progress that only this boundary holds.
 // [LAW:types-are-the-program] No idempotent / from-state branching here:
 // lifecycle.Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
@@ -484,7 +482,7 @@ func (i Issue) PlanStatus(action lifecycle.StatusAction) (StatusChange, error) {
 	if err != nil {
 		return StatusChange{}, err
 	}
-	if _, ok := root.(lifecycle.Container); ok {
+	if i.IsContainer() {
 		// Every status action on a container is refused, including one whose
 		// target the children already establish: a container has no transition
 		// to make, so "already there" is a fact about the request rather than a
@@ -689,7 +687,7 @@ func (i Issue) IsContainer() bool {
 }
 
 // IsHydrated reports whether this issue carries a fully-hydrated lifecycle.
-// Returns false for issues constructed without HydrateStatus/HydrateAllOf
+// Returns false for issues constructed without HydrateRow or HydrateStatus
 // and for JSON-decoded containers that have not yet passed through store
 // hydration.
 func (i Issue) IsHydrated() bool {
@@ -714,33 +712,46 @@ func (i *Issue) replaceLifecycle(next lifecycle.Lifecycle) {
 	i.pendingHydration = false
 }
 
-// HydrateRow is the single shape-dispatch entry point: it picks AllOf vs the
-// leaf status primitive based on issue type and applies the matching hydrator. Callers
-// that have already loaded both the row's status view and (for containers) the
-// child issues should route through this function instead of repeating the
-// container discriminator.
+// HydrateRow is the single shape-dispatch entry point: a container is
+// hydrated from the progress its leaves have made, which an engine reads as
+// it can, and a leaf from its row's status view.
 // [LAW:single-enforcer] Container-vs-leaf hydration dispatch lives here so
 // read paths don't grow parallel branches that drift apart.
-func HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error) {
+func HydrateRow(issue Issue, view StatusView, leaves Progress) (Issue, error) {
 	if issue.IssueType.IsContainer() {
-		return HydrateAllOf(issue, children)
+		issue.replaceLifecycle(lifecycle.Tally{Leaves: leaves})
+		return issue, nil
 	}
 	return HydrateStatus(issue, view)
 }
 
-// HydrateAllOf composes child issue lifecycles into a non-actionable container.
+// HydrateAllOf is a container whose children are children, each hydrated: its
+// leaves are theirs, so its progress is theirs summed.
 // [LAW:one-source-of-truth] Container state is derived from child lifecycles, never copied into another persisted field.
 func HydrateAllOf(issue Issue, children []Issue) (Issue, error) {
-	members := make([]lifecycle.Lifecycle, 0, len(children))
-	for _, child := range children {
-		lifecycle, err := child.lifecycleOrError()
-		if err != nil {
-			return Issue{}, err
-		}
-		members = append(members, lifecycle)
+	leaves, err := ProgressOf(children)
+	if err != nil {
+		return Issue{}, err
 	}
-	issue.replaceLifecycle(lifecycle.AllOf{Members: members})
-	return issue, nil
+	return HydrateRow(issue, StatusView{}, leaves)
+}
+
+// ProgressOf is the progress the leaves of issues have made: a leaf's own, and
+// a container's leaves', summed.
+func ProgressOf(issues []Issue) (Progress, error) {
+	var out Progress
+	for _, issue := range issues {
+		l, err := issue.lifecycleOrError()
+		if err != nil {
+			return Progress{}, err
+		}
+		p := l.Progress()
+		out.Open += p.Open
+		out.InProgress += p.InProgress
+		out.Closed += p.Closed
+		out.Total += p.Total
+	}
+	return out, nil
 }
 
 func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {

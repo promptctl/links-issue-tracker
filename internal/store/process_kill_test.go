@@ -100,7 +100,7 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 
 	// The process died before DOLT_COMMIT, and the mutation's writes live in
 	// its transaction, so a fresh process finds none of them.
-	found, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"mid-mutation kill target"}})
+	found, err := st.ListIssues(ctx, selecting(t, `text~"mid-mutation kill target"`))
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

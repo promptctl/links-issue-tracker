@@ -15,7 +15,7 @@ import (
 )
 
 func (s *Store) Export(ctx context.Context) (model.Export, error) {
-	issues, err := s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})
+	issues, err := s.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})
 	if err != nil {
 		return model.Export{}, err
 	}

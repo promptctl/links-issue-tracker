@@ -462,7 +462,7 @@ func TestHelpFlagBeforeACommandAnswersForThatCommand(t *testing.T) {
 		if runErr := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); runErr != nil {
 			t.Fatalf("Run(%q) error = %v, want the help for ls", args, runErr)
 		}
-		if got := stdout.String(); !strings.HasPrefix(got, "Usage of ls:") {
+		if got := stdout.String(); !strings.Contains(got, "Usage of ls:") {
 			t.Errorf("Run(%q) stdout = %q, want the help for ls", args, got)
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -173,7 +174,7 @@ func waitForFile(t *testing.T, path string, cmd *exec.Cmd) {
 
 func countTitled(t *testing.T, ctx context.Context, st *Store, term string) int {
 	t.Helper()
-	found, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{term}})
+	found, err := st.ListIssues(ctx, selecting(t, "text~"+strconv.Quote(term)))
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

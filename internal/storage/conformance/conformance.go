@@ -194,6 +194,11 @@ var cases = []engineCase{
 	{"stamps_come_from_the_clock_the_engine_was_given", stampsComeFromTheClock},
 	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
 	{"list_updated_range_compares_instants", listUpdatedRangeComparesInstants},
+	{"a_selector_reads_every_kind_alike", aSelectorReadsEveryKindAlike},
+	{"a_selector_reads_across_edges", aSelectorReadsAcrossEdges},
+	{"a_selector_reads_an_epics_derived_state", aSelectorReadsAnEpicsDerivedState},
+	{"a_selections_universe_holds_at_every_step", aSelectionsUniverseHoldsAtEveryStep},
+	{"every_field_answers", everyFieldAnswers},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"relations_and_comments_are_totally_ordered", relationsAndCommentsAreTotallyOrdered},
 	{"adjacency_holds_what_its_edges_name", adjacencyHoldsWhatItsEdgesName},
@@ -393,13 +398,13 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, cl
 	// it enters, so the one unparsed title an engine can be handed is the zero
 	// value, and it must be refused rather than stored as the empty title.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}})
 	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	assertRefused(t, err, "CreateIssue(zero title)")
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("laneless"), Topic: "core", ParentID: epic.ID}); err == nil {
 		t.Error("CreateIssue(zero lane) error = nil, want a refusal: a lane no parser made is not the shared lane")
 	}
-	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true}); len(after) != len(before) {
+	if after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}}); len(after) != len(before) {
 		t.Errorf("issues after the refused creates = %d, want %d", len(after), len(before))
 	}
 }
@@ -527,7 +532,7 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *c
 func anAssigneeNoFilterCanSelectIsRefused(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.SharedLane, Topic: "core", Assignee: "ada", ParentID: epic.ID})
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}})
 	comma := "Doe, J"
 
 	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("comma"), Lane: storage.SharedLane, Topic: "core", Assignee: comma, ParentID: epic.ID, Prefix: prefix})
@@ -537,7 +542,7 @@ func anAssigneeNoFilterCanSelectIsRefused(t *testing.T, ctx context.Context, st 
 	_, err = st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: comma}, Actor: comma})
 	assertRefused(t, err, "Apply(start as "+comma+")")
 
-	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true}); len(after) != len(before) {
+	if after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}}); len(after) != len(before) {
 		t.Errorf("issues after the refused create = %d, want %d", len(after), len(before))
 	}
 	read, err := st.GetIssue(ctx, issue.ID)
@@ -1297,35 +1302,31 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 		t.Fatalf("AddComment error = %v", err)
 	}
 
-	hasComments := true
-	future := time.Now().UTC().Add(time.Hour)
-	past := time.Now().UTC().Add(-time.Hour)
 	for _, tc := range []struct {
-		name   string
-		filter storage.ListIssuesFilter
-		want   []model.ID
+		name     string
+		selector string
+		want     []model.ID
 	}{
-		{"by status", storage.ListIssuesFilter{Statuses: []model.State{model.StateInProgress}}, []model.ID{epic.ID, task.ID}},
-		{"by type", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}}, []model.ID{bug.ID}},
-		{"excluding a type", storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeBug}}, []model.ID{epic.ID, task.ID}},
-		{"by assignee", storage.ListIssuesFilter{Assignees: []string{"grace"}}, []model.ID{task.ID}},
-		{"by id", storage.ListIssuesFilter{IDs: []model.ID{bug.ID}}, []model.ID{bug.ID}},
-		{"by search term", storage.ListIssuesFilter{SearchTerms: []string{"widget"}}, []model.ID{bug.ID}},
-		{"search matches topic too", storage.ListIssuesFilter{SearchTerms: []string{"parser"}}, []model.ID{task.ID}},
-		{"by all labels", storage.ListIssuesFilter{LabelsAll: []string{"perf", "ui"}}, []model.ID{bug.ID}},
-		{"by a label the issue lacks", storage.ListIssuesFilter{LabelsAll: []string{"perf", "absent"}}, nil},
-		{"by comment presence", storage.ListIssuesFilter{HasComments: &hasComments}, []model.ID{bug.ID}},
-		{"updated before the future", storage.ListIssuesFilter{UpdatedBefore: &future}, []model.ID{epic.ID, bug.ID, task.ID}},
-		{"updated after the future", storage.ListIssuesFilter{UpdatedAfter: &future}, nil},
-		{"updated after the past", storage.ListIssuesFilter{UpdatedAfter: &past}, []model.ID{epic.ID, bug.ID, task.ID}},
-		// Criteria are ANDed across axes: a filter naming two axes selects the
-		// intersection, so no caller can widen a listing by adding a criterion.
-		{"two axes intersect", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}, Assignees: []string{"grace"}}, nil},
-		// A slice is ORed within itself.
-		{"one axis unions", storage.ListIssuesFilter{Assignees: []string{"ada", "grace"}}, []model.ID{bug.ID, task.ID}},
+		{"by status", "status=in_progress", []model.ID{epic.ID, task.ID}},
+		{"by type", "type=bug", []model.ID{bug.ID}},
+		{"excluding a type", "type!=bug", []model.ID{epic.ID, task.ID}},
+		{"by assignee", "assignee=grace", []model.ID{task.ID}},
+		{"by id", "id=" + string(bug.ID), []model.ID{bug.ID}},
+		{"by search term", "text~widget", []model.ID{bug.ID}},
+		{"search matches topic too", "text~parser", []model.ID{task.ID}},
+		{"by all labels", "labels=perf labels=ui", []model.ID{bug.ID}},
+		{"by a label the issue lacks", "labels=perf labels=absent", nil},
+		{"by comment presence", "comments", []model.ID{bug.ID}},
+		{"updated before the future", "updated_at<=now+1h", []model.ID{epic.ID, bug.ID, task.ID}},
+		{"updated after the future", "updated_at>=now+1h", nil},
+		{"updated after the past", "updated_at>=now-1h", []model.ID{epic.ID, bug.ID, task.ID}},
+		// Atoms are ANDed: a selector naming two fields selects the
+		// intersection, so no caller can widen a listing by adding an atom.
+		{"two atoms intersect", "type=bug assignee=grace", nil},
+		// A value list is ORed within its atom.
+		{"one atom's values union", "assignee=ada,grace", []model.ID{bug.ID, task.ID}},
 	} {
-		got := mustList(t, ctx, st, tc.filter)
-		assertIssueIDs(t, tc.name, got, tc.want)
+		assertIssueIDs(t, tc.name, mustSelect(t, ctx, st, clk, tc.selector), tc.want)
 	}
 }
 
@@ -1346,25 +1347,23 @@ func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	}
 
 	for _, tc := range []struct {
-		name   string
-		filter storage.ListIssuesFilter
-		want   []model.ID
+		name     string
+		selector string
+		want     []model.ID
 	}{
 		// Direct children only, in the canonical rank order: the grandchild
 		// belongs to second, not to the epic.
-		{"direct children of one parent", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}}, []model.ID{first.ID, second.ID}},
-		{"a child can itself be a parent", storage.ListIssuesFilter{ParentIDs: []model.ID{second.ID}}, []model.ID{grandchild.ID}},
-		{"a leaf parent has no children", storage.ListIssuesFilter{ParentIDs: []model.ID{cousin.ID}}, nil},
-		{"parents union", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID, other.ID}}, []model.ID{first.ID, second.ID, cousin.ID}},
-		{"parent intersects another axis", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}, Statuses: []model.State{model.StateInProgress}}, []model.ID{first.ID}},
+		{"direct children of one parent", "parent=" + string(epic.ID), []model.ID{first.ID, second.ID}},
+		{"a child can itself be a parent", "parent=" + string(second.ID), []model.ID{grandchild.ID}},
+		{"a leaf parent has no children", "parent=" + string(cousin.ID), nil},
+		{"parents union", "parent=" + string(epic.ID) + "," + string(other.ID), []model.ID{first.ID, second.ID, cousin.ID}},
+		{"parent intersects another atom", "parent=" + string(epic.ID) + " status=in_progress", []model.ID{first.ID}},
+		// A parent no issue holds is a parent with no children: a selector
+		// states what holds, and nothing holds of an id nobody minted.
+		{"a parent nobody minted has no children", "parent=" + string(epic.ID) + ",no-such-issue", []model.ID{first.ID, second.ID}},
 	} {
-		assertIssueIDs(t, tc.name, mustList(t, ctx, st, tc.filter), tc.want)
+		assertIssueIDs(t, tc.name, mustSelect(t, ctx, st, clk, tc.selector), tc.want)
 	}
-
-	// An unknown parent is not a parent with no children: the listing says so
-	// rather than answering with the empty list a childless parent gets.
-	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID, "no-such-issue"}})
-	assertNotFound(t, err, "issue", "ListIssues under a missing parent")
 }
 
 func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -1383,13 +1382,13 @@ func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.S
 
 	// Retention is the one axis whose default is a filter rather than an
 	// absence: saying nothing means "only what is in the flow".
-	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.ListIssuesFilter{}), []model.ID{epic.ID, live.ID})
+	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.Listing{}), []model.ID{epic.ID, live.ID})
 	assertIssueIDs(t, "including archived",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true}), []model.ID{epic.ID, live.ID, archived.ID})
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeArchived: true}}), []model.ID{epic.ID, live.ID, archived.ID})
 	assertIssueIDs(t, "including deleted",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}), []model.ID{epic.ID, live.ID, deleted.ID})
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}}), []model.ID{epic.ID, live.ID, deleted.ID})
 	assertIssueIDs(t, "including both",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}}),
 		[]model.ID{epic.ID, live.ID, archived.ID, deleted.ID})
 }
 
@@ -1402,19 +1401,19 @@ func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	assertIssueIDs(t, "sorted by title ascending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "title"}}}),
 		[]model.ID{a.ID, b.ID, c.ID, epic.ID})
 	assertIssueIDs(t, "sorted by title descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "title", Desc: true}}}),
 		[]model.ID{epic.ID, c.ID, b.ID, a.ID})
 
 	// Limit truncates the ordered result rather than sampling it, so a limited
 	// listing is the head of the unlimited one.
-	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 2}), []model.ID{epic.ID, b.ID})
+	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.Listing{Limit: 2}), []model.ID{epic.ID, b.ID})
 	// Zero is not a limit of zero; it is the absence of a limit.
-	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 0}), []model.ID{epic.ID, b.ID, a.ID, c.ID})
+	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.Listing{}), []model.ID{epic.ID, b.ID, a.ID, c.ID})
 
-	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "nonsense"}}}); err == nil {
+	if _, err := st.ListIssues(ctx, storage.Listing{Sort: []storage.SortSpec{{Field: "nonsense"}}}); err == nil {
 		t.Error("sorting by an unknown field succeeded; want an error")
 	}
 }
@@ -1436,19 +1435,19 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 	ascending := []model.ID{epic.ID, first.ID, second.ID, third.ID}
 	slices.Sort(ascending)
 	assertIssueIDs(t, "tied titles ordered by id",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "title"}}}),
 		ascending)
 
 	// Descending reverses the named key, never the tie-break: id stays
 	// ascending, so a caller paging a descending listing sees a stable order.
 	assertIssueIDs(t, "tied titles descending still ordered by id",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "title", Desc: true}}}),
 		ascending)
 
 	// The id key itself, descending: the one listing the trailing id key cannot
 	// answer for it, since that key would put the rows back in ascending order.
 	assertIssueIDs(t, "sorted by id descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "id", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "id", Desc: true}}}),
 		[]model.ID{ascending[3], ascending[2], ascending[1], ascending[0]})
 }
 
@@ -1498,10 +1497,10 @@ func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Stor
 
 		pair := []model.ID{first.ID, second.ID}
 		assertIssueIDs(t, "sorted by "+row.key+" ascending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key}, {Field: "created_at"}}}),
+			mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: row.key}, {Field: "created_at"}}}),
 			[]model.ID{first.ID, second.ID})
 		assertIssueIDs(t, "sorted by "+row.key+" descending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at", Desc: true}}}),
+			mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at", Desc: true}}}),
 			[]model.ID{second.ID, first.ID})
 	}
 }
@@ -1540,11 +1539,11 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 	// "closed" < "in_progress" < "open" as tokens, and the epic derives
 	// in_progress, so it sorts BETWEEN the two leaves in both directions.
 	assertIssueIDs(t, "container sorts among the leaves ascending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status"}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(onlyLeavesAndEpic...)}, Sort: []storage.SortSpec{{Field: "status"}}}),
 		[]model.ID{closedLeaf.ID, epic.ID, openLeaf.ID})
 
 	assertIssueIDs(t, "container sorts among the leaves descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(onlyLeavesAndEpic...)}, Sort: []storage.SortSpec{{Field: "status", Desc: true}}}),
 		[]model.ID{openLeaf.ID, epic.ID, closedLeaf.ID})
 }
 
@@ -1628,16 +1627,16 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 
 	pair := []model.ID{older.ID, newer.ID}
 	assertIssueIDs(t, "sorted by created_at ascending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at"}, {Field: "updated_at"}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: "created_at"}, {Field: "updated_at"}}}),
 		[]model.ID{older.ID, newer.ID})
 	assertIssueIDs(t, "sorted by created_at descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at", Desc: true}}}),
 		[]model.ID{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at ascending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at"}, {Field: "created_at"}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: "updated_at"}, {Field: "created_at"}}}),
 		[]model.ID{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(pair...)}, Sort: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at", Desc: true}}}),
 		[]model.ID{older.ID, newer.ID})
 }
 
@@ -1656,23 +1655,24 @@ func listUpdatedRangeComparesInstants(t *testing.T, ctx context.Context, st stor
 	clk.Pin(earlierInstant)
 	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("updated earlier"), Lane: storage.SharedLane, Topic: "clock", ParentID: earlierEpic.ID})
 
-	between := earlierInstant.Add(time.Millisecond)
-	pair := []model.ID{earlier.ID, later.ID}
+	between := model.StampText(earlierInstant.Add(time.Millisecond))
+	pair := "id=" + string(earlier.ID) + "," + string(later.ID) + " "
 	for _, tc := range []struct {
-		name   string
-		filter storage.ListIssuesFilter
-		want   []model.ID
+		name     string
+		selector string
+		want     []model.ID
 	}{
-		{"after a bound between them", storage.ListIssuesFilter{UpdatedAfter: &between}, []model.ID{later.ID}},
-		{"before a bound between them", storage.ListIssuesFilter{UpdatedBefore: &between}, []model.ID{earlier.ID}},
-		{"after the earlier instant itself", storage.ListIssuesFilter{UpdatedAfter: &earlierInstant}, []model.ID{earlier.ID, later.ID}},
-		{"before the later instant itself", storage.ListIssuesFilter{UpdatedBefore: &laterInstant}, []model.ID{earlier.ID, later.ID}},
-		{"after the later instant itself", storage.ListIssuesFilter{UpdatedAfter: &laterInstant}, []model.ID{later.ID}},
-		{"before the earlier instant itself", storage.ListIssuesFilter{UpdatedBefore: &earlierInstant}, []model.ID{earlier.ID}},
+		{"after a bound between them", "updated_at>=" + between, []model.ID{later.ID}},
+		{"before a bound between them", "updated_at<=" + between, []model.ID{earlier.ID}},
+		{"after the earlier instant itself", "updated_at>=" + model.StampText(earlierInstant), []model.ID{earlier.ID, later.ID}},
+		{"before the later instant itself", "updated_at<=" + model.StampText(laterInstant), []model.ID{earlier.ID, later.ID}},
+		{"after the later instant itself", "updated_at>=" + model.StampText(laterInstant), []model.ID{later.ID}},
+		{"before the earlier instant itself", "updated_at<=" + model.StampText(earlierInstant), []model.ID{earlier.ID}},
+		{"strictly after the earlier instant", "updated_at>" + model.StampText(earlierInstant), []model.ID{later.ID}},
+		{"strictly before the later instant", "updated_at<" + model.StampText(laterInstant), []model.ID{earlier.ID}},
 	} {
-		tc.filter.IDs = pair
-		tc.filter.SortBy = []storage.SortSpec{{Field: "updated_at"}}
-		assertIssueIDs(t, tc.name, mustList(t, ctx, st, tc.filter), tc.want)
+		byUpdate := storage.Listing{Selection: storage.Selection{Selector: mustParse(t, clk, pair+tc.selector)}, Sort: []storage.SortSpec{{Field: "updated_at"}}}
+		assertIssueIDs(t, tc.name, mustList(t, ctx, st, byUpdate), tc.want)
 	}
 }
 
@@ -1833,7 +1833,7 @@ func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage
 	if !end.Moved {
 		t.Error("RankToTop of the second child reported no move; want one")
 	}
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertPrecedes(t, listed, second.ID, first.ID)
 	// The epic itself never moved, so the standalone filed after it still
 	// follows it. A child's edge move that reshuffles the top level is the
@@ -1908,7 +1908,7 @@ func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st st
 	if end.Frame != storage.Frame(epic.ID) {
 		t.Errorf("RankToTop reported frame %q, want the epic %q", end.Frame, epic.ID)
 	}
-	assertPrecedes(t, mustList(t, ctx, st, storage.ListIssuesFilter{}), lead.ID, tail.ID)
+	assertPrecedes(t, mustList(t, ctx, st, storage.Listing{}), lead.ID, tail.ID)
 }
 
 // createAtTopFilesInsideItsFrame is rankToEdgeStaysInsideItsFrame's creation
@@ -1937,7 +1937,7 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 	firstLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first lead"), Lane: storage.SharedLane, Topic: "core", ParentID: firstEpic.ID, Placement: storage.RankTop})
 	secondLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second lead"), Lane: storage.SharedLane, Topic: "core", ParentID: secondEpic.ID, Placement: storage.RankTop})
 
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	// Each new issue leads the siblings it was filed among. True of the defect
 	// as well, and asserted anyway: it is what filing at the top is for, and a
@@ -1954,7 +1954,7 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 	// The top level is a frame like any other, so an epic filed at the top
 	// with no parent leads the epics that share that frame.
 	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top lead"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
-	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed = mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, topLead.ID, outsider.ID)
 	assertPrecedes(t, listed, topLead.ID, firstEpic.ID)
@@ -1990,7 +1990,7 @@ func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Cont
 	}
 
 	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("new lead"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, lead.ID, child.ID)
 	// The key belongs to the frame it was filed into: after the epic that holds
@@ -2002,7 +2002,7 @@ func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Cont
 	if _, err := st.RankToTop(ctx, moved.ID); err != nil {
 		t.Fatalf("RankToTop(moved) error = %v", err)
 	}
-	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed = mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, moved.ID, lead.ID)
 	assertPrecedes(t, listed, epic.ID, moved.ID)
@@ -2037,7 +2037,7 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("trailing"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("only child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, first.ID, only.ID)
 	assertPrecedes(t, listed, epic.ID, only.ID)
@@ -2050,7 +2050,7 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 	// The second child, filed at the top of a frame that now holds one, leads
 	// it — the frame has an order to lead again.
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
-	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed = mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, second.ID, only.ID)
 }
@@ -2078,7 +2078,7 @@ func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st s
 	if _, err := st.RankBelow(ctx, child.ID, standalone.ID); err != nil {
 		t.Fatalf("RankBelow(child, standalone) error = %v", err)
 	}
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, standalone.ID, epic.ID)
 	assertPrecedes(t, listed, epic.ID, child.ID)
@@ -2087,7 +2087,7 @@ func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st s
 	if _, err := st.RankAbove(ctx, child.ID, standalone.ID); err != nil {
 		t.Fatalf("RankAbove(child, standalone) error = %v", err)
 	}
-	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed = mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, epic.ID, standalone.ID)
 	assertPrecedes(t, listed, epic.ID, child.ID)
@@ -2119,7 +2119,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 
 	// The named order holds among the siblings, and the unnamed one keeps its
 	// place behind them.
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, c3.ID, c1.ID)
 	assertPrecedes(t, listed, c1.ID, c2.ID)
@@ -2175,14 +2175,14 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 	for _, child := range children {
 		frame[child.ID] = struct{}{}
 	}
-	before := ranksByID(mustList(t, ctx, st, storage.ListIssuesFilter{}))
+	before := ranksByID(mustList(t, ctx, st, storage.Listing{}))
 
 	named := []model.ID{children[2].ID, children[0].ID, children[1].ID}
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet over every child error = %v", err)
 	}
 
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "the epic's children after rank set", childrenOf(listed, frame), named)
 	after := ranksByID(listed)
@@ -2224,7 +2224,7 @@ func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.St
 		t.Fatalf("RankSet error = %v", err)
 	}
 	assertOrder(t, ctx, st, "after a set from mid-frame", third.ID, inner.ID, second.ID, child.ID, first.ID, fourth.ID)
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	if after := mustGet(t, ctx, st, child.ID).Rank; after != childKey {
 		t.Errorf("rank set among top-level issues moved a child: rank %q -> %q", childKey, after)
@@ -2237,7 +2237,7 @@ func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.St
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet repeated error = %v", err)
 	}
-	for id, key := range ranksByID(mustList(t, ctx, st, storage.ListIssuesFilter{})) {
+	for id, key := range ranksByID(mustList(t, ctx, st, storage.Listing{})) {
 		if key != settled[id] {
 			t.Errorf("a repeat of an order that has arrived moved %s: rank %q -> %q", id, settled[id], key)
 		}
@@ -2325,7 +2325,7 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 
 	// Nothing that was not named may have moved, and nothing may have fallen out
 	// of the order entirely.
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	found := false
 	for _, issue := range listed {
 		if issue.ID == bystander.ID {
@@ -2364,17 +2364,17 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	if _, err := st.RankBelow(ctx, epic.ID, last.ID); err != nil {
 		t.Fatalf("RankBelow(epic, last) error = %v", err)
 	}
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after the epic is moved past its own children", listed,
 		[]model.ID{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
 	assertIssueIDs(t, "descending is the same order reversed",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "rank", Desc: true}}}),
+		mustList(t, ctx, st, storage.Listing{Sort: []storage.SortSpec{{Field: "rank", Desc: true}}}),
 		[]model.ID{grandchild.ID, nested.ID, child.ID, epic.ID, last.ID, outer.ID})
 	// The epic's key orders its descendants even in a listing that leaves the
 	// epic out.
 	assertIssueIDs(t, "a listing without the container still orders by it",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []model.ID{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID}}),
+		mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(outer.ID, last.ID, child.ID, nested.ID, grandchild.ID)}}),
 		[]model.ID{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID})
 
 	if _, err := st.RankAbove(ctx, epic.ID, outer.ID); err != nil {
@@ -2388,7 +2388,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	if _, err := st.RankSet(ctx, []model.ID{outer.ID, last.ID}); err != nil {
 		t.Fatalf("RankSet(outer, last) error = %v", err)
 	}
-	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed = mustList(t, ctx, st, storage.Listing{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after a rank set displaces the epic past its own children", listed,
 		[]model.ID{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
@@ -2429,7 +2429,7 @@ func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storag
 	}
 	// Nothing inside the epic was reordered, and the epic now precedes the
 	// standalone.
-	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	listed := mustList(t, ctx, st, storage.Listing{})
 	assertPrecedes(t, listed, epic.ID, standalone.ID)
 
 	// An issue and its own container share no comparable frame, so there is no
@@ -3145,7 +3145,7 @@ func mustBlock(t *testing.T, ctx context.Context, st storage.Store, dependent, d
 // listed issues by id.
 func mustListIDs(t *testing.T, ctx context.Context, st storage.Store, want []model.ID) map[model.ID]model.Issue {
 	t.Helper()
-	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	listed, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}
@@ -3408,7 +3408,7 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 	// The two file imports are gated before their first write: a file with a
 	// loose leaf, or a leaf named as a parent, is refused whole, with nothing
 	// of it landed.
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}})
 	epicTitle, leafTitle, underTitle, topic := "bulk epic", "bulk leaf", "bulk under a leaf", "core"
 	epicType, leafType, bugType := "epic", "task", "bug"
 	for _, imp := range []struct {
@@ -3452,7 +3452,7 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 			t.Errorf("%s error = %v; want a ValidationError", imp.what, err)
 		}
 	}
-	after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true, IncludeArchived: true}})
 	if len(after) != len(before) {
 		t.Errorf("issues after the refused imports = %d, want %d: a file the gate refuses writes nothing", len(after), len(before))
 	}
@@ -3947,13 +3947,13 @@ func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st sto
 	if got := len(result.Ranked.Resolutions); got != 10 {
 		t.Errorf("BulkApply ranked %d issues, want 10", got)
 	}
-	landed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	landed := mustList(t, ctx, st, storage.Listing{})
 
 	clk.Pin(start.Add(2 * time.Hour))
 	if _, err := st.BulkApply(ctx, prefix, "ada", specs); err != nil {
 		t.Fatalf("BulkApply again error = %v", err)
 	}
-	again := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	again := mustList(t, ctx, st, storage.Listing{})
 	assertIssueIDs(t, "after importing the same ordering again", again, want)
 	for i, issue := range again {
 		if issue.Rank != landed[i].Rank || !issue.UpdatedAt.Equal(landed[i].UpdatedAt) {
@@ -3985,7 +3985,7 @@ func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st
 		t.Errorf("the ordering landed in frame %q, want the epic %s", result.Ranked.Frame, epic.ID)
 	}
 	frame := map[model.ID]struct{}{created: {}, first.ID: {}, second.ID: {}}
-	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), []model.ID{created, first.ID, second.ID})
+	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.Listing{}), frame), []model.ID{created, first.ID, second.ID})
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -4178,13 +4178,30 @@ func mustCreate(t *testing.T, ctx context.Context, st storage.Store, in storage.
 	return issue
 }
 
-func mustList(t *testing.T, ctx context.Context, st storage.Store, filter storage.ListIssuesFilter) []model.Issue {
+func mustList(t *testing.T, ctx context.Context, st storage.Store, listing storage.Listing) []model.Issue {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, filter)
+	issues, err := st.ListIssues(ctx, listing)
 	if err != nil {
-		t.Fatalf("ListIssues(%+v) error = %v", filter, err)
+		t.Fatalf("ListIssues(%+v) error = %v", listing, err)
 	}
 	return issues
+}
+
+// mustParse reads text as a selector against the instant the case's clock
+// reads, so a stamp written from now is the instant the engine stamps with.
+func mustParse(t *testing.T, clk *clock, text string) storage.Selector {
+	t.Helper()
+	sel, err := storage.ParseSelector(text, clk.read())
+	if err != nil {
+		t.Fatalf("ParseSelector(%q) error = %v", text, err)
+	}
+	return sel
+}
+
+// mustSelect lists what text selects.
+func mustSelect(t *testing.T, ctx context.Context, st storage.Store, clk *clock, text string) []model.Issue {
+	t.Helper()
+	return mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: mustParse(t, clk, text)}})
 }
 
 func mustGet(t *testing.T, ctx context.Context, st storage.Store, id model.ID) model.Issue {
@@ -4200,7 +4217,7 @@ func mustGet(t *testing.T, ctx context.Context, st storage.Store, id model.ID) m
 // retention state, so a membership assertion is never narrowed by visibility.
 func mustChildren(t *testing.T, ctx context.Context, st storage.Store, parentID model.ID) []model.Issue {
 	t.Helper()
-	return mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []model.ID{parentID}, IncludeArchived: true, IncludeDeleted: true})
+	return mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(parentID), IncludeArchived: true, IncludeDeleted: true}})
 }
 
 func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.IssueEvent {
@@ -4217,7 +4234,7 @@ func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.Iss
 // value itself is an engine's own encoding and is deliberately never asserted.
 func assertOrder(t *testing.T, ctx context.Context, st storage.Store, what string, want ...model.ID) {
 	t.Helper()
-	assertIssueIDs(t, what, mustList(t, ctx, st, storage.ListIssuesFilter{}), want)
+	assertIssueIDs(t, what, mustList(t, ctx, st, storage.Listing{}), want)
 }
 
 // assertState reads an issue back and pins its derived state, including the

@@ -67,19 +67,19 @@ type workableGather struct {
 	facts queueFacts
 }
 
-// keepRows narrows the gather to the rows the criteria select and RELEASES
+// keepRows narrows the gather to the rows asked selected and RELEASES
 // everything else: the dropped rows' relations go with them, so what this
 // returns retains a view, not a queue. The facts derived before the narrowing
 // are carried through unchanged, which is the whole point of deriving them
 // first. [LAW:one-source-of-truth]
-func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather {
+func (g workableGather) keepRows(asked issueSet) workableGather {
 	// Sized for what is kept rather than for what was gathered: hinting the
 	// queue's length would leave a filter that keeps ten of 590 rows holding a
 	// 590-slot array, which is the queue this says it released.
 	var rows []annotation.AnnotatedIssue
 	details := map[model.ID]storage.IssueRelations{}
 	for _, row := range g.rows {
-		if criteria.Selects(row.Issue) {
+		if asked.has(row.ID) {
 			rows = append(rows, row)
 			details[row.ID] = g.details[row.ID]
 		}

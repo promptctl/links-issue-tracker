@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"errors"
+	"slices"
 	"strings"
 )
 
@@ -45,12 +46,16 @@ func (r Resolution) RedirectsToCanonical() bool {
 // [LAW:single-enforcer] The only string-to-Resolution gate; every trust
 // boundary calls this instead of carrying its own equality chain.
 func ParseResolution(s string) (Resolution, error) {
-	switch r := Resolution(strings.TrimSpace(s)); r {
-	case ResolutionDuplicate, ResolutionSuperseded, ResolutionObsolete, ResolutionWontfix:
+	if r := Resolution(strings.TrimSpace(s)); slices.Contains(Resolutions(), r) {
 		return r, nil
-	default:
-		return "", errors.New("resolution must be one of: duplicate, superseded, obsolete, wontfix")
 	}
+	return "", errors.New("resolution must be one of: duplicate, superseded, obsolete, wontfix")
+}
+
+// Resolutions lists every resolution. ParseResolution's admissible set and
+// every listing of the resolutions derive from it. [LAW:one-source-of-truth]
+func Resolutions() []Resolution {
+	return []Resolution{ResolutionDuplicate, ResolutionSuperseded, ResolutionObsolete, ResolutionWontfix}
 }
 
 func cloneResolution(value *Resolution) *Resolution {

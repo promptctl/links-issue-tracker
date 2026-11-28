@@ -392,7 +392,7 @@ Test evidence:
 5. `issueid.NormalizeTopicForCreate(in.Topic)` (`store.go`) — error propagated. Missing topic yields an error containing `"topic is required"` (`store_test.go`).
 6. `createdBy := storage.Actor(in.Actor)` — the event actor, the label creator, the parent-edge creator, and the id hash's creator (`store.go`).
 7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Plan, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
-8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)` — new issues start `open` (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
+8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, model.Progress{})` — new issues start `open`, and a new epic has no leaves (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
 10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
 
@@ -470,8 +470,6 @@ updated_at, closed_at, resolution, redirect_target, follows_up, archived_at, del
 
 `scanIssue(row)` (`store.go`) scans the 20 columns positionally in `issueColumns` order, `work_plan` straight into `issue.Plan`, with `prompt`, `status`, `closedAt`, `resolution`, `redirectTarget`, `followsUp`, `archivedAt`, `deletedAt` as `sql.NullString`; sets `issue.Prompt = prompt.String` and `issue.FollowsUp = followsUp.String` (NULL → `""`); delegates to `parsedIssueRow`.
 
-`scanIssueWithParent(row)` (`store.go`) — identical but with a leading `parentID string` column.
-
 `parsedIssueRow(...)` (`store.go`):
 - parses `created_at`/`updated_at` via `scanTime` (errors propagate);
 - `statusView := model.StatusView{Value: model.State(status.String)}` — NULL status becomes `model.State("")`;
@@ -483,11 +481,11 @@ updated_at, closed_at, resolution, redirect_target, follows_up, archived_at, del
 
 #### 5.3 `hydrateIssues(ctx, rows []issueRow) ([]model.Issue, error)`
 
-`store.go`. `hydrateIssues` is `hydrateBelow(ctx, rows, make([]*descent, len(rows)))`: the rows the caller asked for carry no descent chain. `descent{id string; up *descent}` is the chain of containers a hydration came down through to reach a row, nearest first, sharing its tail. `hydrateBelow(ctx, rows, chains)` — query count is **fixed per recursion level**, not per epic:
+`store.go`. `hydrateIssues` is `hydrateKnowing(ctx, rows, nil)`; `hydrateKnowing` takes the progress a caller has read already (`ListIssues` hands it the status reading's, §5.7). The query count is **fixed**, not per epic or per level:
 1. Empty input → `([]model.Issue{}, nil)` with no query (`store.go`).
 2. One `loadLabelsByIssueIDs` query for all ids (`store.go`).
-3. Collects container ids, and for each container a chain `below[id] = &descent{id: id, up: chains[i]}`; one `lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` call for all of them (`store.go`).
-4. Per row, builds a `model.Issue` copying every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, and calls `model.HydrateRow(base, row.Status, childrenByEpicID[id])` (`store.go`).
+3. One `epicProgress(ctx, unknown)` call for the container rows `known` does not hold, below, merged with `known`; none when it holds them all (`store.go`; `internal/store/walk.go`).
+4. Per row, `rowFields(row.Issue, labelsByID[id])` copies every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, then `model.HydrateRow(base, row.Status, progress[id])` — a leaf reads its status view, an epic its leaves' tally, the zero `model.Progress` for an epic the walk tallied nothing under (`store.go`).
 5. Post-condition: `!issue.IsHydrated()` → `fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)` (`store.go`).
 
 `loadLabelsByIssueIDs` (`store.go`):
@@ -496,20 +494,39 @@ SELECT l.issue_id, l.label FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PA
 ```
 failure → `fmt.Errorf("load labels by issue ids: %w", err)`.
 
-`lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` (`store.go`) — one query however many epics, the epic ids joined as an `idSet` (an empty set is a join against no rows):
+`walkCTE(seed)` (`internal/store/walk.go`) is the one statement of which leaves an epic's state is read from, shared by hydration and by a selection that reads a state (§5.7). It opens a statement with two CTEs:
 ```sql
-SELECT r.dst_id, <issueColumnsQualified>
-FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS epics
-JOIN relations r ON r.dst_id = epics.id
-JOIN issues i ON i.id = r.src_id
-JOIN issues p ON p.id = r.dst_id
-WHERE r.type = 'parent-child'
-    AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
-ORDER BY r.dst_id ASC, i.item_rank ASC
+WITH RECURSIVE descent (root, node, path, looped) AS (
+    SELECT r.dst_id, r.src_id, CAST(CONCAT(',', r.dst_id, ',') AS CHAR(16000)), r.src_id = r.dst_id
+    FROM <seed>
+    JOIN issues p ON p.id = r.dst_id JOIN issues c ON c.id = r.src_id
+    WHERE r.type = 'parent-child' AND <countsUnder>
+    UNION ALL
+    SELECT d.root, r.src_id, CONCAT(d.path, d.node, ','), LOCATE(CONCAT(',', r.src_id, ','), CONCAT(d.path, d.node, ',')) > 0
+    FROM descent d
+    JOIN relations r ON r.dst_id = d.node AND r.type = 'parent-child'
+    JOIN issues p ON p.id = r.dst_id JOIN issues c ON c.id = r.src_id
+    WHERE NOT d.looped AND <countsUnder>
+), tally (id, open, started, closed, loop_path) AS (
+    SELECT d.root,
+        COALESCE(SUM(CASE WHEN n.status = 'open' THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN n.status = 'in_progress' THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN n.status = 'closed' THEN 1 ELSE 0 END), 0),
+        MIN(CASE WHEN d.looped THEN CONCAT(d.path, d.node) END)
+    FROM descent d JOIN issues n ON n.id = d.node
+    GROUP BY d.root
+)
 ```
-failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`. Each child row's chain is its epic's, `below[parentIDs[i]]`; `chain.loopTo(child.ID)` walks that chain from the epic upward and, when it reaches the child's own id, returns the ids walked — the epic first, the child last, each the child of the next and the last the child of the first — and the call returns `storage.ParentCycleError{Cycle: loop}` before any child is hydrated. Otherwise the rows are hydrated in **one** recursive `hydrateBelow(ctx, childRows, chains)` call and re-bucketed by the parallel `parentIDs` slice (`store.go`). Only containers enter a chain, so the refusal is met by a loop of epics. Tests: `TestAReadRefusesAStoredLoopOfEpicsByName` (`ListIssues` and `GetIssue` over a two-epic loop return `ParentCycleError` naming exactly those two; `hierarchy_cycle_test.go`), `TestListRefusesAStoredLoopByName` (`lit ls`: exit 7, reason `parent_cycle`; `internal/cli/parent_cycle_test.go`).
+- `descent` is every issue below an epic; an epic's column status is NULL, so `tally` counts only leaves (`walk.go`).
+- `countsUnder` is the container rule for the edge from parent `p` to child `c`: `(p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (c.archived_at IS NULL AND c.deleted_at IS NULL))` — a live parent counts only its live children, a parent out of the flow every child, so an archived epic keeps the state it left with (`walk.go`).
+- The walk carries the path it came down; a child already on it marks its row `looped`, which the recursion does not descend from, so a parent loop ends the walk rather than running it forever. `tally.loop_path` spells one loop below each epic that reaches one (`walk.go`).
+- `loopFrom(spelled)` (`walk.go`) names that loop: the last id of the spelled path is the repeating issue, and the loop is the stretch of the path from its first place to the end, reversed, so nearest first and each the child of the next — `storage.ParentCycleError{Cycle: loop}`.
 
-Evidence: listing query count for 1 epic equals that for 5 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go`, wrapper). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go`).
+`epicProgress(ctx, epicIDs)` (`walk.go`): empty ids → an empty map with no query; otherwise `walkCTE(<idSet> seed JOIN relations r ON r.dst_id = seed.id)` + `SELECT id, open, started, closed, loop_path FROM tally`, through `tallies`. An epic with no leaves has no tally row and is absent from the map.
+
+`tallies(ctx, query, args...)` (`walk.go`): query failure → `fmt.Errorf("tally epic progress: %w", err)`; scans each row into `model.Progress{Open, InProgress, Closed}` beside `loop_path`; a non-NULL `loop_path` returns `loopFrom(loop)` at once, so a read meeting an epic on or above a parent loop is refused naming it; otherwise `Total = Open + InProgress + Closed`. Tests: `TestAReadRefusesAStoredLoopOfEpicsByName` (`ListIssues` and `GetIssue` over a two-epic loop return `ParentCycleError` naming exactly those two and the `lit parent set --child` repair; `hierarchy_cycle_test.go`), `TestListRefusesAStoredLoopByName` (`lit ls`: exit 7, reason `parent_cycle`; `internal/cli/parent_cycle_test.go`).
+
+Evidence: listing query count for 1 epic equals that for 40 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go`). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go`).
 
 #### 5.4 `GetIssue(ctx, id) (model.Issue, error)`
 
@@ -517,7 +534,7 @@ Evidence: listing query count for 1 epic equals that for 5 epics, measured by a 
 ```sql
 SELECT <issueColumnsBare> FROM issues WHERE id = ?
 ```
-`sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: id}`; any other scan error is returned raw; then `hydrateIssues([]issueRow{scanned})` and `hydrated[0]`. Total queries: 1 + 1 (labels) + 0-or-1 (children of a container).
+`sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: id}`; any other scan error is returned raw; then `hydrateIssues([]issueRow{scanned})` and `hydrated[0]`. Total queries: 1 + 1 (labels) + 0-or-1 (the walk, for a container).
 
 #### 5.5 `getIssuesByIDs(ctx, ids) (map[string]model.Issue, error)`
 
@@ -546,54 +563,74 @@ Errors: `"load issues by id: %w"`, `"scan loaded issue: %w"`, `"iterate loaded i
 6. `bucketRelations(id, relations, relatedByID)` → `structural` with `Parent`, `BlockedBy`, `Blocks`, and `Children` in sibling order (`internal/store/relations.go`).
 7. `related := relatedFrom(id, relations, relatedByID)` (`internal/store/relations.go`).
 8. `sortInTreeOrder(ctx, s.db, structural.BlockedBy, structural.Blocks, related)` (`internal/store/ranking.go`), which reads the ancestry only of groups holding two or more issues.
-9. If `structural.Parent != nil`: `childrenOf(ctx, structural.Parent.ID)` — `childIDsOfParents`, then `getIssuesByIDs`, then `storage.SortSiblings`, so the parent's children in every retention state on their own keys — then `siblingsOf(id, parentChildren)`; otherwise the empty slice (`store.go`).
+9. If `structural.Parent != nil`: `childrenOf(ctx, structural.Parent.ID)` — `childIDsOfParents` (one `SELECT /*+ JOIN_ORDER(parents, r) LOOKUP_JOIN(parents, r) */ r.src_id FROM <idSet> parents JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, failure → `"list children of parents: %w"`), then `getIssuesByIDs`, then `storage.SortSiblings`, so the parent's children in every retention state on their own keys — then `siblingsOf(id, parentChildren)`; otherwise the empty slice (`store.go`).
 10. `redirectTarget` and `followsUp` are set only if the id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
 
 Evidence: `BlockedBy`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
 
-#### 5.7 `ListIssues(ctx, filter storage.ListIssuesFilter) ([]model.Issue, error)`
+#### 5.7 `ListIssues(ctx, listing storage.Listing) ([]model.Issue, error)` and `SelectIssueIDs(ctx, selection storage.Selection) ([]model.ID, error)`
 
-`store.go`. Base query: `SELECT <issueColumnsQualified> FROM issues i` (`store.go`).
+`internal/store/selection.go`. Both run `where(ctx, selection)`, the selection's predicate:
+1. `derivedFacts(ctx, selection)` — the facts no column holds, read before the statement (below).
+2. `compileSelection(selection, facts)` — the WHERE predicate.
 
-WHERE clauses, appended in this exact order:
+`SelectIssueIDs` runs `SELECT i.id FROM issues i WHERE <predicate> ORDER BY i.id`; failure → `fmt.Errorf("select issues: %w", err)`. Returns `[]model.ID{}` (never nil), id ascending, nothing hydrated. `ListIssues` continues, in this order (`selection.go`):
+1. `SELECT <issueColumnsQualified> FROM issues i WHERE <predicate>` through `scanIssueRows` — errors `"load issues by id: %w"`, `"scan loaded issue: %w"`, `"iterate loaded issues: %w"` (`store.go`).
+2. `listingOrdering(ctx, listing.Sort, listed)` (`ranking.go`) — `loadRankAncestryAbove(ctx, s.db, listed)`, the framing edges above the listed rows, one level of parents a query, each a run of index lookups (`rankClimbQuery`), then `storage.IssueOrdering(listing.Sort, ancestry)` (`internal/storage/ordering.go`); an unsupported sort field is `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`. The comparator: no specs → `rank`; sort keys (`sortKeys(ancestry)`, the table both engines share): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`; `Desc` negates a key's comparator; ascending `id` is always the final tiebreaker.
+3. `hydrateKnowing(ctx, rows, facts.progress)` (§5.3) — the walk reads only the listed epics the status reading did not, which is none when the selector reads a status.
+4. `slices.SortStableFunc(hydrated, ordering)`, then `capLimit(hydrated, listing.Limit)`.
 
-| Condition | Clause | Line |
-|---|---|---|
-| `!filter.IncludeArchived` | `i.archived_at IS NULL` | `store.go` |
-| `!filter.IncludeDeleted` | `i.deleted_at IS NULL` | `store.go` |
-| `len(filter.IssueTypes) > 0` | `i.issue_type IN (?...)` | `store.go` |
-| `len(filter.ExcludeIssueTypes) > 0` | `i.issue_type NOT IN (?...)` | `store.go` |
-| `len(filter.Assignees) > 0` (blank entries skipped; clause omitted if all blank) | `i.assignee IN (?...)` | `store.go` |
-| `filter.UpdatedAfter != nil` | `i.updated_at >= ?` bound with `model.StampText` | `store.go` |
-| `filter.UpdatedBefore != nil` | `i.updated_at <= ?` same formatting | `store.go` |
-| `filter.HasComments != nil`, true | `EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go` |
-| `filter.HasComments != nil`, false | `NOT EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go` |
-| each canonicalized label in `filter.LabelsAll` | `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (one clause per label — AND semantics) | `store.go` |
-| `len(filter.ParentIDs) > 0` (after `requireIssues(ctx, filter.ParentIDs)` passes) | no clause of its own: `selectedIssueIDs` resolves the parents to their children's ids and folds them into the id filter below | `store.go` |
-| `selectedIssueIDs` reports the ids restricted (even to none) | no clause: the scan's row source becomes the `idSet` joined to `issues i ON i.id = sel.id`, so the listing is one query however many ids it names | `store.go` |
-| each non-blank `filter.SearchTerms` term, lowercased & trimmed | `(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)` with `%term%` bound five times | `store.go` |
+Statements: a listing's count is the same for forty epics as for one, with a selector reading a state, a path, a negation and a count (`TestAListingsStatementsDoNotGrowWithWhatItLists`), and a listing that reads a status costs no statement more than one that reads none (`TestAListingThatReadsAStatusWalksOnce`), both counted at the driver (`selection_plan_test.go`).
 
-Clauses are joined with `" AND "` (`store.go`).
-
-**Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
-
-Ordering is not SQL. `listingOrdering(ctx, filter.SortBy, selected, restricted)` (`ranking.go`) runs after `requireIssues` and `selectedIssueIDs`. A listing restricted to known rows reads the framing edges above them through `loadRankAncestryAbove`, one query a level; any other reads them all through `loadRankAncestry`: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL` — `frameColumn`'s rule for every issue at once. Either way the rows are scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, ancestry)` (`internal/storage/ordering.go`, called from `ranking.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs those reads and not the listing query; it yields a comparator over hydrated issues:
-- no specs → `rank`;
-- sort keys (`sortKeys(ancestry)`, `internal/storage/ordering.go`, the table both engines share): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`;
-- `Desc` negates a key's comparator;
-- ascending `id` is always the final tiebreaker.
-
-Execution and post-processing:
-- each id batch's query runs through `scanListRows`; failure → `fmt.Errorf("list issues: %w (query=%s)", err, query)` — the full SQL is included (`store.go`);
-- rows scanned via `scanIssue`, `rows.Err()` checked (`store.go`);
-- `hydrateIssues` (`store.go`);
-- `slices.SortStableFunc(hydrated, ordering)`, then return `capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit)` (`store.go`).
-
-`filterByState` (`store.go`): empty allow-list passes everything; otherwise keeps issues whose **derived** `issue.State()` is in the set.
-`filterByResolution` (`store.go`): empty allow-list passes everything; otherwise drops every issue whose `ResolutionValue()` is nil and keeps only matching resolutions.
 `capLimit` (`store.go`): `limit <= 0` means uncapped; else truncates to the first `limit`.
 
-Evidence: epic state is filtered by derived lifecycle, not the dead `i.status` column, across open/mixed/closed epic shapes (`store_test.go`); all advanced filters combine correctly to a single result (`store_test.go`); archived issues disappear from the default list and reappear with `IncludeArchived` (`store_test.go`).
+A selection over a parent loop: a selector that reads a status refuses when any admitted epic sits on or above a loop, whatever it selects (`admittedProgress`, below); one that reads none answers, and `ListIssues` then refuses only when a listed epic is on or above one (hydration, §5.3). Test: `TestASelectionReadingAStateRefusesAStoredLoop` — `status=open`, `status!=closed`, `title=Outside status=open`, `children(status=open)` and `/issues(status=closed)/count=0` each refuse with the two-epic loop named, and `title=Outside` answers (`selection_test.go`).
+
+**The compiler.** `frag{sql string; args []any}` is SQL text with the arguments it binds, in binding order; `sqlf(text, args...)` makes one, `joinFrags(sep, parts)` joins texts with `sep` and concatenates their args, and `f.within(before, after)` wraps the text (`selection.go`). `compiler{selection, facts derived, aliases int}` mints aliases with `fresh(prefix)` — `prefix` plus a counter shared by the whole statement. An atom is TRUE where it holds and FALSE or NULL where it does not, which a WHERE reads alike, so an atom on an indexed column is one the planner reads through the index; a negation (`!=`, `!path`) is `negate(atom)` = `NOT COALESCE(atom, FALSE)`, so a NULL column reads as no value (`selection.go`).
+
+- `compileSelection(selection, facts)` = `admits("i") AND conjunction(selection.Selector.Atoms(), "i")` (`selection.go`).
+- `admits(a)` — `a.archived_at IS NULL` unless `IncludeArchived`, `a.deleted_at IS NULL` unless `IncludeDeleted`, joined with `AND`; `TRUE` when both are included. It is applied at every issue a path reaches as at the listed one (`selection.go`).
+- `conjunction(atoms, a)` — `TRUE` for no atoms; otherwise the atoms stably sorted by `atomCost` and joined with `AND`: `0` for an atom reading the row's own column (`ownValue`: one step, not anchored, at a field whose values are neither rows, `Of() != nil`, nor a list, `Texts`, `Records`, `Rows` — `listField`), `1` for any other. Dolt evaluates `AND` left to right and stops at the first false, and runs a subquery when a row first asks it, so a statement whose own atoms keep no row runs none (`selection.go`).
+- `reach(path, from)` — the tables a path joins and the expressions its values are over the last of them, read from the issue bound as `from`, or from the workspace for `""`. A step at a row-valued field binds a fresh `i<n>`, appends `rowJoins`, and adds `admits(i<n>)` and the step's own `(selector)` conjunction to the last join's condition, its values being `i<n>.id`; any other step appends `fieldValues`. `body(cond)` is `FROM t1, t2, … WHERE <every join's condition> AND (cond)` (`selection.go`).
+- `atom(atom, a)` per test (`selection.go`): `Count` → `counted(path, a, test)`; `Presence` → `holding(path, a, present)`, negated for `Absent`; `Match` → `holding(path, a, matches)` with `!=` compiled as `=` and negated; any other test type panics `store: a selector test of type %T has no SQL`. "Any value" is `anyValue`, the values' conditions joined with `OR`.
+- `holding(path, a, cond)` — some value the path reads satisfies `cond`: for `ownValue`, `(<any value>)` over `a`'s own columns; for an anchored path, `inWorkspace(body)`; otherwise `heldFrom` (`selection.go`).
+- `heldFrom(path, a, rest)` — the path read from a fresh `i<n>` with `issues i<n>` joined first, and `memberOf(a.id, SELECT i<n>.id <rest>)`: one subquery that reads nothing of `a`, so it runs once, and no reference to `a` sits where Dolt misbinds one, inside an `ON` (a sibling's "not this issue" held of the issue itself) or an `OR` (`selection.go`).
+- `memberOf(v, subquery)` = `COALESCE(v IN (<subquery>), FALSE)`. Inside an expression Dolt runs the subquery once and hashes what it selects (`InSubquery` over a `cacheable` `Subquery`); a bare `IN` over a subquery in a WHERE is a semi-join, which Dolt plans by the tables' sizes, on a small store as a nested-loop `SemiJoin` that runs the subquery again for every row (`selection.go`).
+- `inWorkspace(rest)` = `memberOf(1, SELECT 1 <rest>)`: Dolt caches no `EXISTS`, so inside an expression an `EXISTS` runs again for every row (`selection.go`).
+- `present(v)` = `COALESCE(v, '') <> ''` — the empty text and NULL are no value.
+- `valueMatch(v, op, values)`: `=` → `inList`; `~` → per value `LOWER(v) LIKE ? ESCAPE '\\'` bound `%<value>%`, joined with `OR`, the value escaped by `likeEscaper` (`\` → `\\`, `%` → `\%`, `_` → `\_`) so `%` and `_` mean themselves as in the in-memory engine; `<` `<=` `>` `>=` → `v OP ?` with the one value. A stamp value is its `model.StampText`, compared as text against the stored stamp column (`selection.go`; `internal/selector/parse.go`).
+- `counted(path, a, test)`: an anchored path → `inWorkspace(<body with present(v)> HAVING <countMatch(COUNT(DISTINCT v), test)>)`, one aggregate, which has a row even over no values. Any other path → `heldFrom(... GROUP BY i<n>.id HAVING <countMatch(COUNT(DISTINCT v), test)>)`; when `test.Holds(0)` (`internal/selector/selector.go`, the count rule the in-memory engine reads too) it is `negate(heldFrom(... HAVING NOT (<countMatch>)))`, since a row the path reads nothing from is in no group (`selection.go`).
+- `countMatch(count, test)`: `=` → `count IN (?...)`; `!=` → `NOT (count IN (?...))`; an ordering → `count OP ?` (`selection.go`).
+- `inList(v, values)`: one value → `v = ?`, one index range; more → `memberOf(v, SELECT j.v FROM JSON_TABLE(?, '$[*]' COLUMNS (v VARCHAR(16383) PATH '$')) j)` bound as one JSON array, because the planner turns each value of a literal list into an index range and merges the ranges pairwise (`idset.go`) (`selection.go`).
+
+Plans: every atom form, negated and nested, plans each subquery to run once — no `cacheable: false`, no subquery printed inside an expression, no nested-loop `SemiJoin` or `AntiJoin` (`TestEverySubqueryOfASelectionRunsOnce`) — and `id=<x>` reads the issue through the `issues.id` index (`TestASelectionNamingAnIssueReadsItByIndex`, `selection_plan_test.go`).
+
+`rowJoins(f, from, to)` (`selection.go`) — each row-valued field's joins, `r<n>` a fresh relations alias; the last join is always the issue table, so `reach` can hold it to the universe:
+
+| Field | Joins and conditions |
+|---|---|
+| `/issues` | `issues to` on `TRUE` |
+| `parent` | `relations r`: `r.src_id = from.id AND r.type = 'parent-child'`; `issues to`: `to.id = r.dst_id` |
+| `children` | `relations r`: `r.dst_id = from.id AND r.type = 'parent-child'`; `issues to`: `to.id = r.src_id` |
+| `siblings` | `relations up`: `up.src_id = from.id`, parent-child; `issues parent`: `parent.id = up.dst_id AND admits(parent)`; `relations r`: `r.dst_id = up.dst_id`, parent-child, `r.src_id <> from.id`; `issues to`: `to.id = r.src_id` |
+| `blocked_by` | `relations r`: `r.src_id = from.id AND r.type = 'blocked-by'`; `issues to`: `to.id = r.dst_id` |
+| `blocks` | `relations r`: `r.dst_id = from.id AND r.type = 'blocked-by'`; `issues to`: `to.id = r.src_id` |
+| `related` | `relatedEnds r` — every `related-to` edge as `(near, far)` from each of its ends, a `UNION ALL` of `relations` — `r.near = from.id`; `issues to`: `to.id = r.far`. The equality joins as a hash join; an `OR` of the two directions plans as a nested loop over `relations` and `issues`, and a `CASE` choosing the far end crashed Dolt's planner inside a grouped count |
+| `follows_up` | `issues to`: `to.id = from.follows_up` |
+| `follow_ups` | `issues to`: `to.follows_up = from.id` |
+| `redirect_target` | `issues to`: `to.id = from.redirect_target` |
+
+Any other field panics `store: field %s has no SQL`.
+
+`fieldValues(f, a)` (`selection.go`) — the column a field reads: `id`, `title`, `topic`, `issue_type`, `assignee`, `lane`, `resolution`, `created_at`, `updated_at`, `closed_at`, `description`, `agent_prompt` (prompt), `work_plan` (plan); `priority` → `CASE a.priority WHEN <n> THEN '<name>' … END` over `model.Priorities()` (`priorityName`); `text` → five values, `a.title`, `a.description`, `COALESCE(a.agent_prompt, '')`, `a.work_plan`, `a.topic`; `status` → `COALESCE(a.status, <derivedValue(states)>)`, a leaf's column and an epic's derived state; `phase` → `derivedValue(phases)`; `labels` → join `labels l<n>` on `l<n>.issue_id = a.id`, value `l<n>.label`; `comments` → join `comments c<n>`, value `c<n>.id`; `plan_reviews` → join `plan_reviews v<n>`, value `v<n>.id`. Any other field panics `store: field %s has no SQL`.
+
+`derivedValue(f, fact, a)` (`selection.go`): a fact the statement did not read panics `store: a selection compiled <field> without reading it`; with no values, the fallback alone (`?` bound to `fact.otherwise`, or `NULL` when it is empty); otherwise `CASE WHEN a.id IN <inList of ids> THEN ? … ELSE <fallback> END`, values in sorted order.
+
+`derivedFacts(ctx, selection)` (`selection.go`) reads only what the selector reads anywhere, at any step or in any filter (`Selector.Reads`): the status field → `admittedProgress(ctx, selection)`, kept as `facts.progress`, and `statesOf(progress)`; the phase field → `leafPhases(ctx)`. A selection that reads no state therefore answers over a loop it never reads.
+- `admittedProgress` (`walk.go`): `walkCTE(relations r)` over every edge, then `SELECT i.id, COALESCE(t.open, 0), COALESCE(t.started, 0), COALESCE(t.closed, 0), t.loop_path FROM issues i LEFT JOIN tally t ON t.id = i.id WHERE <i is a container type> AND <admits(i)>` through `tallies`, so every admitted epic has a progress, none for one with no leaves, and a looped admitted epic refuses. `statesOf` (`selection.go`) gives each epic `model.Progress.State()` (`internal/model/lifecycle/all_of.go`) — the rule the in-memory engine derives, not a second statement of it; `otherwise` is `open`.
+- `leafPhases` (`selection.go`): `SELECT id FROM issues WHERE status = ?` bound `in_progress`, failure → `"read in-progress leaves: %w"`; then the events with their changes, `WHERE e.issue_id IN (SELECT id FROM issues WHERE status = ?)`, failure → `"read in-progress histories: %w"`; each leaf's phase is `model.PhaseFrom(history)` (`internal/model/phase.go`). `otherwise` is empty, so every other issue has no phase.
+
+Evidence: epic state is selected by its leaves, not the NULL `i.status` column, across open/mixed/closed epic shapes (`TestListIssuesStatusFilterUsesDerivedEpicState`, `store_test.go`); one selector of ten atoms — `status=open type=task assignee=bmf text~renderer text~"draw prep" id=<a>,<b> labels=renderer comments updated_at>=now-1h updated_at<=now+1h` — selects the one issue (`TestStoreListIssuesSupportsAdvancedFilters`, `store_test.go`); archived issues are absent from the default listing and present with `IncludeArchived` (`store_test.go`). The selector cases both engines answer alike are in `internal/storage/conformance/selector.go`.
 
 #### 5.8 `ListTopics(ctx) ([]string, error)`
 
@@ -607,7 +644,7 @@ failure → `fmt.Errorf("list topics: %w", err)`. Returns `[]string{}` (never ni
 ```sql
 SELECT id, topic FROM issues ORDER BY id ASC
 ```
-failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.IssueIdentity{}` (never nil) plus `rows.Err()`. No hydration, so it never reaches `lifecycleChildrenByEpicIDs`, which refuses a parent loop of epics with `storage.ParentCycleError`.
+failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.IssueIdentity{}` (never nil) plus `rows.Err()`. No hydration, so it never reaches the walk (`epicProgress`, `internal/store/walk.go`), which refuses an epic on or above a parent loop with `storage.ParentCycleError`.
 
 #### 5.9 Relation, comment, and label reads
 
@@ -2284,7 +2321,7 @@ model.Export{Version: model.ExportVersion, WorkspaceID: workspaceID,
   - `view.ClosedAt = cellTimePtr(rec["closed_at"])`
   - if `cellString(rec["resolution"]) != ""`, `view.Resolution = &model.Resolution(raw)`
   - if `cellString(rec["redirect_target"]) != ""`, `view.RedirectTarget = &raw`
-- Returns `model.HydrateRow(issue, view, nil)` (shapemap.go) — its error is propagated up through `assembleExport`.
+- Returns `model.HydrateRow(issue, view, model.Progress{})` (shapemap.go) — its error is propagated up through `assembleExport`.
 
 ### 7. Fan-out: `issue_history` → events + conditional event_changes
 
@@ -2585,7 +2622,7 @@ The store's `taken` probe counts ALL issues including soft-deleted ones, so a so
 
 ### 2.7 Parsing / validation of an existing ID
 
-There is no ID parser or validator in this slice: lookups bind the id verbatim (e.g. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` — `internal/store/store.go`), and `ListIssues`' `IDs` filter only trims and drops empties, through `storage.TrimmedNonEmpty`, before `i.id IN (...)` — `internal/store/store.go`. No case normalization is applied to a supplied ID anywhere in these files.
+There is no ID parser or validator in this slice: lookups bind the id verbatim (e.g. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` — `internal/store/store.go`), and a selector's `id` atom compares its values as written — `storage.IssueID` is a text field with no parser (`internal/storage/issue_fields.go`) — in `i.id IN (...)` (`internal/store/selection.go`). No case normalization is applied to a supplied ID anywhere in these files.
 
 ---
 
@@ -2624,7 +2661,7 @@ Errors: `execDelete` wraps a delete failure as `fmt.Errorf("delete %s: %w", subj
 
 - `loadLabelsByIssueIDs` — `internal/store/store.go`: one query, the ids joined as an `idSet` — `SELECT l.issue_id, l.label FROM <idSet> named JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
-- List filtering by label — `internal/store/store.go`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
+- Selection by label — `internal/store/selection.go`: a `labels` atom joins `labels l<n>` on `l<n>.issue_id = i.id` and tests `l<n>.label`, so `labels=a,b` is `EXISTS (SELECT 1 FROM labels l<n> WHERE l<n>.issue_id = i.id AND (l<n>.label IN (?, ?)))`; each value is canonicalized by `model.NormalizeLabel` when the selector is parsed (`internal/storage/issue_fields.go`).
 - Insert (`insertLabelTx`, shared by `writeLabelsTx`, import/restore and the delta replay): `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("insert label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go`.
 - Orphan check: `SELECT COUNT(*) FROM labels l LEFT JOIN issues i ON i.id = l.issue_id WHERE i.id IS NULL` — `internal/store/import_export.go`.
 - Delta replay uses `deleteLabelTx` + `insertLabelTx` keyed on `labelKey{issueID, name}` — `internal/store/export_delta.go`.
@@ -2801,10 +2838,11 @@ via `fmt.Sprintf` for the FROM clause onward, read through `queryRelations` (`re
 
 ### 4.11 Listing by parent
 
-Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7); there is no separate children query.
-- `requireIssues(ctx, filter.ParentIDs)` runs before the parents are resolved — `internal/store/store.go`, defined. Empty ids → no query at all. Otherwise one query, the ids joined as an `idSet` against `issues`; query error → `fmt.Errorf("check issues exist: %w", err)`. Its answer is a found-set, the only thing the verdict reads. Walking the caller's own ids in the order given, the first one absent from that set → `storage.NotFoundError{Entity: "issue", ID: id}`, so a repeated id is still named once. The query reads existence only, so a soft-deleted or archived parent passes.
-- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs one `SELECT /*+ JOIN_ORDER(parents, r) LOOKUP_JOIN(parents, r) */ r.src_id FROM <idSet> parents JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
-- `TestStoreListByParentDefaultsToRankOrder` — two children wired by `SetParent` list in rank order — `internal/store/store_test.go`.
+Children are read through `Store.ListIssues` with a selector holding a `parent` atom (§5.7) — `storage.IssueParent.Is(ids...)` from a program, `parent=<id>,...` from `lit ls --parent` and `lit children` (`internal/storage/issue_fields.go`; `internal/cli/cli.go`); there is no separate children query.
+- The atom compiles to `EXISTS (SELECT 1 FROM relations r<n>, issues i<m> WHERE r<n>.src_id = i.id AND r<n>.type = 'parent-child' AND i<m>.id = r<n>.dst_id AND <admits(i<m>)> AND TRUE AND (i<m>.id IN (?...)))` (`internal/store/selection.go`). Only direct children match, several parent ids union in the one list, and the parent is held to the read's universe like the child: a child of an archived parent is selected only with `IncludeArchived`.
+- The store checks no parent's existence: an id naming no issue selects nothing. `lit ls` and `lit children` refuse it before the listing (`requireParents`, `internal/cli/selection.go`).
+- Ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `Sort`).
+- `TestStoreListByParentDefaultsToRankOrder` — two children filed under one epic list in rank order — `internal/store/store_test.go`.
 - `TestListByParentReturnsEpicChildrenWithDerivedLifecycle` — a sub-epic listed under its root carries container progress derived from its closed leaf (closed 1, total 1) — `internal/store/store_test.go`.
 
 ---
@@ -2986,7 +3024,7 @@ Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (over each key 
 
 `rowQueryer` interface with just `QueryContext` so the same loaders run on `*sql.DB` and `*sql.Tx` — `internal/store/ranking.go`.
 
-`liveIssueIDs(ctx)` — `internal/store/ranking.go`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)`. Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek.
+`liveIssueIDs(ctx)` — `internal/store/ranking.go`: `s.SelectIssueIDs(ctx, storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen, model.StateInProgress)})`; error → `fmt.Errorf("list live issues: %w", err)`. Archived and deleted issues are outside that selection's universe; an epic's state is the one its leaves derive (`walkCTE`, `internal/store/walk.go`), never its NULL column.
 
 `loadRankOrder(ctx, q)` — `internal/store/ranking.go`: `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL`, then `slices.SortFunc(order, compareRankedIssues)`; errors `fmt.Errorf("query rank order: %w", err)`, `fmt.Errorf("scan rank order: %w", err)`, `fmt.Errorf("rank order rows: %w", err)`. Every non-deleted issue, closed and archived ones included — the set the rank verbs place among — in key order.
 
@@ -3108,7 +3146,7 @@ Slice: `internal/store/import_export.go`, `import_bulk.go`, `import_tree.go`, `e
 
 It performs seven reads and assembles one value (`import_export.go`):
 
-1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: the SQL carries no ORDER BY; `ListIssues` sorts the hydrated issues with `slices.SortStableFunc` and the comparator `storage.IssueOrdering(filter.SortBy, ancestry)` returns, which with no `SortBy` specs compares the `rank` key and then the id (`store.go`; `internal/storage/ordering.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
+1. `s.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})` (`import_export.go`). A zero `Limit` disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true makes the selection's `admits` `TRUE`, and the empty selector's conjunction is `TRUE` too (`internal/store/selection.go`), so **archived and soft-deleted issues are exported**. Ordering: the selection's statement orders by `i.id` and the hydrating read carries no ORDER BY; `ListIssues` sorts the hydrated issues with `slices.SortStableFunc` and the comparator `storage.IssueOrdering(listing.Sort, ancestry)` returns, which with no `Sort` specs compares the `rank` key and then the id (`selection.go`; `internal/storage/ordering.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
 2. `queryRelations(ctx, s.db, "relations")` (`import_export.go`) — every relation, sorted in Go by `storage.RelationOrdering`: the `created_at` instant, then `src_id`, `dst_id`, `type`.
 3. `queryComments(ctx, s.db, "comments")` (`import_export.go`) — every comment, sorted in Go by `storage.CommentOrdering`: the `created_at` instant, then `id`.
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).

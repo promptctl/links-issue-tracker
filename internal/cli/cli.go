@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/query"
+	"github.com/promptctl/links-issue-tracker/internal/selector"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -667,36 +667,30 @@ func listPositionals(raw []string, surface listSurface) ([]string, error) {
 const lsAtFlag = "at"
 
 func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
-	fs := newCobraFlagSet(surface.name)
+	fs := newCobraFlagSet(surface.name).Detail(listReference())
 	// No backquotes in usage text: pflag reads the first backquoted span as the
 	// flag's value placeholder, so help would print `--at lit stores`.
 	at := registerPath(fs, lsAtFlag, "List a discovered store by its storage directory (from lit stores), read-only, instead of the current workspace")
-	// StringArray, not String: the filter this feeds is a set both engines OR
-	// together, so a second --status has to widen the listing rather than
-	// silently keep the last value and drop the first.
-	// [LAW:no-silent-failure] [LAW:types-are-the-program]
-	// StringArray rather than StringSlice deliberately: pflag's slice flag would
-	// split on commas itself, leaving two splitters for one grammar. Handing the
-	// raw occurrences to model.ParseStates keeps that rule in one place, shared
-	// with the query term. [LAW:single-enforcer]
+	// Each filter flag stands for one selector atom (see flagSelector). A
+	// set-valued one is a StringArray, not a String, so a second occurrence
+	// widens the set rather than silently replacing the first; and not a
+	// StringSlice, whose own comma split would be a second splitter for one
+	// grammar. [LAW:no-silent-failure] [LAW:single-enforcer]
 	status := fs.StringArray("status", "Filter by status, comma-separated or repeated: open|in_progress|closed")
-	// Every set-valued filter below is a StringArray for the reason --status is
-	// one: a second occurrence widens the set rather than replacing the first.
-	// [LAW:no-silent-failure]
 	issueType := fs.StringArray("type", "Filter by issue type, comma-separated or repeated: "+issueTypeChoices())
 	assignee := fs.StringArray("assignee", assigneeFlagUsage)
 	// Repeated, never comma-split: search text may itself contain a comma, and
 	// each occurrence is one more term every match must contain.
-	search := fs.StringArray("search", "Search title and description text; repeat to require every term")
+	search := fs.StringArray("search", "Search every text field (as --query 'text~...'); repeat to require every term")
 	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
 	parent := fs.StringArray("parent", "Only direct children of these issue IDs, comma-separated or repeated (lit children <id> is lit ls --parent <id>)")
 	labels := fs.StringArray("labels", "Labels all of which must match, comma-separated or repeated")
-	hasComments := fs.Bool("has-comments", false, "Only include issues with comments")
+	hasComments := fs.Bool("has-comments", false, "Only include issues with comments; =false, only those without")
 	includeArchived := fs.Bool("include-archived", false, "Include archived issues")
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
-	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
-	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:closed,in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
+	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after a stamp, as --query 'updated_at>=...' reads it")
+	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before a stamp, as --query 'updated_at<=...' reads it")
+	queryExpr := fs.String("query", "", "Selector every listed issue satisfies; its grammar and fields are below")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: "+strings.Join(sortedListFormatNames(), "|"))
@@ -722,109 +716,58 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 		telemetry.Set(ctx, "ls.format", formatName)
 		visited := map[string]bool{}
 		fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
-		// A bad member of a set filter is a validation refusal: it repeats on
-		// every retry, so it must not draw retry advice. [LAW:no-silent-failure]
-		statuses, err := model.ParseStates(*status...)
-		if err != nil {
-			return model.ValidationError{Message: "parse --status: " + err.Error()}
-		}
-		issueTypes, err := parseIssueTypeSet(*issueType)
-		if err != nil {
-			return err
-		}
-		assignees, err := parseAssigneeSet(*assignee)
-		if err != nil {
-			return err
-		}
-		searchTerms, err := parseSearchTerms(*search)
-		if err != nil {
-			return err
-		}
-		issueIDs, err := parseIDSet(*ids)
-		if err != nil {
-			return err
-		}
+		// One instant for the whole command: every stamp written from now, in
+		// --query and in the --updated flags alike, reads against it.
+		// [LAW:no-ambient-temporal-coupling]
+		now := time.Now()
 		// Parent ids are read before the surface's positional joins the set:
 		// `--parent ""` names no parent whichever command carries it.
 		parentNames, err := storage.ParseNames("--parent needs an issue id in every slot, e.g. --parent <epic-id>", *parent...)
-		parentIDs := model.IDsOf(parentNames)
-		if err != nil {
-			return err
-		}
-		labelNames, err := parseLabelSet(*labels)
 		if err != nil {
 			return err
 		}
 		// A surface's positionals are parent ids too, so `children <id>` and
-		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
-		parentIDs = append(parentIDs, model.IDsOf(positional)...)
-		limitValue, err := query.ParseLimit(*limit)
+		// `ls --parent <id>` build the same atom. [LAW:one-source-of-truth]
+		parentNames = append(parentNames, positional...)
+		flagged, err := flagSelector(now, []flagAtom{
+			{flag: "status", path: storage.IssueStatus.Name(), op: selector.Eq, values: *status, split: true},
+			{flag: "type", path: storage.IssueType.Name(), op: selector.Eq, values: *issueType, split: true},
+			{flag: "assignee", path: storage.IssueAssignee.Name(), op: selector.Eq, values: *assignee, split: true},
+			{flag: "ids", path: storage.IssueID.Name(), op: selector.Eq, values: *ids, split: true},
+			{flag: "parent", path: storage.IssueParent.Name(), op: selector.Eq, values: parentNames},
+			{flag: "labels", path: storage.IssueLabels.Name(), op: selector.Eq, values: *labels, split: true, each: true},
+			{flag: "search", path: storage.IssueText.Name(), op: selector.Contains, values: *search, each: true},
+			{flag: "has-comments", path: storage.IssueComments.Name(), op: presenceOf(*hasComments), given: visited["has-comments"]},
+			{flag: "updated-after", path: storage.IssueUpdatedAt.Name(), op: selector.Ge, values: occurrence(visited["updated-after"], *updatedAfter)},
+			{flag: "updated-before", path: storage.IssueUpdatedAt.Name(), op: selector.Le, values: occurrence(visited["updated-before"], *updatedBefore)},
+		})
+		if err != nil {
+			return err
+		}
+		queried, err := storage.ParseSelector(*queryExpr, now)
+		if err != nil {
+			return err
+		}
+		selection := storage.Selection{
+			Selector:        activeByDefault(storage.And(flagged, queried)),
+			IncludeArchived: *includeArchived,
+			IncludeDeleted:  *includeDeleted,
+		}
+		if err := requireParents(ctx, st, selection, model.IDsOf(parentNames)); err != nil {
+			return err
+		}
+		limitValue, err := parseLimit(*limit)
 		if err != nil {
 			return fmt.Errorf("parse --limit: %w", err)
 		}
-		filter := storage.ListIssuesFilter{
-			Statuses:        statuses,
-			IssueTypes:      issueTypes,
-			IDs:             issueIDs,
-			ParentIDs:       parentIDs,
-			LabelsAll:       labelNames,
-			Assignees:       assignees,
-			SearchTerms:     searchTerms,
-			IncludeArchived: *includeArchived,
-			IncludeDeleted:  *includeDeleted,
-			Limit:           limitValue,
-		}
+		listing := storage.Listing{Selection: selection, Limit: limitValue}
 		if strings.TrimSpace(*sortExpr) != "" {
-			// [LAW:one-source-of-truth] Reuse the one store sort parser; the
-			// --query sort: token routes through the same function.
-			sortSpecs, err := storage.ParseSortSpecs(*sortExpr)
+			listing.Sort, err = storage.ParseSortSpecs(*sortExpr)
 			if err != nil {
 				return err
 			}
-			filter.SortBy = sortSpecs
 		}
-		if visited["has-comments"] {
-			value := *hasComments
-			filter.HasComments = &value
-		}
-		if visited["updated-after"] {
-			parsed, err := query.ParseTimestamp(*updatedAfter)
-			if err != nil {
-				return fmt.Errorf("parse --updated-after: %w", err)
-			}
-			filter.UpdatedAfter = &parsed
-		}
-		if visited["updated-before"] {
-			parsed, err := query.ParseTimestamp(*updatedBefore)
-			if err != nil {
-				return fmt.Errorf("parse --updated-before: %w", err)
-			}
-			filter.UpdatedBefore = &parsed
-		}
-		// [LAW:dataflow-not-control-flow] An empty query parses to an empty
-		// filter, so the merge always runs and the flag-built filter always
-		// meets the whole-filter rules, query or no query.
-		parsed, err := query.Parse(*queryExpr)
-		if err != nil {
-			return err
-		}
-		filter, err = query.Merge(filter, parsed.Filter)
-		if err != nil {
-			return err
-		}
-		// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
-		// around ListIssues. Apply the active-work default (exclude closed) only when
-		// the user has expressed no intent implying closed issues. Two filter fields
-		// carry that intent: an explicit status selection (--status / --query
-		// status:..., which also covers status:closed), and a resolution filter —
-		// resolutions exist ONLY on closed issues, so `--query resolution:wontfix` is a
-		// request to see closed work.
-		// [LAW:no-silent-failure] Without the resolution guard a closed-only filter
-		// clamps to open+in_progress and returns silently empty.
-		if len(filter.Statuses) == 0 && len(filter.Resolutions) == 0 {
-			filter.Statuses = []model.State{model.StateOpen, model.StateInProgress}
-		}
-		issues, err := st.ListIssues(ctx, filter)
+		issues, err := st.ListIssues(ctx, listing)
 		if err != nil {
 			return err
 		}
@@ -832,21 +775,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 	}}, at
 }
 
-// The set-valued flags the listing and bulk commands share parse through the
-// functions below, so `lit ls`, `lit backlog`, `lit next`, `lit orphaned` and
-// `lit bulk` agree on what each flag accepts and on how a bad occurrence
-// fails. A bad member is a validation refusal: it repeats on every retry, so it
-// must not draw retry advice. [LAW:single-enforcer] [LAW:no-silent-failure]
-
 const assigneeFlagUsage = "Filter by assignee, comma-separated or repeated"
-
-func parseIssueTypeSet(raw []string) ([]model.IssueType, error) {
-	types, err := model.ParseIssueTypes(raw...)
-	if err != nil {
-		return nil, model.ValidationError{Message: "parse --type: " + err.Error()}
-	}
-	return types, nil
-}
 
 func parseIDSet(raw []string) ([]model.ID, error) {
 	ids, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
@@ -855,28 +784,6 @@ func parseIDSet(raw []string) ([]model.ID, error) {
 
 func parseWriteSet(raw []string) ([]string, error) {
 	return storage.ParseNames("--writes needs a write id in every slot, e.g. --writes <write-id>", raw...)
-}
-
-func parseAssigneeSet(raw []string) ([]string, error) {
-	return storage.ParseNames("--assignee needs a user in every slot, e.g. --assignee <user>", raw...)
-}
-
-func parseLabelSet(raw []string) ([]string, error) {
-	return storage.ParseNames("--labels needs a label in every slot, e.g. --labels <label>", raw...)
-}
-
-// parseSearchTerms keeps each --search occurrence whole: unlike the name sets
-// above it never splits on a comma, because a comma is ordinary search text.
-func parseSearchTerms(raw []string) ([]string, error) {
-	var terms []string
-	for _, occurrence := range raw {
-		term := strings.TrimSpace(occurrence)
-		if term == "" {
-			return nil, model.ValidationError{Message: "--search needs text in every occurrence, e.g. --search <text>"}
-		}
-		terms = append(terms, term)
-	}
-	return terms, nil
 }
 
 // listDerivedColumns builds the per-issue cells the projected columns render,
@@ -954,48 +861,38 @@ func parentIDOf(rel storage.IssueRelations) model.ID {
 	return rel.Parent.ID
 }
 
-// workableFilter carries the user-supplied narrowing options for the
-// shared workable pipeline. Empty fields mean "no narrowing"; the
-// workable definition (open/in_progress, leaves only) is layered on top
-// by gatherWorkableAnnotated. Every field is an already-parsed value, never
-// a raw flag string — workableFilterFlags.parse is the one seam that builds
-// it, so unvalidated input cannot reach the query.
-// [LAW:types-are-the-program] Assignees, IssueTypes and Labels are sets
-// because the storage criteria they feed are sets; a single value here could
-// hold only one occurrence of a repeated flag.
+// workableFilter is the narrowing `lit backlog` and `lit next` were asked for,
+// as the selector it states. The workable definition (open or in_progress,
+// leaves only) is the pipeline's, not the filter's. workableFilterFlags.parse
+// is the one seam that builds it, so an unparsed flag cannot reach a read.
 type workableFilter struct {
-	Assignees  []string
-	IssueTypes []model.IssueType
-	Status     model.State
-	Labels     []string
+	selector storage.Selector
 }
 
 // narrows reports whether any filter flag was given.
-func (f workableFilter) narrows() bool {
-	return len(f.Assignees) > 0 || len(f.IssueTypes) > 0 || f.Status != "" || len(f.Labels) > 0
+func (f workableFilter) narrows() bool { return len(f.selector.Atoms()) > 0 }
+
+// selected is the issues the filter selects, read from the store, so the
+// pipeline narrows rows it already holds by the engine's own reading of the
+// selector rather than a second one written here. [LAW:one-source-of-truth]
+func (f workableFilter) selected(ctx context.Context, st storage.IssueReader) (issueSet, error) {
+	ids, err := st.SelectIssueIDs(ctx, storage.Selection{Selector: f.selector})
+	if err != nil {
+		return nil, err
+	}
+	set := make(issueSet, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set, nil
 }
 
-// criteria expresses this filter in the storage layer's own selection
-// vocabulary, so the pipeline narrows rows it already holds with the rule
-// storage defines rather than a second similar-looking one written here.
-// [LAW:one-source-of-truth]
-//
-// What that unifies is this pipeline with storage.IssueCriteria, and not the
-// two store implementations with each other. The memory engine narrows with
-// this rule directly; the SQL store expresses the same selection in its own
-// WHERE clauses and is not held to this type by anything. They agree today,
-// but by review rather than by construction, so the single source of truth
-// claimed here reaches the store boundary and stops.
-//
-// Canonicalizing the labels is the only part that can fail, and it fails here,
-// before a single row is read. [LAW:parse-dont-validate]
-func (f workableFilter) criteria() (storage.IssueCriteria, error) {
-	return storage.ParseIssueCriteria(storage.ListIssuesFilter{
-		Statuses:   toSlice(f.Status),
-		IssueTypes: f.IssueTypes,
-		Assignees:  f.Assignees,
-		LabelsAll:  f.Labels,
-	})
+// issueSet is the issues a selection selected, for narrowing rows already read.
+type issueSet map[model.ID]struct{}
+
+func (s issueSet) has(id model.ID) bool {
+	_, ok := s[id]
+	return ok
 }
 
 // gatherWorkableAnnotated runs the shared workable pipeline: list workable
@@ -1018,12 +915,8 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
-//
-// The filter is parsed before a single row is read, so a label the vocabulary
-// cannot express fails here rather than after the queue is materialized.
-// [LAW:parse-dont-validate]
 func gatherWorkableAnnotated(ctx context.Context, env environ.Env, ap *app.App, rf workableFilter) (focusedQueue, error) {
-	criteria, err := rf.criteria()
+	asked, err := rf.selected(ctx, ap.Store)
 	if err != nil {
 		return focusedQueue{}, err
 	}
@@ -1033,7 +926,7 @@ func gatherWorkableAnnotated(ctx context.Context, env environ.Env, ap *app.App, 
 	}
 	// The scope is the walk's, not the kept rows': a filter that drops every
 	// path row leaves the focus on (see focusScope).
-	return focusedQueue{workableGather: queue.keepRows(criteria), scope: queue.scope}, nil
+	return focusedQueue{workableGather: queue.keepRows(asked), scope: queue.scope}, nil
 }
 
 // gatherWorkableQueue is the workable pipeline with nothing narrowed: the whole
@@ -1125,12 +1018,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	// [LAW:one-source-of-truth] rank is the canonical ordering, and the store's
 	// default sort is it: tree order, so every epic's leaves arrive together at
 	// the epic's own place in the queue.
-	listFilter := storage.ListIssuesFilter{
-		Statuses:        []model.State{model.StateOpen, model.StateInProgress},
-		IncludeArchived: false,
-		IncludeDeleted:  false,
-		Limit:           0,
-	}
+	listFilter := storage.Listing{Selection: storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen, model.StateInProgress), IncludeArchived: false, IncludeDeleted: false}}
 	issues, err := st.ListIssues(ctx, listFilter)
 	if err != nil {
 		return workableGather{}, err
@@ -1258,17 +1146,13 @@ func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.StringArray("assignee", assigneeFlagUsage)
 	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		assignees, err := parseAssigneeSet(*assignee)
+		assigned, err := flagSelector(time.Now(), []flagAtom{{flag: "assignee", path: storage.IssueAssignee.Name(), op: selector.Eq, values: *assignee, split: true}})
 		if err != nil {
 			return err
 		}
-		listFilter := storage.ListIssuesFilter{
-			Statuses:        []model.State{model.StateInProgress},
-			Assignees:       assignees,
-			IncludeArchived: false,
-			IncludeDeleted:  false,
-		}
-		issues, err := ap.Store.ListIssues(ctx, listFilter)
+		issues, err := ap.Store.ListIssues(ctx, storage.Listing{Selection: storage.Selection{
+			Selector: storage.And(storage.IssueStatus.Is(model.StateInProgress), assigned),
+		}})
 		if err != nil {
 			return err
 		}

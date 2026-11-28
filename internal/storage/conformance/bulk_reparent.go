@@ -44,7 +44,7 @@ func aBulkFileReparentsItsUpdateDocuments(t *testing.T, ctx context.Context, st 
 // create lands, and no tombstone is left behind. [LAW:single-enforcer]
 func aBulkFileStatingAParentCycleWritesNothing(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}})
 	title, topic, epicType := "c", "core", "epic"
 	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{LocalID: "c", Title: &title, Topic: &topic, IssueType: &epicType, Parent: ptr(x.ID.Raw())},
@@ -53,7 +53,7 @@ func aBulkFileStatingAParentCycleWritesNothing(t *testing.T, ctx context.Context
 	if err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("BulkApply error = %v, want the cycle refused", err)
 	}
-	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}); len(after) != len(before) {
+	if after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}}); len(after) != len(before) {
 		t.Errorf("issues, deleted included, = %d after the refusal, want %d: a cycle the file states is refused before any write", len(after), len(before))
 	}
 	assertStrings(t, "x's parents", parentsOf(t, ctx, st, x.ID), nil)
@@ -138,7 +138,7 @@ func aBulkFileClearsAParentWithAnEmptyOne(t *testing.T, ctx context.Context, st 
 	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: outer.ID})
 	topLevel := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top level"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}})
 	title, topic, epicType := "fresh", "core", "epic"
 	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{Title: &title, Topic: &topic, IssueType: &epicType},
@@ -147,7 +147,7 @@ func aBulkFileClearsAParentWithAnEmptyOne(t *testing.T, ctx context.Context, st 
 	}); err == nil {
 		t.Fatal("BulkApply clearing a leaf's parent succeeded; want it refused")
 	}
-	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}); len(after) != len(before) {
+	if after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}}); len(after) != len(before) {
 		t.Errorf("issues, deleted included, = %d after the refusal, want %d: clearing a leaf is refused before any write", len(after), len(before))
 	}
 	assertStrings(t, "nested's parents after a refused file", parentsOf(t, ctx, st, nested.ID), []model.ID{outer.ID})
@@ -212,11 +212,11 @@ func aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx conte
 		t.Fatalf("t's blocked_by = %v (error %v), want one edge to %s", rels, err, x.ID)
 	}
 
-	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
+	before := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}})
 	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{create(e.ID), {ID: x.ID.Raw(), Parent: ptr(e.ID.Raw())}}); err == nil || !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
 		t.Fatalf("moving x into t's epic: BulkApply error = %v, want the same-epic refusal", err)
 	}
-	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}); len(after) != len(before) {
+	if after := mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{IncludeDeleted: true}}); len(after) != len(before) {
 		t.Errorf("issues, deleted included, = %d after the refusal, want %d: the file states both places, so it is refused before any write", len(after), len(before))
 	}
 	assertStrings(t, "x's parents after the refusal", parentsOf(t, ctx, st, x.ID), []model.ID{f.ID})

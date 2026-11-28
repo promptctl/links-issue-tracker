@@ -24,7 +24,7 @@ func runLs(t *testing.T, ap *app.App, args ...string) string {
 }
 
 // TestListClosedOnlyFilterIsNotSilentlyEmptied is the kkew.3 acceptance: an
-// explicit filter that only matches closed issues (resolution:wontfix) must
+// explicit filter that only matches closed issues (resolution=wontfix) must
 // return those issues, not an empty list, while a bare `lit ls` still shows
 // only active work. [LAW:no-silent-failure]
 func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
@@ -43,12 +43,12 @@ func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
 	ap := h.ap
 
 	// The closed-only filter must surface the wontfix-closed issue.
-	got := runLs(t, ap, "--query", "resolution:wontfix")
+	got := runLs(t, ap, "--query", "resolution=wontfix")
 	if !strings.Contains(got, wontfixBug.ID.Raw()) {
-		t.Fatalf("ls --query resolution:wontfix omitted the wontfix issue %q; output:\n%s", wontfixBug.ID, got)
+		t.Fatalf("ls --query resolution=wontfix omitted the wontfix issue %q; output:\n%s", wontfixBug.ID, got)
 	}
 	if strings.Contains(got, openBug.ID.Raw()) {
-		t.Fatalf("ls --query resolution:wontfix leaked the open issue %q; output:\n%s", openBug.ID, got)
+		t.Fatalf("ls --query resolution=wontfix leaked the open issue %q; output:\n%s", openBug.ID, got)
 	}
 
 	// A bare `lit ls` still shows only active work — the wontfix issue is hidden.

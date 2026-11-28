@@ -1,4 +1,4 @@
-# Raw behavioral inventory — model / lifecycle / issueid / rank / precedence / annotation / lawtokens / pathspec / query / trace / interrupt
+# Raw behavioral inventory — model / lifecycle / issueid / rank / precedence / annotation / lawtokens / pathspec / selector / trace / interrupt
 
 Derived exclusively from Go source and `_test.go` files. All paths are relative to
 `/Users/bmf/code/links-issue-tracker`. Every claim carries a `file:line` citation.
@@ -8,11 +8,7 @@ Derived exclusively from Go source and `_test.go` files. All paths are relative 
 # 1. `internal/model/lifecycle`
 
 Package doc: `internal/model/lifecycle/lifecycle.go`. Declares that callers
-outside `internal/model` must not import this package, and that container
-`Progress` aggregation is leaf-primitive based: `AllOf.Progress` folds over
-`Progresses(a)`, which walks *through* `Container`s and collects every
-non-`Container` descendant's `Progress`. A wrapper primitive that does not
-implement `Container` contributes only its own `Progress`.
+outside `internal/model` must not import this package.
 
 ## 1.1 `State` (activity axis)
 
@@ -48,6 +44,10 @@ Parses via `ParseState`; on any error returns `Open`. Documented as the lenient
 boundary (import, hydration, storage); strict boundaries use `ParseState`
 (`lifecycle.go`). Pinned by `TestDefaultOpenReturnsOpenForInvalid`,
 `lifecycle_test.go`.
+
+### `States() []State` — `lifecycle.go`
+A fresh slice per call, in work order `open, in_progress, closed`.
+`ParseState`'s admissible set is membership in it (`lifecycle.go`).
 
 ## 1.2 `Progress` — `lifecycle.go`
 
@@ -104,24 +104,11 @@ unarchive, delete, restore`.
 ## 1.4 Core interfaces
 
 - `Lifecycle` — `lifecycle.go`: `State() State`, `Progress() Progress`.
-- `Container` — `lifecycle.go`: `Lifecycle` + `Children() []Lifecycle`.
 - `StatusPrimitive` — `status_states.go`: `Lifecycle` +
   `ClosedAt() *time.Time`, `Resolution() *Resolution`, `RedirectTarget() *string`.
   It is the one kind of lifecycle `Apply` and `Moves` take, sealed by the
-  unexported `isStatusPrimitive`; `AllOf` is deliberately not a
-  `StatusPrimitive` (`status_states.go`).
-
-### `Walk(l Lifecycle, visit func(Lifecycle) bool)` — `lifecycle.go`
-Depth-first. Returns immediately if `l == nil` **or** `visit(l)` returns false
-(`lifecycle.go`). If `l` implements `Container`, recurses into every
-`Children()` element (`lifecycle.go`). Pinned by
-`TestWalkVisitsAllPrimitives`, `lifecycle_test.go`.
-
-### `Progresses(l Lifecycle) []Progress` — `lifecycle.go`
-Walks `l`; skips appending for any node implementing `Container` (but keeps
-descending, since it returns `true`), appends `current.Progress()` for every
-non-container node (`lifecycle.go`). Returns a non-nil empty slice when
-nothing matches (initialized `out := []Progress{}`, `lifecycle.go`).
+  unexported `isStatusPrimitive`; `Tally` is deliberately not a
+  `StatusPrimitive` (`all_of.go`).
 
 ## 1.5 Sealed action sum — `action.go`
 
@@ -188,6 +175,9 @@ Complete value set (`resolution.go`):
   `resolution must be one of: duplicate, superseded, obsolete, wontfix`
   (`resolution.go`). Pinned by `TestParseResolutionRoundTrips`
   (`lifecycle_test.go`) and `TestParseResolutionRejectsInvalid`.
+- `Resolutions() []Resolution` — `resolution.go`: a fresh slice per call,
+  `duplicate, superseded, obsolete, wontfix`; `ParseResolution`'s admissible
+  set is membership in it.
 - `cloneResolution(*Resolution) *Resolution` — `resolution.go`: nil in →
   nil out; otherwise a fresh pointer to a copy.
 
@@ -269,21 +259,19 @@ outcome pass-through by `TestApplyCloseCarriesOutcomeThroughMachine`.
 Helpers: `cloneTime` (`status_states.go`), `cloneString`
 (`status_states.go`) — nil-preserving deep copies.
 
-## 1.9 `AllOf` (container primitive) — `all_of.go`
+## 1.9 `Tally` (container primitive) — `all_of.go`
 
-- `type AllOf struct { Members []Lifecycle }` — `all_of.go`.
-- `Children() []Lifecycle` — `all_of.go`: returns a copy of `Members`.
-- `State() State` — `all_of.go`, computed from its own `Progress()`:
+- `(Progress).State() State` — `all_of.go`: the container rule, whichever
+  way the counts were reached:
   - `Total > 0 && Closed == Total` → `Closed`
   - else `InProgress > 0 || Closed > 0` → `InProgress`
-  - else → `Open` (so an **empty** container is `Open`).
-  Pinned by `TestAllOfState`, `lifecycle_test.go`.
-- `Progress() Progress` — `all_of.go`: field-wise sum over
-  `Progresses(a)` (i.e. over every non-container descendant). Pinned by
-  `TestAllOfProgressAndActions` (`lifecycle_test.go`) and
-  `TestAllOfProgressIncludesNonStatusLeafPrimitives`.
-- `AllOf` is not a `StatusPrimitive`, so `Apply` cannot be handed one
-  (`all_of.go`; pinned by `TestAllOfIsNotAStatusPrimitive`, `lifecycle_test.go`).
+  - else → `Open` (so a container with **no leaves** is `Open`).
+- `type Tally struct { Leaves Progress }` — `all_of.go`: a container's
+  lifecycle, the count of its leaves' states however an engine counted them.
+  `State()` is `Leaves.State()`; `Progress()` is `Leaves`. Pinned by
+  `TestTallyStateIsTheContainerRule`, `lifecycle_test.go`.
+- `Tally` is not a `StatusPrimitive`, so `Apply` cannot be handed one
+  (`all_of.go`; pinned by `TestTallyIsNotAStatusPrimitive`, `lifecycle_test.go`).
 
 ## 1.10 Retention axis — `retention.go`
 
@@ -402,8 +390,8 @@ Constant re-exports (`model.go`): `StateOpen`, `StateInProgress`,
 `ActionArchive/Unarchive/Delete/Restore`;
 `ResolutionDuplicate/Superseded/Obsolete/Wontfix`.
 
-Function re-exports (`model.go`): `ParseState`, `ParseAction`, `Actions`,
-`DefaultOpen`, `ParseResolution`, `RetentionFromTimestamps`,
+Function re-exports (`model.go`): `ParseState`, `States`, `Resolutions`,
+`ParseAction`, `Actions`, `DefaultOpen`, `ParseResolution`, `RetentionFromTimestamps`,
 `RetentionTimestamps`, `Retain`, `Frozen`.
 
 ## 2.2 `IssueType` — `issue_type.go`
@@ -423,12 +411,6 @@ Complete value set (`issue_type.go`): `TypeTask="task"`,
   `"issue type must be task, feature, bug, chore, or epic"`
   (`issue_type.go`). Pinned by `TestParseIssueType`,
   `model_test.go`.
-- `ParseIssueTypes(inputs ...string) ([]IssueType, error)` — `issue_type.go`:
-  splits every input on `,` and runs each fragment through `ParseIssueType`,
-  skipping none, so a blank fragment is an error; the error names the failing
-  fragment (`invalid issue type %q: %w`, wrapping `errInvalidIssueType`). No
-  inputs → nil. The one type-set parser, shared by `lit ls --type` and the
-  `type:` query term.
 - `(IssueType).IsContainer() bool` — `issue_type.go`: true **only** for
   `TypeEpic`.
 - `ContainerTypes() []IssueType` — `issue_type.go`: the subset of
@@ -657,10 +639,11 @@ establish.
   `Target == State && Progress.Total > 0 && Unfinished() == 0`. The one predicate
   separating a request the children already meet from a refusal; the CLI's
   reason and exit-code mappings read it rather than re-deriving it from counts.
-  The target match alone is not sufficient: `AllOf.State` returns `InProgress`
-  whenever a child is in progress or closed, so `start` on a part-done epic
-  matches its own target with work left, and it returns `Open` for a childless
-  epic as a fallback, so `open` matches there too. The two count conjuncts admit
+  The target match alone is not sufficient: the container rule
+  (`Progress.State`, `all_of.go`) gives `InProgress` whenever a leaf is in
+  progress or closed, so `start` on a part-done epic matches its own target
+  with work left, and gives `Open` for an epic with no leaves, so `open`
+  matches there too. The two count conjuncts admit
   only the all-children-closed case without naming `Closed`.
 - `Error() string` — `model.go`, two exact wordings (the word rendered inside the backticks in both is the action's invocation verb, `ActionName.Verb()`, not its persisted event encoding; the state is substituted as `State.Display()`, so `in_progress` renders `in progress`):
   - `Satisfied()` → ``epic %s is already %s, so `%s` has nothing to do: an epic's state derives from its children (%d of %d done)``
@@ -672,7 +655,7 @@ establish.
 
 `(Issue).PlanStatus(action lifecycle.StatusAction) (StatusChange, error)` — `model.go`. It takes no instant: a caller that only asks whether a transition lands has none to invent.
 1. `lifecycleOrError()`; on error returns the error.
-2. If the root lifecycle is a `lifecycle.Container` → returns
+2. If `i.IsContainer()` → returns
    `ContainerActionError{ID, action.Name(), State(action.Target()), State(root.State()), root.Progress()}`
 . Every status action on a container is refused, including one
    whose target the children already establish — the refusal is what keeps a
@@ -689,8 +672,8 @@ establish.
    `TestPlanStatusRefusesAStartWhoseAssigneeNoFilterCanSelect`.
 5. If the root is not a `lifecycle.StatusPrimitive` → error
    `no %s action available on this issue`.
-6. Otherwise returns the `StatusChange`. Root-only; multi-leaf `AllOf`
-   composition is intentionally unsupported (`model.go`).
+6. Otherwise returns the `StatusChange`. Root-only: the action is planned
+   against the root lifecycle primitive (`model.go`).
 
 `StatusChange` (`model.go`) — an accepted, unstamped action; only `PlanStatus`
 builds one. It holds what `PlanStatus` proved: the leaf `StatusPrimitive` and,
@@ -720,12 +703,17 @@ absent).
   replaces the lifecycle with
   `lifecycle.NewStatus(view.Value, view.ClosedAt, view.Resolution, view.RedirectTarget)`.
   Never returns a non-nil error today.
-- `HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error)` —
-  `model.go`: dispatches on `issue.IssueType.IsContainer()` →
-  `HydrateAllOf(issue, children)`, else `HydrateStatus(issue, view)`.
+- `HydrateRow(issue Issue, view StatusView, leaves Progress) (Issue, error)` —
+  `model.go`: dispatches on `issue.IssueType.IsContainer()` → sets
+  `lifecycle.Tally{Leaves: leaves}` (the progress its leaves have made, which
+  each engine reads as it can), else `HydrateStatus(issue, view)`.
+- `ProgressOf(issues []Issue) (Progress, error)` — `model.go`: field-wise sum
+  of each issue's `Progress()` — a leaf's own, a container's its leaves' —
+  read through `lifecycleOrError()`, so the first error propagates with a zero
+  `Progress`.
 - `HydrateAllOf(issue Issue, children []Issue) (Issue, error)` — `model.go`:
-  collects each child's lifecycle via `child.lifecycleOrError()` (propagating the
-  first error, returning `Issue{}`), then sets `lifecycle.AllOf{Members: members}`.
+  `HydrateRow(issue, StatusView{}, ProgressOf(children))`; a `ProgressOf` error
+  returns `Issue{}`.
 
 ### JSON encoding
 Wire struct `issueJSON` — `model.go`. Keys in declaration order:
@@ -1659,130 +1647,220 @@ pre-commit framework runs with the staged text files.
 
 ---
 
-# 9. `internal/query`
+# 9. `internal/selector`
 
-The query grammar produces a `storage.ListIssuesFilter`
-(`internal/storage/issues.go`) whose fields are: `Statuses
-[]model.State`, `Resolutions []model.Resolution`, `IssueTypes
-[]model.IssueType`, `ExcludeIssueTypes []model.IssueType`, `Assignees
-[]string`, `SearchTerms []string`, `IDs []string`, `HasComments *bool`,
-`LabelsAll []string`, `UpdatedAfter *time.Time`, `UpdatedBefore *time.Time`,
-`IncludeArchived bool`, `IncludeDeleted bool`, `SortBy []SortSpec`, `Limit int`.
-A listing that says nothing about retention sees only live issues
-(`internal/storage/issues.go`).
+Package doc — `selector.go`: the grammar a selection is written in. A selector
+is a conjunction of atoms over a table of fields the caller hands in; the
+package knows the kinds a field can have and the operators each kind admits,
+and nothing about which fields exist. `Parse` refuses an unknown field, or an
+operator its kind does not admit, before anything is read, so an engine is
+only handed a selector it can answer. The issue and workspace tables are
+`storage.IssueTable` and `storage.WorkspaceTable`
+(`internal/storage/issue_fields.go`).
 
-## 9.1 `ParseResult` and `Parse`
-- `type ParseResult struct { Filter storage.ListIssuesFilter }` — `query.go`.
-- `Parse(input string) (ParseResult, error)` — `query.go`: trims the input,
-  tokenizes, then applies each term to a fresh zero filter; the first term error
-  aborts with an empty `ParseResult`. `Parse` does **not** run `validateFilter`.
-  Pinned by `TestParseBuildsFilterFromQueryExpression`, `query_test.go`.
+## 9.1 Kinds and operators — `selector.go`
 
-## 9.2 Tokenizer — `query.go`
-- Empty input → `(nil, nil)`.
-- Whitespace separators: space, `\n`, `\t`.
-- Quoting: both `"` and `'` open a quoted run; the quote characters are dropped
-  from the token; a run continues until the *same* quote character
-. Quoted content may contain separators.
-- Unterminated quote → error `unterminated quote in query`.
-- No escape sequences exist.
+`type Kind int`, eight values in declaration order: `Text`, `Enum`, `Stamp`,
+`Search`, `Ref`, `Rows`, `Texts`, `Records`.
 
-## 9.3 Term grammar — `applyTerm`, `query.go`
+`type Op string`:
 
-| Term prefix | Behavior | Cites |
+| Op | Written | Holds when |
 |---|---|---|
-| `status:<v>[,<v>...]` | `model.ParseStates` (comma-split, each fragment lowercased with the `in-progress` alias); appended to `Statuses`; parse error propagates | |
-| `resolution:<v>` | `model.ParseResolution` (trim only); appended to `Resolutions` | |
-| `type:<v>[,<v>...]` | `model.ParseIssueTypes`; appended to `IssueTypes`; a typo or blank member is an error, never an empty result | |
-| `assignee:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `Assignees` (ORed) | |
-| `id:<v>[,<v>...]` | `storage.ParseNames`: comma-split, fragments trimmed; appended to `IDs`; any blank slot → `model.ValidationError` | |
-| `parent:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `ParentIDs` | |
-| `label:<v>[,<v>...]` | `storage.ParseNames`, as `id:`; appended to `LabelsAll` (AND semantics) | |
-| `has:comments` | sets `HasComments` to `true` via `mergeBoolPointer("has-comments", …)` | |
-| `has:<other>` | error `unsupported has: filter %q` (quoting the **whole** term) | |
-| `sort:<expr>` | `storage.ParseSortSpecs`; specs appended to `SortBy` | |
-| `limit:<n>` | `strconv.Atoi`; non-integer → `limit must be an integer, got %q`; then `ParseLimit` (see 9.5), so negative → `limit must be non-negative, got %d`; **0 is legal** and means uncapped | |
-| `archived` (exact) | sets `IncludeArchived = true` | |
-| `deleted` (exact) | sets `IncludeDeleted = true` | |
-| `updated<expr>` | delegates to `applyTimeTerm` with the remainder after `"updated"` | |
-| anything else | appended verbatim to `SearchTerms` (free-text) | |
+| `Present` | `path` (`""`) | the path reads at least one value |
+| `Absent` | `!path` (`"!"`) | the path reads no value |
+| `Eq` | `=` | some value read equals some value listed |
+| `Ne` | `!=` | exactly where `Eq` does not, so for a path that reads nothing |
+| `Contains` | `~` | some value read contains some value listed, ignoring case |
+| `Lt` `Le` `Gt` `Ge` | `<` `<=` `>` `>=` | the ordering holds; these take exactly one value (`orderings`) |
 
-Prefix matching is `strings.HasPrefix` and the branches are evaluated in the
-order listed, so e.g. `updatedfoo` routes to the time branch.
+`comparisons` lists the value-taking ops longest spelling first —
+`!= <= >= = ~ < >` — so a scanner reading them in that order never takes `<`
+for the start of `<=` (`selector.go`).
 
-Pinned by: `TestQueryTokenSupersetOfDiscreteFlags` (`query_test.go`),
-`TestQueryMultiTokenAppliesAllFourNewTokens`,
-`TestQueryLimitRejectsNonInteger`, `TestQuerySortRejectsBadDirection`
-, `TestQueryLimitRejectsNegative`,
-`TestQueryLimitZeroIsUncappedNotRejected`,
-`TestParseRejectsInvalidStatus`, `TestParseRejectsInvalidType`,
-`TestStatusAliasInProgressNormalizesToBeadsValue`.
+`rules` (`selector.go`) is one row per kind, read by both the parser and
+`Describe`:
 
-### `updated` sub-grammar
-`applyTimeTerm(filter, expr)` — `query.go`:
-- `splitComparator(expr)` — `query.go`: recognized comparator prefixes,
-  tried in this order: `>=`, `<=`, `>`, `<`, `:`. Missing comparator → error
-  `missing comparator`; empty payload after the comparator → `missing value`;
-  both are wrapped as `parse updated term "updated<expr>": <err>`.
-- Timestamp read by `ParseTimestamp` (see 9.5); its refusal is returned as is.
-- `>=` and `>` both set `UpdatedAfter`; `<=` and `<` both set `UpdatedBefore`
-  (inclusive/exclusive is not distinguished).
-- The `:` comparator parses but then falls to the default arm and errors
-  `updated supports only >=, >, <=, <`.
+| Kind | Name | Admits | `/count` | Says |
+|---|---|---|---|---|
+| `Text` | `text` | `path !path = != ~` | no | one text; an empty text is no value |
+| `Enum` | `enum` | `path !path = !=` | no | one of the values its field lists |
+| `Stamp` | `stamp` | `path !path = != < <= > >=` | no | one instant, compared as time |
+| `Search` | `search` | `~` | no | several texts, holding when any of them contains the value |
+| `Ref` | `ref` | `path !path = !=` | no | one row, compared by its key; /field reads its fields and (selector) keeps it only where the selector holds |
+| `Rows` | `refs` | `path !path = !=` | yes | rows, compared by their keys; /field reads the fields of every row, (selector) keeps the rows it selects |
+| `Texts` | `texts` | `path !path = != ~` | yes | texts |
+| `Records` | `records` | `path !path` | yes | records with nothing to compare |
 
-## 9.4 `Merge(base, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error)` — `query.go`
-- `Statuses`: dedup-merged, no re-validation — both sides are already
-  `[]model.State`, minted by `model.ParseStates` at the flag and grammar
-  boundaries.
-- `Resolutions`: plain append, no dedup (duplicates are absorbed downstream by
-  the store's allow-map).
-- `IssueTypes`, `Assignees`: dedup-merged.
-- `SearchTerms`, `IDs`, `LabelsAll`: plain append.
-- `HasComments`: `mergeBoolPointer("has-comments", …)` — conflicting non-equal
-  values error `conflicting has-comments filters`.
-- `UpdatedAfter`/`UpdatedBefore`: `mergeTimePointer` — non-equal values error
-  `conflicting updated-after filters <RFC3339> and <RFC3339>` (same shape for
-  `updated-before`); the stored value is converted to UTC.
-- `Limit`: `incoming.Limit` wins only when `> 0`.
-- `SortBy`: dedup-merged, flag-supplied (base) keys first, then query keys;
-  distinct keys (including same field, different direction) stay in order,
-  forming one multi-key ordering (pinned by
-  `TestMergeSortByDedupsExactDuplicates`, `query_test.go`).
-- `IncludeArchived`/`IncludeDeleted`: plain boolean OR — visibility is monotonic,
-  no conflict detection.
-- Returns `validateFilter(filter)` as the error.
-- `ExcludeIssueTypes` is **not** merged at all (absent from `Merge`).
-- Pinned by `TestMergeMultipleStatusesCombines`, `query_test.go`.
+`countRule` (`selector.go`) is what a path ending in `/count` admits:
+`= != < <= > >=` — a number has no presence and contains nothing. It compares
+how many **distinct** values the path reads.
 
-## 9.5 Helpers
-- Statuses merge through `mergeSlice` like every other filter slice. Both sides
-  are already `[]model.State`, a type only `model.ParseStates` mints at the flag
-  and grammar boundaries, so `Merge` re-parses nothing; nil survives as nil
-  because `mergeSlice` returns `base` untouched when `incoming` is empty.
-- `mergeSlice[T comparable](base, incoming []T) []T` — `query.go`: if
-  `incoming` is empty, returns `base` unchanged (nil stays nil); otherwise
-  returns a new slice = base plus incoming values not already present in base.
-- `ParseTimestamp(value string) (time.Time, error)` — `query.go`: trims the
-  value and parses it with `model.ParseStamp` (RFC3339, fractional seconds included, UTC year 0000 to 9999); failure →
-  `model.ValidationError{"timestamp must be RFC3339 and fall in the years 0000 to 9999 UTC, got %q"}` quoting the
-  trimmed value. The `updated` term and `lit ls --updated-after`/`--updated-before`
-  all read through it.
-- `ParseLimit(limit int) (int, error)` — `query.go`: negative →
-  `model.ValidationError{"limit must be non-negative, got %d"}`; zero and
-  positive values pass through. The `limit:` term, `lit ls --limit` and
-  `lit backlog --limit` all read through it where the value enters, so a bad
-  flag value is refused before `Merge` can replace it.
-- `validateFilter(filter)` — `query.go`: `Merge` ends with it. Both bounds set
-  with `UpdatedAfter.After(*UpdatedBefore)` →
-  `updated-after cannot be greater than updated-before`.
+## 9.2 Fields, tables, schema — `selector.go`
 
-## 9.6 Sort expression grammar (`storage.ParseSortSpecs`, consumed by `sort:`)
-`internal/storage/sort.go`: comma-separated; each part trimmed; empty parts
-skipped; a bare field defaults to ascending; `field:asc` / `field:desc`
-(direction lowercased and trimmed); any other direction →
-`ValidationError{Message: "unsupported sort direction \"<d>\""}`. Splitting is
-`SplitN(spec, ":", 2)`. If nothing was produced, returns `(nil, nil)`. Field
-names are not validated here.
+- `Field` — unexported `name`, `kind`, `doc`, `parse`, `members`, `of`;
+  accessors `Name()`, `Kind()`, `Doc()`, `Of()` (the table a `Ref` or `Rows`
+  field's rows belong to). Built only by its kind's constructor, so a row field
+  always names its table and an enum always lists its members:
+  `TextField(name, doc, parse)`, `EnumField(name, doc, members, parse)`,
+  `StampField(name, doc)`, `SearchField(name, doc)`, `RefField(name, doc, of)`,
+  `RowsField(name, doc, of)`, `TextsField(name, doc, parse)`,
+  `RecordsField(name, doc)`. A nil `parse` compares the text as typed.
+- `canonical(value)` — the form an `=` or `!=` value is compared in: a row
+  field's value goes through its table's key field's `canonical`; otherwise
+  through the field's `parse` when it has one; otherwise as typed.
+- `Table` — `NewTable(name)` is a table with no fields yet, so a field can
+  name its own table (an issue's parent is an issue); `Define(key, fields...)`
+  gives it its key and fields, once. A second `Define` panics
+  `selector: table %s is already defined`; a non-nil key not among the fields
+  panics `selector: table %s's key %s is not one of its fields`. Accessors
+  `Name()`, `Fields()`.
+- `Schema{Root, Anchor *Table}` — the table a selector's atoms read, and the
+  table a path written with a leading `/` reads instead.
+
+## 9.3 Selector values — `selector.go`
+
+- `Selector` — a conjunction over unexported `atoms`; it holds for a row when
+  every atom does, so the zero `Selector` holds for every row. `Atoms()`.
+- `And(parts ...Selector) Selector` — every part's atoms, concatenated, so
+  adding a part can only narrow what is selected.
+- `(Selector).Starts(f)` — some atom's path is not anchored and its first step
+  reads `f`: `f` read from the row itself, not through another field or from
+  the anchor. Pinned by `TestStartsReadsOnlyTheRowsOwnField`, `selector_test.go`.
+- `(Selector).Reads(f)` — some step of some atom's path reads `f`, or the
+  filter on some step `Reads` it, recursively. Pinned by
+  `TestReadsSeesAFieldWhereverAPathReadsIt`, `selector_test.go`.
+- `Atom` — `Path()`, `Test()`.
+- `Path` — `Anchored()`, `Steps()`, `Counts()` (the atom tests how many
+  distinct values the path reads, not the values), `Last()` (the field whose
+  values the atom tests).
+- `Step` — `Field()`, `Where()`; a step whose values are rows keeps only the
+  rows `Where` selects, and the zero `Where` keeps every row.
+- `Test` — sealed by the unexported `test()`: `Presence{Op}`,
+  `Match{Op, Values []string}` — each value already in the canonical form its
+  field compares in, a stamp as its stamp text, which orders as its instant
+  does — and `Count{Op, Values []int}`. An ordering op carries exactly one
+  value.
+
+## 9.4 `Parse(schema Schema, text string, now time.Time) (Selector, error)` — `parse.go`
+
+```
+selector = atom atom ...
+atom     = path | !path | path OP value[,value...]
+path     = [/] segment/segment/...
+segment  = name | name(selector)
+```
+
+- Atoms are separated by `unicode.IsSpace` runs; space before the first and
+  after the last is skipped. An atom ends at the end of the text, at a space,
+  or at a `)` (`boundary`). A field name is a run of `_`, `a`–`z`, `0`–`9`.
+- `now` is the instant a stamp written from `now` is read against, read here
+  once, so a `Selector` holds only instants (`parse.go`).
+- Every refusal is a `model.ValidationError{"selector %q: <reason>"}` quoting
+  the whole text (`parse.go`). Pinned by `TestParseReadsEveryAtomForm`,
+  `TestParseReadsFiltersAndConjunctions` and `TestParseRefusesWhatItCannotRead`
+  (`selector_test.go`).
+
+Paths (`path`, `parse.go`):
+- A leading `/` starts at `schema.Anchor`; a schema with none →
+  `a leading / starts nowhere here: there is no workspace to read`.
+- No name where one belongs → `a path ends where a field name should be` at the
+  end of the text, else `expected a field name at %q`.
+- A name the table lacks → `unknown field %q; the fields of %s are %s`, listing
+  the table's fields in order (pinned by
+  `TestUnknownFieldNamesTheFieldsThatExist`).
+- `name(selector)` filters the step: the inner selector is read against the
+  field's own table and must close (`a ( is never closed`). On a field whose
+  values are not rows →
+  `%s(...): only a field whose values are rows takes a selector, and %s is %s`.
+  A `)` outside any filter → `a ) closes nothing`.
+- `/` after a step reads on into the step's table; after a field that has none
+  → `%s/%s: %s has no fields to read`.
+- `count` after at least one step makes the path a count. On a kind that is not
+  a list → `%s/count: count counts a list, and %s is one %s`; anything after it
+  but a boundary or an operator → `%s/count: count ends a path`.
+
+Atoms (`atom`, `parse.go`):
+- `!path` followed by anything but a boundary →
+  `!%s takes no operator: it holds where %s reads no value`.
+- A path at a boundary is `Present`.
+- Anything else after a path must be an operator, else
+  `unexpected %q after %s; an atom is path, !path or path OP value, with OP one of != <= >= = ~ < >`.
+
+Values (`values`, `value`, `parse.go`):
+- Comma-separated. An unquoted value runs up to whitespace or one of `,` `(`
+  `)` `"`; after the last value the atom must be at a boundary, else
+  `unexpected %q in a value; quote a value that holds spaces, commas, parentheses or quotes`.
+- `"..."` holds spaces, commas, parentheses and quotes; the only escapes are
+  `\"` and `\\`. Unclosed → `a quoted value is never closed`; a lone `\` at
+  the end → `a quoted value ends in a lone \`; any other escape →
+  `\%c is not an escape; a quoted value escapes only \" and \\`.
+
+### `finish` — the op and values an atom may have — `parse.go`
+- An op the kind (or `countRule`, after `/count`) does not admit →
+  `%s is %s, which takes %s`: the path, the kind's name, its forms
+  (`color is enum, which takes path !path = !=`).
+- `Present` or `Absent` given values → `path takes no values` /
+  `!path takes no values`; a value-taking op given none → `%s%s needs a value`.
+- An ordering op given more than one value → `%s%s takes one value, not %d`.
+- An empty value (`color=`, `color=red,`, `color=""`) →
+  `%s%s has an empty value; !%s is the path that reads nothing`.
+- A count value must be a whole number, zero or more, else
+  `%s%s%s: a count is a whole number`.
+- Every other value is put in the form its field compares in, a refusal
+  reading `%s%s%s: <reason>`: a `~` fragment is lowercased and otherwise kept
+  as typed, being no member of anything; a `Stamp` field's value is read as an
+  instant and kept as its `model.StampText`; every other value goes through the
+  field's `canonical` (9.2).
+
+Stamps (`instant`, `parse.go`): `now`; `now-N` or `now+N`, `N` a whole
+number of `m`, `h`, `d` (24 hours) or `w` (7 days), offset from the `now`
+`Parse` was handed; or an RFC 3339 instant read by `model.ParseStamp`. A value
+not starting `now` that `ParseStamp` refuses →
+`a stamp is now, now-6h, now+2d (m h d w) or an instant like 2026-01-02T15:04:05Z`;
+a bad sign, count or unit after `now` →
+`a stamp from now is now-N or now+N with a unit of m, h, d or w, like now-6h`.
+
+## 9.5 `ParseAtom` and `Is` — `parse.go`
+
+- `ParseAtom(schema, now, path string, op Op, values ...string) (Selector, error)`
+  — one atom given as its parts: `path` read by the path grammar of 9.4, with
+  trailing text refused as `unexpected %q after %s`
+  (`model.ValidationError{"selector path %q: <reason>"}`), then `op` and
+  `values` through `finish`
+  (`model.ValidationError{"selector <path><op><values joined by ,>: <reason>"}`).
+  Each value is taken whole, needing no quotes, and is refused and
+  canonicalized exactly as the same value written in a selector's text. Pinned
+  by `TestParseAtomReadsAsTheSameAtomInText`, `selector_test.go`.
+- `Is(f *Field, values ...string) Selector` — the atom `f=values` as
+  `ParseAtom` reads it, through the same `finish`, for a program building a
+  selector from values it states. A refusal is the program's mistake and
+  panics `selector: <field>=<values joined by ,>: <reason>`, so no value, an
+  empty value, or one the field's parser refuses never builds an atom. A stamp
+  field panics `selector: <field> is a stamp, read against the command's now
+  through ParseAtom`. Pinned by `TestIsReadsAsTheSameAtomInText`,
+  `selector_test.go`.
+
+## 9.6 `Describe(schema Schema, examples []Example) string` — `describe.go`
+
+The whole reference a reader learns selectors from, every row read from the
+tables, so a field added to a table is described with no other edit:
+1. A fixed paragraph: the three atom forms, the operators, `!=` holding where
+   `=` does not, `~` as case-blind contains, paths, `(selector)`, `/count`,
+   the leading `/`, quoting, and stamps (`now, now-6h, now+2d (units m h d w),
+   read once when the command starts`).
+2. `Kinds:` — one row per kind in declaration order, then the count row: name,
+   its forms (` /count` appended for a list kind), its `says` text.
+3. `Fields of ` + the root table's name with its article (`Fields of an
+   issue:`): one row per field — name, kind name, doc, an enum's doc followed
+   by `One of <members joined by ", ">.`
+4. When the schema has an anchor, `Fields of the <anchor>, after a leading /:`
+   in the same form.
+5. When there are examples, `Examples:` — each `Example{Text, Says}` with its
+   text padded to the widest.
+
+Pinned by `TestDescribeListsWhatTheTableHolds`, `selector_test.go`, which also
+holds that a field added to the table is listed and parsed.
 
 ---
 
@@ -1877,7 +1955,8 @@ cancellation.
 
 1. Every sealed vocabulary exposes its enumeration as a **fresh slice per call**
    rather than an exported slice variable: `model.IssueTypes()`
-   (`issue_type.go`), `lifecycle.Actions()` (`lifecycle.go`),
+   (`issue_type.go`), `lifecycle.Actions()` and `lifecycle.States()`
+   (`lifecycle.go`), `lifecycle.Resolutions()` (`resolution.go`),
    `annotation.Kinds()` (`annotation.go`).
 2. Parsers differ in normalization: `ParseState` and `ParseIssueType` and
    `ParseAction` lowercase + trim (`lifecycle.go`, `issue_type.go`,

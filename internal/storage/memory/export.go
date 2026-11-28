@@ -22,7 +22,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	issues, err := e.listIssues(storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := e.listIssues(storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})
 	if err != nil {
 		return model.Export{}, err
 	}

@@ -605,7 +605,7 @@ const FocusLabel = "focus"
 // its real input is nameable and a memo/decorator can stand in.
 // [LAW:decomposition] The seam carries the whole truth of what the part needs.
 type focusGraphSource interface {
-	ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error)
+	ListIssues(ctx context.Context, listing storage.Listing) ([]model.Issue, error)
 	GetRelationsByIDs(ctx context.Context, ids []model.ID) (map[model.ID]storage.IssueRelations, error)
 }
 
@@ -629,10 +629,7 @@ type focusGraphSource interface {
 // refetch; an empty seed set leaves behavior unchanged.
 // [LAW:one-source-of-truth] The memo is derived, never authoritative.
 func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map[model.ID]storage.IssueRelations) (map[model.ID]model.ID, error) {
-	goals, err := src.ListIssues(ctx, storage.ListIssuesFilter{
-		Statuses:  []model.State{model.StateOpen, model.StateInProgress},
-		LabelsAll: []string{FocusLabel},
-	})
+	goals, err := src.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.And(storage.IssueStatus.Is(model.StateOpen, model.StateInProgress), storage.IssueLabels.Has(FocusLabel))}})
 	if err != nil {
 		return nil, err
 	}

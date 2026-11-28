@@ -11,7 +11,7 @@ Dependency and vocabulary rules: engine → contract → model, never back; no t
 
 | Role | Methods |
 |---|---|
-| `IssueReader` | `GetIssue`, `GetIssueDetail`, `GetIssueAdjacency`, `ListIssues`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `ListEvents`, `LocalIssueCount` |
+| `IssueReader` | `GetIssue`, `GetIssueDetail`, `GetIssueAdjacency`, `ListIssues`, `SelectIssueIDs`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `ListEvents`, `LocalIssueCount` |
 | `IssueWriter` | `CreateIssue`, `Apply`, `Purge` |
 | `CommentStore` | `AddComment`, `DeleteComment` |
 | `PlanReviewStore` | `AddPlanReview` |
@@ -28,7 +28,7 @@ Contract points a reimplementation must not lose:
 - **`Purge` is the one irreversible removal.** `Purge(ctx, PurgeInput{IssueID, Actor})` removes the issue's row, comments, plan reviews, labels, history, and every edge to or from it in one write, and returns `PurgeResult{Purge, Comments, PlanReviews, Labels, Relations, Events}` — the `model.Purge` record left behind and how many of each row went with it. Other issues are not edited. The record names the ticket by its id and `created_at`. The purged id is never minted again, and every merge and restore drops the ticket (`model.Export.ApplyPurges`). A missing id is `NotFoundError`; an issue whose purge would leave a child leaf with no parent edge — deleted and archived children included — is refused with `model.ValidationError` (`storage.RejectPurgeOfOccupiedContainer`, `containment.go`): "cannot purge <id>: it would leave <ids> outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", `<ids>` the stranded children's ids, sorted and comma-separated. A child epic, or a leaf that keeps another parent edge, does not refuse the purge; the child epic is left top-level (`contract.go`, `issues.go`).
 - **A plan review is recorded, never edited.** `AddPlanReview(ctx, AddPlanReviewInput{IssueID, Plan, Verdict, Laws, CreatedBy})` takes the reviewer's input as strings (`Laws` a `[]string`) and names the plan text it judged by its digest (`Plan`, as `lit show` prints it), not by a version number and not by taking the current text: a sync that merges in an older edit renumbers the versions, and a plan revised while the review ran is not judged by the text before it. Both engines decide the row through the pure `storage.PlanReviewOf(issue, events, in)`, which parses in this order: the verdict through `model.ParsePlanVerdict`; each law through `model.ParseLaw`, then `model.CanonicalLaws`; a `fail` citing no law is `model.ValidationError` "a failing verdict cites at least one law the plan breaks"; `Plan` through `model.ParsePlanDigest`; a digest equal to `model.DigestPlan` of none of the `TextVersions` of `plan` is `PlanDigestNotFoundError{IssueID, Digest}`; a blank reviewer is recorded as `unknown`. The first refusal is returned. The engine then stamps id `rvw-` + a UUID and its clock's time. A missing issue is `NotFoundError`. The contract has no method that edits or removes a review; a purge of its issue removes it (`plan_review.go`).
 - **Mutating reads return the answer.** `AddComment` returns the comment *and* the post-write issue; every label mutation returns the resulting label set; `DeleteComment` returns what was removed — so no follow-up read exists for a concurrent writer to answer differently (`contract.go`).
-- **Ordering is contract.** `ListIssues` orders by `SortBy`, then always by id ascending as the final tie-break (descending sorts reverse only the named keys, never the tie-break). No `SortBy` means rank ascending. `ListAllEvents` is oldest-first by `(created_at, id)` — explicitly *not* recording order; event IDs are random, so same-tick events return in an order unrelated to causality, identically in both engines (`contract.go`).
+- **Ordering is contract.** `ListIssues` orders by the listing's `Sort`, then always by id ascending as the final tie-break (descending sorts reverse only the named keys, never the tie-break). No `Sort` means rank ascending. `ListAllEvents` is oldest-first by `(created_at, id)` — explicitly *not* recording order; event IDs are random, so same-tick events return in an order unrelated to causality, identically in both engines (`contract.go`).
 - **`Exporter` is core, `Importer` is a capability**: export is the differential-oracle surface both engines serve; only replace-from-export is optional (`contract.go`, `capabilities.go`).
 - **Attribution is the store's**, stamped at the engine's single event-insertion point after `AttributeTo(streamToken)`; an empty token leaves the engine unattributed, never half-attributed (`contract.go`).
 - **`LocalIssueCount`** counts everything the store holds — archived and deleted included — and reports 0 for a never-written store; it is the adopt-safety signal `lit init` reads (`contract.go`).
@@ -43,21 +43,26 @@ Four error types (`internal/storage/errors.go`, `capabilities.go`, `internal/sto
 - `VersionNotFoundError{IssueID, Field, Number, Held}` (`plan_review.go`) — a reference to version `Number` of a long text field past the `Held` versions the issue's record holds; renders `<id> has no <field>@<n>: its record holds <count> of <field>, numbered from 1; ` followed by the `lit show <id> --field <field>` command and `prints the current text`, `<count>` spelled by `DescribeVersions` (`1 version`, `<n> versions`). It is not `NotFoundError`, whose remediation is to check the issue id: here the id resolved.
 - `PlanDigestNotFoundError{IssueID, Digest}` (`plan_review.go`) — a plan review naming a digest no text of the issue's plan history holds; renders `<id> has no plan text with digest <digest>; ` followed by the `lit show <id>` command and `prints the current plan beside its digest`.
 
-### Listing filters
+### Selections and listings
 
-`ListIssuesFilter` (`issues.go`): every slice is an OR within itself and an AND against the other criteria; every zero value means "unconstrained". Fields: `Statuses`, `Resolutions`, `IssueTypes`, `ExcludeIssueTypes`, `Assignees`, `SearchTerms`, `IDs`, `HasComments *bool`, `LabelsAll` (conjunctive — every named label must be present), `UpdatedAfter`/`UpdatedBefore` (both inclusive of equality), `IncludeArchived`, `IncludeDeleted`, `SortBy`, `Limit`.
+`Selection{Selector, IncludeArchived, IncludeDeleted}` is which issues a read is about; `Listing` is a `Selection` with `Sort []SortSpec` and `Limit` (`issue_fields.go`). `ListIssues(ctx, Listing)` returns the selected issues hydrated, ordered and cut; `SelectIssueIDs(ctx, Selection)` returns only their ids, ascending, hydrating nothing, for a caller narrowing rows it already holds (`contract.go`).
 
-Semantics fixed by the memory engine and conformance:
+A `Selector` is a conjunction of atoms over `IssueTable`, the one statement of which fields a selection can read; the grammar (`internal/selector`) knows the kinds of field and the operators each admits, and nothing about which fields exist (`issue_fields.go`, `internal/selector/selector.go`). A selector is minted only by parsing against `IssueSchema` (`ParseSelector`, `ParseAtom`) or from the typed fields (`IssueStatus.Is(...)`, `IssueLabels.Has(...)`), and `And` conjoins selectors, so adding a part can only narrow. The zero `Selector` selects every issue (`issue_fields.go`).
 
-- Retention is the one axis whose default is a filter: a listing that says nothing sees only live issues.
-- The status *filter* matches the **derived** state (an epic's computed state) (`internal/storage/selects.go`); search is case-insensitive substring across exactly five fields — title, description, prompt, plan, topic (`internal/storage/selects.go`); multiple search terms are conjunctive, and the AND across terms is applied by `Selects`, not by the per-term match (`internal/storage/selects.go`).
+Semantics both engines answer alike, held by the selector cases of the conformance suite (`conformance/selector.go`):
+
+- Retention is the one axis whose default narrows: a selection that includes neither sees only live issues, and that holds at every step of every path — a deleted child is no child, a deleted parent no parent (`issue_fields.go`).
+- An atom holds when some value its path reads satisfies it; a value list is any of its values; `!=` holds exactly where `=` does not, so it holds of an issue with no value; `~` is a case-blind contains in which `%` and `_` mean themselves (`internal/selector/selector.go`).
+- `status` reads the **derived** state: an epic's is its leaves' — closed once every one is, `in_progress` once any has started or closed, else `open` — a live epic counting only live leaves whatever the read admits, an archived one every leaf. `phase` is an in-progress leaf's phase and absent for every other issue; `text` is title, description, prompt, plan and topic (`issue_fields.go`).
+- Every `=`/`!=` value is put in its field's canonical form by that field's domain parser, so an unknown status or type is refused at parse rather than answered empty (`issue_fields.go`).
+- A store whose parent links loop has no state for an epic on or above the loop: a listing that holds one, or a selection whose selector reads the status of one, refuses with `ParentCycleError` (`contract.go`).
 - `Limit: 0` means uncapped; a positive limit truncates the head of the ordered result (`memory/list.go`).
 
 ### Sort fields
 
 The sort keys are a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`. They and the comparison each one makes are one table, `sortKeys`, which both engines order through by calling `IssueOrdering` with their rank ancestry; any other name is a `ValidationError` (`ordering.go`). Text keys compare byte-wise, so `"Zeta"` sorts before `"alpha"`; `type` compares the token, so `bug` sorts before `task`; `created_at` and `updated_at` compare the instant, not its text (`ordering.go`; `conformance.go`).
 
-Sorting by `status` orders the **derived** lifecycle state, the same reading the status filter takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; the key compares `State()` (`ordering.go`; `conformance.go`).
+Sorting by `status` orders the **derived** lifecycle state, the same reading a selector's `status` atom takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; the key compares `State()` (`ordering.go`; `conformance.go`).
 
 ### Rank intents
 
@@ -118,12 +123,11 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 ## What conformance requires — and doesn't
 
-The suite runs 72 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
+The suite runs 109 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
 
 Not required by the suite (each is engine-tested or unexercised) — relevant when judging what v1 actually guarantees across engines:
 
 - any of the seven capability interfaces
 - concurrency safety
 - the rank string encoding and the minted-id shape
-- `Resolutions` filtering (declared and implemented, but no conformance case exercises it)
 - `blocked-by`-cycle rejection (implemented in both engines, unexercised by the suite)

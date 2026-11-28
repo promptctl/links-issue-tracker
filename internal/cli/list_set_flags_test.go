@@ -40,19 +40,20 @@ func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB strin
 	return h, bug.ID.Raw(), task.ID.Raw(), feat.ID.Raw()
 }
 
-// TestListSetFlagsWidenAcrossEverySpelling is the links-listing-uhc0
-// acceptance. --type, --ids and --labels each feed a set the store already
-// serves, and every spelling the CLI offers — comma list, repeated flag, query
-// term, flag and term together — must reach the same set.
+// TestListSetFlagsWidenAcrossEverySpelling pins that every spelling of a set
+// filter reaches the same set: a comma list, a repeated flag, and the atom the
+// flag stands for in --query.
 //
 // The "flag, repeated" rows are the ones a regression fails: were these flags
 // single-value declarations, a second occurrence would overwrite the first, so
 // `--type bug --type task` would answer with tasks only and say nothing about
 // the bugs it dropped. [LAW:no-silent-failure]
 //
-// --labels is ALL-must-match, so its set narrows as it grows: naming a and b
-// selects only the issue carrying both, and the overwrite regression shows up
-// as the b-only issue leaking back in.
+// --labels is ALL-must-match, one atom per label, so its set narrows as it
+// grows: naming a and b selects only the issue carrying both, and the
+// overwrite regression shows up as the b-only issue leaking back in. A flag
+// and --query are one conjunction, so a label in each narrows as two labels
+// in either do.
 func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 	t.Parallel()
 	h, bugA, taskAB, featB := setFlagFixture(t)
@@ -63,9 +64,7 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			spellings: []setFlagSpelling{
 				{"flag, comma-joined", []string{"--type", "bug,task"}},
 				{"flag, repeated", []string{"--type", "bug", "--type", "task"}},
-				{"query, comma-joined", []string{"--query", "type:bug,task"}},
-				{"query, repeated terms", []string{"--query", "type:bug type:task"}},
-				{"flag and query together", []string{"--type", "bug", "--query", "type:task"}},
+				{"query", []string{"--query", "type=bug,task"}},
 			},
 			want:     []string{bugA, taskAB},
 			unwanted: []string{featB},
@@ -75,9 +74,7 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			spellings: []setFlagSpelling{
 				{"flag, comma-joined", []string{"--ids", bugA + "," + taskAB}},
 				{"flag, repeated", []string{"--ids", bugA, "--ids", taskAB}},
-				{"query, comma-joined", []string{"--query", "id:" + bugA + "," + taskAB}},
-				{"query, repeated terms", []string{"--query", "id:" + bugA + " id:" + taskAB}},
-				{"flag and query together", []string{"--ids", bugA, "--query", "id:" + taskAB}},
+				{"query", []string{"--query", "id=" + bugA + "," + taskAB}},
 			},
 			want:     []string{bugA, taskAB},
 			unwanted: []string{featB},
@@ -87,9 +84,8 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			spellings: []setFlagSpelling{
 				{"flag, comma-joined", []string{"--labels", "a,b"}},
 				{"flag, repeated", []string{"--labels", "a", "--labels", "b"}},
-				{"query, comma-joined", []string{"--query", "label:a,b"}},
-				{"query, repeated terms", []string{"--query", "label:a label:b"}},
-				{"flag and query together", []string{"--labels", "a", "--query", "label:b"}},
+				{"query", []string{"--query", "labels=a labels=b"}},
+				{"flag and query together", []string{"--labels", "a", "--query", "labels=b"}},
 			},
 			want:     []string{taskAB},
 			unwanted: []string{bugA, featB},
@@ -99,9 +95,7 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			spellings: []setFlagSpelling{
 				{"flag, comma-joined", []string{"--assignee", "ann,bob"}},
 				{"flag, repeated", []string{"--assignee", "ann", "--assignee", "bob"}},
-				{"query, comma-joined", []string{"--query", "assignee:ann,bob"}},
-				{"query, repeated terms", []string{"--query", "assignee:ann assignee:bob"}},
-				{"flag and query together", []string{"--assignee", "ann", "--query", "assignee:bob"}},
+				{"query", []string{"--query", "assignee=ann,bob"}},
 			},
 			want:     []string{bugA, taskAB},
 			unwanted: []string{featB},
@@ -113,8 +107,8 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 			flag: "search",
 			spellings: []setFlagSpelling{
 				{"flag, repeated", []string{"--search", "task", "--search", "a"}},
-				{"query, repeated terms", []string{"--query", "task a"}},
-				{"flag and query together", []string{"--search", "task", "--query", "a"}},
+				{"query", []string{"--query", "text~task text~a"}},
+				{"flag and query together", []string{"--search", "task", "--query", "text~a"}},
 			},
 			want:     []string{taskAB},
 			unwanted: []string{bugA, featB},
@@ -157,23 +151,23 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 		{"--type", "bug", "--type", "bogus"},
 		{"--type", ""},
 		{"--type", "bug,"},
-		{"--query", "type:bug,bogus"},
-		{"--query", "type:bug,"},
+		{"--query", "type=bug,bogus"},
+		{"--query", "type=bug,"},
 		{"--ids", ""},
 		{"--ids", " , "},
 		{"--ids", bugA, "--ids", ""},
 		{"--ids", bugA + ","},
-		{"--query", "id:"},
-		{"--query", "id:" + bugA + ","},
+		{"--query", "id="},
+		{"--query", "id=" + bugA + ","},
 		{"--labels", ""},
 		{"--labels", "a", "--labels", ""},
 		{"--labels", "a,"},
-		{"--query", "label:"},
+		{"--query", "labels="},
 		{"--assignee", ""},
 		{"--assignee", "ann", "--assignee", ""},
 		{"--assignee", "ann,"},
-		{"--query", "assignee:"},
-		{"--query", "assignee:ann,"},
+		{"--query", "assignee="},
+		{"--query", "assignee=ann,"},
 		{"--search", ""},
 		{"--search", "task", "--search", " "},
 	} {
@@ -191,9 +185,10 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 }
 
 // Every set-filter refusal, in either spelling, is a validation refusal
-// (exit 3) naming the spelling that failed. Each repeats on every retry, so
-// none may exit as a generic failure and draw retry-and-doctor advice, and a
-// flag and its term must not fail differently for one malformed request.
+// (exit 3) naming what failed. Each repeats on every retry, so none may exit
+// as a generic failure and draw retry-and-doctor advice, and a flag and its
+// atom must not fail differently for one malformed request. The field:value
+// spelling of a retired grammar is refused with the grammar this one reads.
 func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 	t.Parallel()
 	h, _, _, _ := setFlagFixture(t)
@@ -209,16 +204,14 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		{[]string{"--labels="}, "--labels"},
 		{[]string{"--assignee="}, "--assignee"},
 		{[]string{"--search="}, "--search"},
-		{[]string{"--query", "status:todo"}, "todo"},
-		{[]string{"--query", "type:bogus"}, "bogus"},
-		{[]string{"--query", "id:"}, "id:"},
-		{[]string{"--query", "parent:"}, "parent:"},
-		{[]string{"--query", "label:"}, "label:"},
-		{[]string{"--query", "assignee:"}, "assignee:"},
-		// Refused while joining a term to the flags rather than while parsing
-		// the term: the join is part of the same request.
-		{[]string{"--has-comments=false", "--query", "has:comments"}, "has-comments"},
-		{[]string{"--query", "updated>=2026-03-01T00:00:00Z updated<=2026-01-01T00:00:00Z"}, "updated"},
+		{[]string{"--query", "status=todo"}, "todo"},
+		{[]string{"--query", "type=bogus"}, "bogus"},
+		{[]string{"--query", "id="}, "!id"},
+		{[]string{"--query", "parent="}, "!parent"},
+		{[]string{"--query", "labels="}, "!labels"},
+		{[]string{"--query", "assignee="}, "!assignee"},
+		{[]string{"--query", "status:open"}, "path OP value"},
+		{[]string{"--updated-after", "yesterday"}, "--updated-after"},
 	} {
 		err := runListWithStore(t, h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, tc.args)
 		if got := ExitCode(err); got != ExitValidation {

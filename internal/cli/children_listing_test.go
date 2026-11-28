@@ -37,7 +37,7 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 		nil,
 		{"--format", "table", "--columns", "id,state,title"},
 		{"--status", "open,closed"},
-		{"--query", "status:closed", "--columns", "id,parent"},
+		{"--query", "status=closed", "--columns", "id,parent"},
 	} {
 		var children, ls bytes.Buffer
 		if err := runChildren(t, f.ctx, &children, f.ap, append([]string{f.epicID.Raw()}, flags...)); err != nil {
@@ -74,9 +74,9 @@ func TestListingUnderAMissingParentIsNotFound(t *testing.T) {
 	if !errors.As(err, &notFound) {
 		t.Fatalf("children test-nope error = %v, want storage.NotFoundError", err)
 	}
-	err = runListWithStore(t, f.ctx, &out, f.ap.Store, noReadyPolicy, []string{"--query", "parent:test-nope"})
+	err = runListWithStore(t, f.ctx, &out, f.ap.Store, noReadyPolicy, []string{"--parent", "test-nope"})
 	if !errors.As(err, &notFound) {
-		t.Fatalf("ls --query parent:test-nope error = %v, want storage.NotFoundError", err)
+		t.Fatalf("ls --parent test-nope error = %v, want storage.NotFoundError", err)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("missing-parent listings emitted %q; want no output on the error path", out.String())

@@ -176,19 +176,12 @@ func sortInTreeOrder(ctx context.Context, q rowQueryer, groups ...[]model.Issue)
 	return nil
 }
 
-// listingOrdering is the comparison a listing sorts by, for the rows selected
-// names. A listing not restricted to known rows has none to climb from until
-// its query has run, and the listing that reaches most of the store pays less
-// for the whole read than for a climb from every row, so it reads every framing
-// edge.
-func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, selected []model.ID, restricted bool) (func(a, b model.Issue) int, error) {
-	var ancestry storage.RankAncestry
-	var err error
-	if restricted {
-		ancestry, err = loadRankAncestryAbove(ctx, s.db, selected)
-	} else {
-		ancestry, err = loadRankAncestry(ctx, s.db)
-	}
+// listingOrdering is the comparison a listing sorts by, for the rows it lists,
+// reading the framing edges above them: a query a level of parents, each a run
+// of index lookups (rankClimbQuery), so what it costs grows with the depth of
+// the hierarchy and the rows' ancestry, not with the store.
+func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, listed []model.ID) (func(a, b model.Issue) int, error) {
+	ancestry, err := loadRankAncestryAbove(ctx, s.db, listed)
 	if err != nil {
 		return nil, err
 	}
@@ -1353,29 +1346,23 @@ type rowQueryer interface {
 }
 
 // liveIssueIDs returns the set of non-archived, non-deleted issue IDs whose
-// lifecycle State() is not Closed. Archived issues are user-deprioritized and
-// do not generate actionable inversions, for the same reason closed issues do
-// not.
+// state is not closed. Archived issues are user-deprioritized and do not
+// generate actionable inversions, for the same reason closed issues do not.
 //
-// The classification is settled in Go, never in SQL, and that is load-bearing.
-// Epics store status=NULL by design — the issues_status_check constraint in
-// migrations/00001_baseline.sql encodes it: epics have status IS NULL, leaves
-// carry a known value — and derive their state from their children via AllOf.
-// So a SQL-side `status != 'closed'` test evaluates to NULL rather than TRUE
-// for every epic and silently drops every blocks-edge pointing at one, so
-// Doctor would report zero inversions where ready flags the same edge.
-// Hydrating through the canonical path instead gets the AllOf rollup, never a
-// raw column peek that would lie about an epic.
-// [LAW:one-source-of-truth] State classification rides the lifecycle here,
-// the same predicate ready uses for its rank_inversion annotations.
+// The state is the selector's status, never the column: an epic's column is
+// NULL by design, and its state is its leaves' (walkCTE), so a raw column test
+// would drop every blocks-edge pointing at an epic and Doctor would report
+// zero inversions where ready flags the same edge.
+// [LAW:one-source-of-truth] State classification rides the one status reading
+// here, the same predicate ready uses for its rank_inversion annotations.
 func (s *Store) liveIssueIDs(ctx context.Context) (map[model.ID]struct{}, error) {
-	issues, err := s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
+	ids, err := s.SelectIssueIDs(ctx, storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen, model.StateInProgress)})
 	if err != nil {
 		return nil, fmt.Errorf("list live issues: %w", err)
 	}
-	out := make(map[model.ID]struct{}, len(issues))
-	for _, issue := range issues {
-		out[issue.ID] = struct{}{}
+	out := make(map[model.ID]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
 	}
 	return out, nil
 }

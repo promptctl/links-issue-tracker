@@ -33,7 +33,10 @@ import (
 //  2. `x IN (SELECT id FROM JSON_TABLE(...))` — the idSet written as a
 //     subquery rather than joined. On the three-way children join it plans
 //     quadratically in the rows instead: 5s against the join's 43ms. So the
-//     set is only ever a join source, and rows is its only rendering.
+//     set is only ever a join source, and rows is its only rendering. A
+//     selector atom's value list has to be a boolean, so selection.go's inList
+//     takes this shape over a list no row correlates with, and
+//     selection_plan_test.go pins its plan to one the engine runs once.
 //
 // An `IN (...)` list remains right where its length is bounded by something
 // other than the caller: a CLOSED DOMAIN (the five issue types, the two

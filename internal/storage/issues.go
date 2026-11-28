@@ -3,7 +3,6 @@ package storage
 import (
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -229,40 +228,4 @@ func labelsEdit(labels []string, actor string) Change {
 type SortSpec struct {
 	Field string
 	Desc  bool
-}
-
-// ListIssuesFilter is the whole variability of the issue listing surface,
-// carried as one value. Every slice is an OR within itself and an AND against
-// the other criteria; every zero value means "do not constrain on this axis",
-// which is why a listing needs no mode flags and why an engine adding a new
-// criterion cannot change what an existing caller's filter means.
-// [LAW:dataflow-not-control-flow] The listing runs one path; this value is
-// what varies.
-//
-// IncludeArchived and IncludeDeleted are the two axes whose default is a
-// filter rather than an absence: a listing that says nothing about retention
-// sees only live issues.
-//
-// ParentIDs selects the direct children of the named issues — membership read
-// off the parent-child edge, never off the id prefix. It is the one axis whose
-// criteria must exist: an id naming no issue is a NotFoundError, because "that
-// parent has no children" and "there is no such parent" are different facts,
-// and an empty listing could only say the first. [LAW:no-silent-failure]
-type ListIssuesFilter struct {
-	Statuses          []model.State
-	Resolutions       []model.Resolution
-	IssueTypes        []model.IssueType
-	ExcludeIssueTypes []model.IssueType
-	Assignees         []string
-	SearchTerms       []string
-	IDs               []model.ID
-	ParentIDs         []model.ID
-	HasComments       *bool
-	LabelsAll         []string
-	UpdatedAfter      *time.Time
-	UpdatedBefore     *time.Time
-	IncludeArchived   bool
-	IncludeDeleted    bool
-	SortBy            []SortSpec
-	Limit             int
 }

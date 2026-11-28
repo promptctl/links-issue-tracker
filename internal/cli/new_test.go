@@ -92,7 +92,7 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 	second := runCreate("Second")              // default: appends after First
 	promoted := runCreate("Promoted", "--top") // explicit: jumps the queue
 
-	issues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := ap.Store.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

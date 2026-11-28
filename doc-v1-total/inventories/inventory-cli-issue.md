@@ -478,12 +478,13 @@ prefix (`cli.go`).
   `model.ParsePriorityName` directly; both refuse with `model.ValidationError` →
   exit 3 and the `validation_refused` remediation. `--priority` is a string flag
   so the word form reaches `ParsePriorityName` — a pflag `ParseInt` refused it with
-  a bare error that fell through to the default "Retry the command"
-  (links-cli-bvko).
-  The read path (`lit ls`) parses `--type` with `model.ParseIssueTypes`
-  (`internal/model/issue_type.go`) and `--status` with `model.ParseStates`
-  (`internal/model/lifecycle/lifecycle.go`), and wraps either failure in
-  `model.ValidationError` → exit 3 (`listLeaf`, `cli.go`).
+  a bare error that fell through to the default "Retry the command".
+  The read path (`lit ls`) reads every `--type` and `--status` member as a
+  value of one selector atom, `type=...` or `status=...`: `storage.ParseAtom`
+  hands each to its field's own parser, `model.ParseIssueType` or
+  `model.ParseState` (`internal/storage/issue_fields.go`), and a refusal is a
+  `model.ValidationError` wrapped `parse --<flag>: %w` → exit 3 (`flagSelector`,
+  `internal/cli/selection.go`).
 - `issueTypeChoices()` renders `task|feature|bug|chore|epic` into flag help
   (`cli.go`), and `priorityChoices()` renders `normal|urgent` the same
   way — into both the `--priority` help string and the `followup`
@@ -494,10 +495,11 @@ prefix (`cli.go`).
 ### 1.18 Readiness / workability — the exact predicate
 
 **Step 1 — candidate set** (`classifyWorkable`, `cli.go`):
-`ListIssues` with `Statuses = [open, in_progress]` (or the single `--status`
-value if given), `IssueTypes`/`Assignees`/`LabelsAll` from the CLI filter,
-`IncludeArchived=false`, `IncludeDeleted=false`, `Limit=0` (`cli.go`).
-The store's default ordering is `item_rank ASC` (`cli.go`).
+`ListIssues` over the selector `status=open,in_progress`
+(`storage.IssueStatus.Is`), archived and deleted issues not admitted, no sort,
+no limit (`cli.go`). No CLI filter reaches this read: the views narrow the
+rows afterwards (`keepRows`, below; `routeNext`, §2.14). The order is the store's default, rank ascending in
+tree order (`cli.go`; `internal/storage/contract.go`).
 
 **Step 2 — leaves only**: `filterWorkableIssues` keeps issues whose
 `Capabilities().Status != nil` (i.e. leaves, not containers) and whose status is
@@ -573,12 +575,17 @@ the epic plan, `lit ls --columns blocked`, or the `lit stores --counts` rollup
 (`cli.go`). It appends `FocusPath{Message: goalID}`, after every readiness
 annotation, to each row on a focused goal's prerequisite closure, and returns
 `focusedQueue{workableGather, scope}` with `scope = focusScopeOf(path)`.
-`gatherWorkableAnnotated` narrows the rows with `keepRows` and carries the scope
-through unchanged (`cli.go`).
+`gatherWorkableAnnotated` first reads the ids the run's filter selects
+(`workableFilter.selected`: `SelectIssueIDs` over the filter's selector, archived
+and deleted not admitted, collected into an `issueSet`), then narrows the rows
+with `keepRows(asked)`, which keeps each row whose id is in the set and its
+relations, keeps `epics` and the queue facts whole, and carries the scope through
+unchanged (`cli.go`, `queue_facts.go`).
 
 **Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go`):
-goals are issues with `Statuses=[open,in_progress]` and label `focus`
-(`FocusLabel = "focus"`, `ready_state.go`). BFS over the
+goals are the issues `ListIssues` returns for the selector
+`status=open,in_progress labels=focus` (`storage.IssueStatus.Is`,
+`storage.IssueLabels.Has`; `FocusLabel = "focus"`, `ready_state.go`). BFS over the
 prerequisite DAG, one `fetchWaitLinks` expansion per level. The
 `path` map doubles as the visited set, so shared prerequisites attribute to the
 first goal reached and cycles terminate. Relations are memoized through
@@ -743,30 +750,56 @@ else ready.
 `cli.go`). "Only if visited" means the flag appears on the command line
 (`fs.Visit`, `cli.go`).
 
+Each filter flag is one `flagAtom` — the flag's name, the atom's path and
+operator, its occurrences, and whether they are `split` and whether `each` value
+is its own atom — and `flagSelector` (`internal/cli/selection.go`) reads them as
+one selector. A flag given no value, or a boolean flag not visited, adds
+nothing. A split flag's occurrences are each a comma list, unioned, every
+fragment trimmed (`storage.ParseNames`); an unsplit flag's occurrences are each
+trimmed and taken whole. A blank slot or occurrence →
+`model.ValidationError{"--<flag> needs a value in every slot, e.g. --<flag> <value>"}`
+→ exit 3. Every atom is built by `storage.ParseAtom(now, path, op, values...)`,
+the parse the same atom written in `--query` gets, so the field's own parser
+canonicalizes or refuses each value; a refusal is its `model.ValidationError`
+wrapped `parse --<flag>: %w` → exit 3. An `each` flag makes one atom per value,
+so every value must hold; any other flag makes one atom of all its values,
+which holds when the field is any of them (`internal/cli/selection.go`;
+`internal/selector/parse.go`).
+
 | Flag | Type | Default | Effect |
 |---|---|---|---|
 | `--at` | string | `""` | Declared so the parse accepts it (`cli.go`); `listLeaf` returns its value pointer to `runList` (`cli.go`), which routes on it. The work closure does not read it |
-| `--status` | string array | `nil` | State set via `model.ParseStates` — comma-separated and/or repeated, every fragment parsed; refusal → `ValidationError{"parse --status: " + err}` → exit 3 (`cli.go`) |
-| `--type` | string array | `nil` | Type set via `model.ParseIssueTypes` — comma-separated and/or repeated, every fragment parsed, so a blank or unknown member is refused and named; refusal → `ValidationError{"parse --type: " + err}` → exit 3 (`cli.go`) |
-| `--assignee` | string array | `nil` | Assignees, comma-separated and/or repeated, read by `storage.ParseNames` (`parseAssigneeSet`) → `Assignees` (ORed); a blank slot → `model.ValidationError{"--assignee needs a user in every slot, e.g. --assignee <user>"}` → exit 3 (`cli.go`) |
-| `--search` | string array | `nil` | One `SearchTerms` entry per occurrence, trimmed and **never comma-split** (`parseSearchTerms`), so every term must match; a blank occurrence → `model.ValidationError{"--search needs text in every occurrence, e.g. --search <text>"}` → exit 3 (`cli.go`) |
-| `--ids` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames` exactly as `--parent` is → `filter.IDs`; a blank slot (`--ids=`, `--ids a,`) → `model.ValidationError{"--ids needs an issue id in every slot, e.g. --ids <issue-id>"}` → exit 3 (`cli.go`; `internal/storage/selects.go`) |
-| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated; `storage.ParseNames` splits each occurrence on commas and collects the ids of all occurrences, then the surface's positionals are appended → `filter.ParentIDs` (direct children, ORed). A blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `model.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. An id naming no issue → `NotFoundError` from the store → exit 4 (`cli.go`; `store.go`) |
-| `--labels` | string array | `nil` | Labels, comma-separated and/or repeated, read by `storage.ParseNames` → `LabelsAll` (ALL must match, so each added label narrows); a blank slot → `model.ValidationError{"--labels needs a label in every slot, e.g. --labels <label>"}` → exit 3 (`cli.go`) |
-| `--has-comments` | bool | `false` | Only if visited; sets the pointer to the flag's value — so `--has-comments=false` filters to issues *without* comments (`cli.go`) |
-| `--include-archived` | bool | `false` | `filter.IncludeArchived` (`cli.go`) |
-| `--include-deleted` | bool | `false` | `filter.IncludeDeleted` (`cli.go`) |
-| `--updated-after` | string | `""` | Only if visited; read by `query.ParseTimestamp`; its `model.ValidationError` wrapped `parse --updated-after: %w` → exit 3 (`cli.go`) |
-| `--updated-before` | string | `""` | Only if visited; read by `query.ParseTimestamp`; its `model.ValidationError` wrapped `parse --updated-before: %w` → exit 3 (`cli.go`) |
-| `--query` | string | `""` | Query language (see below). A blank query parses to an empty filter, so `Parse` and `Merge` run on every listing and a flag-only filter meets the same whole-filter rules (`cli.go`) |
+| `--status` | string array | `nil` | The atom `status=<set>`, split; each member read by `model.ParseState` (lowercased, trimmed, `in-progress` read as `in_progress`). An epic's status is the one its leaves derive (`cli.go`; `internal/storage/issue_fields.go`) |
+| `--type` | string array | `nil` | The atom `type=<set>`, split; each member read by `model.ParseIssueType`, so an unknown member is refused and the refusal names it (`type=<member>: ...`) (`cli.go`; `internal/selector/parse.go`) |
+| `--assignee` | string array | `nil` | The atom `assignee=<set>`, split; each member read by `model.NormalizeAssignee` (`cli.go`; `internal/storage/issue_fields.go`) |
+| `--search` | string array | `nil` | One atom `text~<term>` per occurrence (`each`), each occurrence trimmed and **never comma-split**, so every term must hold; `text` is the title, description, prompt, plan and topic, and `~` is contains, ignoring case (`cli.go`; `internal/storage/issue_fields.go`) |
+| `--ids` | string array | `nil` | The atom `id=<set>`, split; ids compared as typed after the trim (`cli.go`) |
+| `--parent` | string array | `nil` | Issue ids, comma-separated and/or repeated, read by `storage.ParseNames`, then the surface's positionals are appended; a blank slot (`--parent=`, `--parent ", "`, `--parent a,`) → `model.ValidationError{"--parent needs an issue id in every slot, e.g. --parent <epic-id>"}` → exit 3, checked before the positionals are appended, so `lit children <id> --parent=` is refused too. The ids are the atom `parent=<set>`: an issue whose parent, read off the parent-child edge and admitted by the read, is one of them, so only direct children. `requireParents` then refuses an id naming no issue → `storage.NotFoundError{Entity: "issue"}` → exit 4, and a parent the read does not admit → `model.ValidationError{"parent <id> is archived; --include-archived lists under it"}` (`deleted`, `--include-deleted` for a deleted one) → exit 3 (`cli.go`; `internal/cli/selection.go`) |
+| `--labels` | string array | `nil` | One atom `labels=<label>` per member (`each`, split), so every label must be held and each added label narrows; each member read by `model.NormalizeLabel` (`cli.go`) |
+| `--has-comments` | bool | `false` | Only if visited; the atom `comments` (the issue has a comment), or with `--has-comments=false` `!comments` (it has none) (`presenceOf`, `internal/cli/selection.go`) |
+| `--include-archived` | bool | `false` | `Selection.IncludeArchived`: archived issues exist for the selector, at every step of every path (`cli.go`; `internal/storage/issue_fields.go`) |
+| `--include-deleted` | bool | `false` | `Selection.IncludeDeleted`, as `--include-archived` for deleted issues (`cli.go`) |
+| `--updated-after` | string | `""` | Only if visited; the atom `updated_at>=<stamp>`, the value trimmed and taken whole. A stamp is `now`, `now-N`/`now+N` with a unit of `m`, `h`, `d` or `w`, or an RFC 3339 instant in the years 0000 to 9999 UTC; any other → `"a stamp is now, now-6h, now+2d (m h d w) or an instant like 2026-01-02T15:04:05Z"` in the wrapped refusal → exit 3 (`cli.go`; `internal/selector/parse.go`, `internal/model/stamp.go`) |
+| `--updated-before` | string | `""` | Only if visited; the atom `updated_at<=<stamp>`, read as `--updated-after` is (`cli.go`) |
+| `--query` | string | `""` | A selector (grammar below), read by `storage.ParseSelector(text, now)`; a blank query is the selector with no atoms. A refusal is `model.ValidationError{"selector %q: <reason>"}` → exit 3 (`cli.go`; `internal/selector/parse.go`) |
 | `--sort` | string | `""` | `storage.ParseSortSpecs`, applied when non-blank after trim (`cli.go`) |
 | `--columns` | string | `""` | CSV of column names, lowercased, via `parseColumnSelection` (`cli.go`, `columns.go`) |
-| `--format` | string | `lines` | `lines` or `table` via `parseListFormat` (`cli.go`) |
-| `--limit` | int | `0` | `filter.Limit`, read by `query.ParseLimit` before the query merge; a negative value → `limit must be non-negative, got %d` wrapped `parse --limit: %w` → exit 3 (`cli.go`, `query.go`) |
+| `--format` | string | `lines` | `lines`, `table` or `yaml` via `parseListFormat` (`cli.go`, `output.go`) |
+| `--limit` | int | `0` | `Listing.Limit`, read by `parseLimit` (`internal/cli/selection.go`): `0` is uncapped, and a negative value → `model.ValidationError{"limit must be non-negative, got %d"}` wrapped `parse --limit: %w` → exit 3 (`cli.go`) |
 
-- Flag help for `--query` (verbatim): "Query language: status:closed,in_progress
-  resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted
-  text" (`cli.go`).
+- Flag help for `--query` (verbatim): "Selector every listed issue satisfies;
+  its grammar and fields are below" (`cli.go`). Below is the flag set's
+  detail: `listLeaf` declares `Detail(listReference())`, so `lit ls --help` and
+  `lit children --help` print it above the flag list (`cli.go`, `flagset.go`).
+  `listReference()` is `storage.SelectorReference()` — `selector.Describe` over
+  `IssueSchema` and `SelectorExamples`: the grammar, each kind with the
+  operators it takes, every field of the issue and workspace tables with its
+  kind and doc, and the examples — followed by "Archived and deleted issues
+  exist for the selector only with --include-archived and --include-deleted, at
+  every step of every path. Unless an atom reads the issue's own status or
+  resolution, the listing selects open and in_progress issues."
+  (`internal/cli/selection.go`; `internal/storage/issue_fields.go`,
+  `internal/selector/describe.go`).
 - `--sort` help: "Sort fields, e.g. rank:asc,updated_at:desc" (`cli.go`).
   `ParseSortSpecs` splits on `,`, skips blank fragments, then reads
   `field[:asc|desc]` (a bare field is ascending); an unrecognized direction →
@@ -781,46 +814,78 @@ else ready.
   `labels`, `parent`, `priority`, `rank`, `state`, `title`, `topic`, `type`,
   `updated_at` (`columns.go`).
 
-**`--query` grammar** (`internal/query/query.go`):
-- `Parse` trims the input and tokenizes it (`query.go`). The tokenizer
-  splits on space, tab and newline and honors single and double quotes, which it
-  strips; an unterminated quote → `"unterminated quote in query"`
-  (`query.go`). `Parse` returns every refusal as a `model.ValidationError`
-  carrying the underlying message, so each exits 3 (`query.go`).
-- Terms (`applyTerm`, `query.go`): `status:<state>[,<state>...]` (via
-  `model.ParseStates`), `resolution:<res>` (via `model.ParseResolution`),
-  `type:<type>[,<type>...]` (via `model.ParseIssueTypes`),
-  `assignee:<v>[,<v>...]`, `id:<v>[,<v>...]`, `parent:<v>[,<v>...]`,
-  `label:<v>[,<v>...]` (the last four via `storage.ParseNames`, the reader the matching flag uses; a blank
-  slot, such as bare `parent:` →
-  `model.ValidationError{"parent: needs an issue id in every slot, e.g. parent:<epic-id>"}`,
-  `query.go`), `has:comments` (any other `has:` →
-  `unsupported has: filter %q`), `sort:<spec>` (via `storage.ParseSortSpecs`),
-  `limit:<int>` (non-numeric → `limit must be an integer, got %q`; negative →
-  `limit must be non-negative, got %d`), bare `archived`, bare `deleted`, and any
-  term beginning `updated` (`query.go`). Anything else becomes a free-text
-  search term (`query.go`).
-- `updated` terms (`applyTimeTerm`, `query.go`; `splitComparator`,
-  `query.go`): the comparator is one of `>=`, `<=`, `>`, `<`, `:`; a missing
-  comparator or empty value is wrapped `parse updated term %q`; a value
-  `query.ParseTimestamp` refuses → `timestamp must be RFC3339 and fall in the years 0000 to 9999 UTC, got %q`. `>=` and
-  `>` both set updated-after; `<=` and `<` both set updated-before; `:` with a
-  valid timestamp → `updated supports only >=, >, <=, <`.
-- `query.Merge(filter, parsed.Filter)` (`query.go`): statuses, types,
-  assignees, parent ids and sort keys dedupe-merge, flag values first
-  (`mergeSlice`, `query.go`); resolutions, search terms, ids and labels
-  plain append; `IncludeArchived`/`IncludeDeleted` OR; `Limit` overwritten when the
-  query limit > 0. Conflicting `has-comments` → `conflicting has-comments filters`;
-  conflicting time bounds → `conflicting updated-after filters <t1> and <t2>`
-  (`query.go`). `Merge` ends with `validateFilter`: `UpdatedAfter > UpdatedBefore` →
-  `updated-after cannot be greater than updated-before` (`query.go`). `Merge`
-  returns each refusal as a `model.ValidationError`, so each exits 3, and `lit ls`
-  runs it even with no `--query`.
+**`--query` grammar** (`internal/selector/parse.go`; fields
+`internal/storage/issue_fields.go`):
+- `selector = atom atom ...`, `atom = path | !path | path OP value[,value...]`,
+  `path = [/] segment/segment/...`, `segment = name | name(selector)`; atoms are
+  separated by whitespace and every atom must hold (`parse.go`). `OP` is one of
+  `=` `!=` `~` `<` `<=` `>` `>=`, scanned longest spelling first (`selector.go`).
+- `path` holds when the path reads a value and `!path` when it reads none; `=`
+  holds when some value read is some value listed; `!=` exactly where `=` does
+  not, so it holds for a path that reads nothing; `~` when some value read contains some
+  value listed, ignoring case; `<` `<=` `>` `>=` take exactly one value
+  (`selector.go`, `parse.go`).
+- A field whose values are rows reads on into their fields
+  (`parent/status=closed`) and takes `(selector)` to keep only the rows it
+  selects (`children(status!=closed)`); a list ends in `/count`, the number of
+  distinct values it reads, compared with `=` `!=` `<` `<=` `>` `>=` against a
+  whole number. A leading `/` reads from the workspace, whose one field `issues`
+  is every issue the read admits (`parse.go`; `issue_fields.go`).
+- Kinds and the forms each takes (`rules`, `selector.go`): `text`
+  `path !path = != ~`; `enum` `path !path = !=`; `stamp`
+  `path !path = != < <= > >=`; `search` `~`; `ref`, `refs`
+  `path !path = !=`; `texts` `path !path = != ~`; `records` `path !path`;
+  `refs`, `texts` and `records` also take `/count`.
+- Issue fields (`IssueTable`, `issue_fields.go`): text `id`, `title`, `topic`,
+  `assignee`, `lane`, `description`, `prompt`, `plan`; enum `type`, `priority`,
+  `status`, `resolution`, `phase`; stamp `created_at`, `updated_at`,
+  `closed_at`; search `text` (title, description, prompt, plan, topic); texts
+  `labels`; ref `parent`, `follows_up`, `redirect_target`; refs `children`,
+  `siblings`, `blocked_by`, `blocks`, `related`, `follow_ups`; records
+  `comments`, `plan_reviews`. An epic's `status` is its leaves': closed once
+  every one is, in_progress once any has started or closed, else open, a live
+  epic counting only live leaves; `phase` is an in-progress leaf's newest phase
+  move, or `plan`, and absent for every other issue.
+- A value runs to whitespace, `,`, `(`, `)` or `"`; `"..."` holds any of them,
+  escaping only `\"` and `\\` (`parse.go`). An `=`/`!=` value is put in the
+  form its field compares in by the field's own parser — `model.ParseState`,
+  `model.ParseIssueType`, `model.ParsePriorityName`, `model.ParseResolution`,
+  `model.ParsePhase`, `model.NormalizeLabel`, `model.NormalizeAssignee`,
+  `issueid.NormalizeTopicForCreate`, `storage.ParseLane`; a row field's value is
+  its table's key, `id`, as typed — and a `~` value is lowercased
+  (`parse.go`, `issue_fields.go`).
+- A stamp is `now`, `now-N`/`now+N` with a unit of `m`, `h`, `d` or `w`, or an
+  RFC 3339 instant (`model.ParseStamp`); `now` is read once, at the start of
+  the work closure, and shared by `--query` and the `--updated-*` flags
+  (`parse.go`, `cli.go`). A stamp compares as its stamp text, which orders as
+  its instant does (`selector.go`).
+- Refused before anything is read, each as
+  `model.ValidationError{"selector %q: <reason>"}` → exit 3 (`parse.go`): an
+  unknown field (the reason lists the table's fields), an operator the kind does
+  not take, an ordering with more than one value, an empty value, `!path` with an
+  operator, `/count` on a field that is not a list or not ending the path,
+  `(selector)` on a field whose values are not rows, a `(` or quoted value never
+  closed, a `)` closing nothing, an escape other than `\"` and `\\`, a count
+  that is not a whole number, and a value its field's parser refuses.
 
-**Default active-work filter** (`cli.go`): if after all merging both
-`filter.Statuses` and `filter.Resolutions` are empty, statuses default to
-`[open, in_progress]`. A resolution filter alone therefore *does not* get clamped
-(so `--query resolution:wontfix` reaches closed issues).
+**One selector** (`cli.go`): the flag atoms and the `--query` selector are one
+conjunction, `storage.And(flagged, queried)`, so every flag and every query atom
+narrows: `--updated-after` later than `--updated-before`, or
+`--status open --query status=closed`, selects nothing.
+
+**Default active-work filter** (`activeByDefault`, `internal/cli/selection.go`):
+unless an atom reads `status` or `resolution` directly from the issue
+(`Selector.Starts`, so not through a path and not from the workspace), the
+selector gains `status=open,in_progress`. A resolution atom alone therefore
+reaches closed issues (`--query resolution=wontfix`), and `parent/status=closed`
+lists only active issues.
+
+**Order of the work** (`cli.go`): `parseListFormat`; one `now`; the `--parent`
+ids; `flagSelector`; `storage.ParseSelector`; `requireParents`, which reads every
+named parent once — `ListIssues` over `id=<parents>`, archived and deleted
+admitted — and judges each by `Selection.Admits`
+(`internal/cli/selection.go`); `parseLimit`; `ParseSortSpecs`; then
+`ListIssues(Listing{Selection, Sort, Limit})`.
 
 **Relation columns**: after `ListIssues` (`cli.go`), `listDerivedColumns`
 (`cli.go`) loads the data for the highest source any selected
@@ -1369,23 +1434,31 @@ line for `done` and `close`, each group omitted when empty:
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `--assignee` | string array | `nil` | Assignee set, comma-separated and/or repeated, via `parseAssigneeSet` as on `lit ls` |
-| `--type` | string array | `nil` | Type set, comma-separated and/or repeated, via `parseIssueTypeSet` as on `lit ls` |
+| `--assignee` | string array | `nil` | The atom `assignee=<set>`, comma-separated and/or repeated, as on `lit ls` |
+| `--type` | string array | `nil` | The atom `type=<set>`, comma-separated and/or repeated, as on `lit ls` |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
-| `--labels` | string array | `nil` | Label set (ALL must match), comma-separated and/or repeated, via `parseLabelSet` as on `lit ls` |
+| `--labels` | string array | `nil` | One atom `labels=<label>` per member (ALL must match), comma-separated and/or repeated, as on `lit ls` |
 | `--all` | bool | `false` | "Ignore the focus scope and list the whole queue" |
-| `--limit` | int | `0` | "Limit results" — applied **after** ordering; read by `query.ParseLimit`, so a negative value → `parse --limit: %w` → exit 3 (`workable.go`) |
+| `--limit` | int | `0` | "Limit results" — applied **after** ordering; read by `parseLimit` (`internal/cli/selection.go`), so a negative value → `parse --limit: %w` → exit 3 (`workable.go`) |
 | `--columns` | string | `""` | "Comma-separated output columns" |
 
 - Refusal: any positional argument → `UsageError{view.usage()}` (`workable.go`).
   `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all] [--limit N] [--columns ...]"`
   (`workable.go`).
-- `--status closed` (or any unparseable state) →
+- `--status` is one state: blank-after-trim is no narrowing, and otherwise
+  `model.ParseState` must read it and it must not be `closed`; `closed` (or any
+  unparseable state) →
   `model.ValidationError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 3
-  (`parseWorkableStatus`, `workable.go`).
-- A bad member of `--type`, `--assignee` or `--labels` (unknown type, blank
-  slot) → `model.ValidationError` → exit 3, the same refusal `lit ls` gives
-  (`workableFilterFlags.parse`, `workable.go`; `cli.go`).
+  (`parseWorkableStatus`, `workable.go`). A legal one is the atom `status=<state>`.
+- `workableFilterFlags.parse` builds the filter's selector with `flagSelector`
+  over the four flags, each the atom it stands for in `lit ls`, so a bad member
+  of `--type`, `--assignee` or `--labels` (unknown type, blank slot) →
+  `model.ValidationError` → exit 3, the same refusal `lit ls` gives
+  (`workable.go`; `internal/cli/selection.go`). The filter `narrows()` when the
+  selector has an atom (`cli.go`). It selects through the store, not over the
+  rows: `workableFilter.selected` runs `SelectIssueIDs(Selection{Selector})`,
+  archived and deleted not admitted, and returns the ids as an `issueSet`
+  (`cli.go`).
 - Prints the sync-staleness warning first (`workable.go`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
   (`workable.go`), then `gatherClaimContext` (`workable.go`). The focus scope
@@ -1506,11 +1579,14 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
   (`next.go`).
 - Prints the sync-staleness warning first (`next.go`).
-- Parses the filter into `asked` (`workableFilter.criteria`), then gathers the
+- Parses the filter, reads the ids it selects into `asked`
+  (`workableFilter.selected`: `SelectIssueIDs`, an `issueSet`), then gathers the
   whole workable queue, unfiltered — rows, relation details, **and the focus
   scope** — via `gatherWorkableQueue` (`next.go`, `cli.go`), then the claim
   context (`next.go`), and then routes (`next.go`):
-  `routeNext(rows, details, epics, cc.standings, cc.self, scope.scopeFor(*all), asked)`.
+  `routeNext(rows, details, epics, cc.standings, cc.evidence, cc.self, scope.scopeFor(*all), asked)`.
+  The event's gathered-row count is `len(gathered.keepRows(asked).rows)`
+  (`next.go`).
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
   (`ready_state.go`).
 
@@ -1555,8 +1631,10 @@ orphan annotation does not enter routing. A lane whose claim has expired is
 Only `laneHeldForeign` is routed around; a locked worktree past the clock
 derives `Held` and is one of these. Servability is not gated on `model.StateOpen`.
 
-**Routing precedence** — `routeNext(rows, details, epics, standings, self, scope focusScope)`
+**Routing precedence** — `routeNext(rows, details, epics, standings, evidence, self, scope focusScope, asked issueSet)`
 (`next_route.go`). `rows` are already in rank order (§1.18).
+`selected(row)` is `asked.has(row.ID)`: the filter decides which rows may be
+served, and every walk reads every row (`next_route.go`);
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
 (`next_route.go`);
 `verdict(row) = capacityFor(row, standings.Of(laneOf(row)), self)`
@@ -1578,7 +1656,7 @@ that or any lane of a held lane's epic. `scope = scope.owning(own)` before the
 pool is partitioned (`next_route.go`).
 
 If `own.holdsAny()` (`next_route.go`), steps 1–2b run as one closure,
-`ownSteps(serves)`, first with `serves` = `asked.Selects` and then, if that
+`ownSteps(serves)`, first with `serves` = `selected` and then, if that
 serves nothing, over every row; both dependency walks read every row either way:
 
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
@@ -1778,12 +1856,13 @@ claim; this command claims nothing.
 
 - Registration `register.go`, `app.AccessRead`. Handler `orphanedLeaf`
   (`cli.go`). Summary: "List in_progress issues with no recent updates".
-- Flags: `--assignee` (string array, comma-separated and/or repeated, via
-  `parseAssigneeSet` as on `lit ls`; a blank slot → exit 3) (`cli.go`).
+- Flags: `--assignee` (string array, comma-separated and/or repeated, the atom
+  `assignee=<set>` built by `flagSelector` as on `lit ls`; a blank slot → exit 3)
+  (`cli.go`).
 - Refusal: any positional → `UsageError{"usage: lit orphaned [--assignee <user>]"}`
   → exit 2 (`cli.go`).
-- Query: `Statuses = [in_progress]`, assignee filter, no archived, no deleted
-  (`cli.go`). Containers dropped via `filterWorkableIssues`
+- Query: `ListIssues` over `status=in_progress` (`storage.IssueStatus.Is`) and
+  the assignee atom, archived and deleted not admitted (`cli.go`). Containers dropped via `filterWorkableIssues`
   (`cli.go`).
 - Annotates with `newOrphanedAnnotator(orphanedThreshold)` only (`cli.go`) and
   keeps rows where `ClassifyReadiness(...).IsOrphaned()` (`cli.go`).
@@ -1814,11 +1893,14 @@ claim; this command claims nothing.
   (`pathflag.go`).
 - Filter: the positional is appended to the `--parent` ids (`cli.go`), so
   `lit children <id> [flags]` builds the filter `lit ls --parent <id> [flags]` builds
-  and prints the same output. The `ls` defaults apply: statuses default to
-  `[open, in_progress]` when no status or resolution filter is set
-  (`cli.go`), archived and deleted children are excluded unless
+  and prints the same output. The `ls` defaults apply: the selector gains
+  `status=open,in_progress` unless an atom reads the issue's own status or
+  resolution (`activeByDefault`, `internal/cli/selection.go`), archived and deleted children are excluded unless
   `--include-archived`/`--include-deleted`, and the default columns are
-  `id,state,topic,title`. A parent id naming no issue → `NotFoundError` → exit 4.
+  `id,state,topic,title`. A parent id naming no issue → `NotFoundError` → exit 4,
+  and an archived or deleted parent the read does not admit → `model.ValidationError`
+  naming `--include-archived` or `--include-deleted` → exit 3 (`requireParents`,
+  `internal/cli/selection.go`).
 
 ### 2.17 `lit comment` — Add / remove comments
 

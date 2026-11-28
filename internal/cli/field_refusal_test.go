@@ -71,16 +71,11 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		{"dep add closing a blocked-by cycle", runDepAdd, []string{task.ID.Raw(), "--blocked-by", blocked.ID.Raw()}, ExitValidation, reasonValidationRefused},
 		{"ls unsupported sort field", runLs, []string{"--sort", "bogus"}, ExitValidation, reasonValidationRefused},
 		{"ls unknown state in --status", runLs, []string{"--status", "bogus"}, ExitValidation, reasonValidationRefused},
-		{"ls query term refused", runLs, []string{"--query", "has:nope"}, ExitValidation, reasonValidationRefused},
-		{"ls query timestamp refused", runLs, []string{"--query", "updated>=junk"}, ExitValidation, reasonValidationRefused},
-		{"ls query term contradicting a flag", runLs, []string{"--updated-after", "2026-02-01T00:00:00Z", "--query", "updated>=2026-01-01T00:00:00Z"}, ExitValidation, reasonValidationRefused},
-		{"ls query window inverted", runLs, []string{"--query", "updated>=2026-02-01T00:00:00Z updated<=2026-01-01T00:00:00Z"}, ExitValidation, reasonValidationRefused},
+		{"ls query unknown field", runLs, []string{"--query", "nope"}, ExitValidation, reasonValidationRefused},
+		{"ls query stamp refused", runLs, []string{"--query", "updated_at>=junk"}, ExitValidation, reasonValidationRefused},
 		{"ls --updated-after not a timestamp", runLs, []string{"--updated-after", "junk"}, ExitValidation, reasonValidationRefused},
 		{"ls --updated-before not a timestamp", runLs, []string{"--updated-before", "junk"}, ExitValidation, reasonValidationRefused},
-		{"ls flag window inverted", runLs, []string{"--updated-after", "2026-02-01T00:00:00Z", "--updated-before", "2026-01-01T00:00:00Z"}, ExitValidation, reasonValidationRefused},
 		{"ls negative --limit", runLs, []string{"--limit", "-1"}, ExitValidation, reasonValidationRefused},
-		{"ls negative query limit", runLs, []string{"--query", "limit:-1"}, ExitValidation, reasonValidationRefused},
-		{"ls negative --limit beside a query limit", runLs, []string{"--limit", "-1", "--query", "limit:5"}, ExitValidation, reasonValidationRefused},
 		{"backlog negative --limit", runBacklog, []string{"--limit", "-1"}, ExitValidation, reasonValidationRefused},
 	}
 	for _, tc := range cases {

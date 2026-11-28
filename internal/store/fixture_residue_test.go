@@ -94,7 +94,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 		t.Fatalf("Open second copy: %v", err)
 	}
 	defer second.Close()
-	issues, err := second.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := second.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues on second copy: %v", err)
 	}

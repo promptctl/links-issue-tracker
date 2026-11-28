@@ -34,7 +34,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, evidenceIn(h.t, h.ctx, h.ap), cc.self, gathered.scope, storage.IssueCriteria{})
+	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, evidenceIn(h.t, h.ctx, h.ap), cc.self, gathered.scope, allOf(gathered.rows))
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and

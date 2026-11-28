@@ -60,7 +60,7 @@ func openIn(t *testing.T, checkout string, mode AccessMode, body func(*App)) {
 func readEvidence(t *testing.T, ap *App) claims.Evidence {
 	t.Helper()
 	ctx := context.Background()
-	issues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := ap.Store.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

@@ -86,9 +86,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	}
 
 	// List must return exactly goroutines issues with the concurrent-test label.
-	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{
-		LabelsAll: []string{"concurrent-test"},
-	})
+	all, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueLabels.Has("concurrent-test")}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -212,9 +210,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	}
 
 	// Verify total label count first — establishes the issues are all readable.
-	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{
-		LabelsAll: []string{"mixed-test"},
-	})
+	all, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueLabels.Has("mixed-test")}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

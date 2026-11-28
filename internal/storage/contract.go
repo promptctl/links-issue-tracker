@@ -34,8 +34,8 @@ type IssueReader interface {
 	// size. A missing id is NotFoundError.
 	GetIssueAdjacency(ctx context.Context, id model.ID) (IssueAdjacency, error)
 
-	// ListIssues returns the issues the filter selects, ordered by SortBy and
-	// then — always, as the last key — by id ascending. With no SortBy the
+	// ListIssues returns the issues the listing selects, ordered by Sort and
+	// then — always, as the last key — by id ascending. With no Sort the
 	// order is rank ascending — tree order, see [RankAncestry] — ties broken by
 	// id: the canonical ordering, so an unsorted listing is reproducible rather
 	// than merely arbitrary.
@@ -48,10 +48,20 @@ type IssueReader interface {
 	// rather than as the under-specification it would actually be.
 	// [LAW:no-silent-failure]
 	//
-	// SortBy may name only a key [sortKeys] holds; see it for what each key
+	// Sort may name only a key [sortKeys] holds; see it for what each key
 	// orders. [IssueOrdering] reads that table and applies the two rules above,
 	// and it is where an engine gets all of them rather than restating them.
-	ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error)
+	//
+	// A store whose parent links loop has no state for an epic on or above the
+	// loop, so a listing that holds one, or whose selector reads the status of
+	// one, refuses with ParentCycleError naming the loop.
+	ListIssues(ctx context.Context, listing Listing) ([]model.Issue, error)
+
+	// SelectIssueIDs returns the ids of the issues the selection selects, id
+	// ascending, hydrating nothing: it is the selection alone, for a caller
+	// narrowing rows it already holds. It refuses a parent loop where
+	// ListIssues would for the same selector.
+	SelectIssueIDs(ctx context.Context, selection Selection) ([]model.ID, error)
 
 	// ListTopics returns the distinct non-empty topics live issues carry,
 	// ascending. It is a derived vocabulary, never a stored one.

@@ -1209,7 +1209,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 		t.Fatalf("Open(consumer after adopt) error = %v", err)
 	}
 	defer adopted.Close()
-	issues, err := adopted.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := adopted.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues(consumer) error = %v", err)
 	}
@@ -1449,7 +1449,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 			t.Fatalf("OpenForRead(%s) error = %v", root, err)
 		}
 		defer st.Close()
-		list, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+		list, err := st.ListIssues(ctx, storage.Listing{})
 		if err != nil {
 			t.Fatalf("ListIssues(%s) error = %v", root, err)
 		}

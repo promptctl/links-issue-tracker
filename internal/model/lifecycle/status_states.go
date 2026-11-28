@@ -19,8 +19,8 @@ import (
 
 // StatusPrimitive is the sealed leaf lifecycle carrying a single issue's status,
 // the one kind of lifecycle a status action can be applied to (Apply).
-// Its only implementations are the three state variants below; AllOf (a
-// container, whose state derives from children) is deliberately not one.
+// Its only implementations are the three state variants below; Tally (a
+// container, whose state derives from its leaves) is deliberately not one.
 // [LAW:one-type-per-behavior] One contract identifies "this lifecycle is an
 // own-able leaf status" so the projection boundary discriminates on it instead
 // of enumerating concrete variants.

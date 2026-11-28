@@ -1,7 +1,6 @@
 package lifecycle
 
 import (
-	"reflect"
 	"testing"
 	"time"
 
@@ -358,96 +357,33 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
-func TestAllOfState(t *testing.T) {
+func TestTallyStateIsTheContainerRule(t *testing.T) {
 	tests := []struct {
-		name    string
-		members []Lifecycle
-		want    State
+		name   string
+		leaves Progress
+		want   State
 	}{
-		{name: "all open", members: []Lifecycle{NewStatus(Open, nil, nil, nil), NewStatus(Open, nil, nil, nil)}, want: Open},
-		{name: "mixed closed", members: []Lifecycle{NewStatus(Open, nil, nil, nil), NewStatus(Closed, nil, nil, nil)}, want: InProgress},
-		{name: "in progress", members: []Lifecycle{NewStatus(Open, nil, nil, nil), NewStatus(InProgress, nil, nil, nil)}, want: InProgress},
-		{name: "all closed", members: []Lifecycle{NewStatus(Closed, nil, nil, nil), NewStatus(Closed, nil, nil, nil)}, want: Closed},
+		{name: "no leaves", leaves: Progress{}, want: Open},
+		{name: "all open", leaves: Progress{Open: 2, Total: 2}, want: Open},
+		{name: "mixed closed", leaves: Progress{Open: 1, Closed: 1, Total: 2}, want: InProgress},
+		{name: "in progress", leaves: Progress{Open: 1, InProgress: 1, Total: 2}, want: InProgress},
+		{name: "all closed", leaves: Progress{Closed: 2, Total: 2}, want: Closed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := AllOf{Members: tt.members}.State()
-			if got != tt.want {
+			if got := (Tally{Leaves: tt.leaves}).State(); got != tt.want {
 				t.Fatalf("State() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestAllOfProgressAndActions(t *testing.T) {
-	all := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil, nil, nil),
-		AllOf{Members: []Lifecycle{
-			NewStatus(InProgress, nil, nil, nil),
-			NewStatus(Closed, nil, nil, nil),
-		}},
-	}}
-	progress := all.Progress()
-	if progress.Open != 1 || progress.InProgress != 1 || progress.Closed != 1 || progress.Total != 3 {
-		t.Fatalf("Progress() = %#v, want 1/1/1 total 3", progress)
-	}
-}
-
 // A container is not a StatusPrimitive: the model dispatch boundary
 // relies on this to route it to the epic-aware rejection instead.
-func TestAllOfIsNotAStatusPrimitive(t *testing.T) {
-	var container Lifecycle = AllOf{Members: []Lifecycle{NewStatus(Open, nil, nil, nil)}}
+func TestTallyIsNotAStatusPrimitive(t *testing.T) {
+	var container Lifecycle = Tally{Leaves: Progress{Open: 1, Total: 1}}
 	if _, ok := container.(StatusPrimitive); ok {
-		t.Fatal("AllOf satisfies StatusPrimitive, which Apply takes; containers must not be actionable — their state derives from children")
-	}
-}
-
-func TestWalkVisitsAllPrimitives(t *testing.T) {
-	tree := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil, nil, nil),
-		AllOf{Members: []Lifecycle{
-			NewStatus(InProgress, nil, nil, nil),
-			NewStatus(Closed, nil, nil, nil),
-		}},
-	}}
-	var states []State
-	Walk(tree, func(current Lifecycle) bool {
-		if status, ok := current.(StatusPrimitive); ok {
-			states = append(states, status.State())
-		}
-		return true
-	})
-	want := []State{Open, InProgress, Closed}
-	if len(states) != len(want) {
-		t.Fatalf("visited states = %#v, want %#v", states, want)
-	}
-	for i := range want {
-		if states[i] != want[i] {
-			t.Fatalf("visited states = %#v, want %#v", states, want)
-		}
-	}
-}
-
-type progressOnly struct {
-	progress Progress
-}
-
-func (p progressOnly) State() State {
-	return InProgress
-}
-
-func (p progressOnly) Progress() Progress {
-	return p.progress
-}
-
-func TestAllOfProgressIncludesNonStatusLeafPrimitives(t *testing.T) {
-	tree := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil, nil, nil),
-		progressOnly{progress: Progress{InProgress: 2, Total: 2}},
-	}}
-	progress := tree.Progress()
-	if progress.Open != 1 || progress.InProgress != 2 || progress.Total != 3 {
-		t.Fatalf("Progress() = %#v, want open=1 in_progress=2 total=3", progress)
+		t.Fatal("Tally satisfies StatusPrimitive, which Apply takes; containers must not be actionable — their state derives from children")
 	}
 }
 
@@ -472,65 +408,6 @@ func TestParseStateNormalizes(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Fatalf("ParseState(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-// ParseStates is the one place a status set is spelled out, so both the
-// `--status` flag and the query grammar's `status:` term inherit exactly these
-// answers. The two spellings of a set — one comma-joined argument and repeated
-// arguments — must land on the same slice, because that is the whole reason
-// both callers share this function rather than splitting on their own.
-func TestParseStatesAcceptsBothSpellingsOfASet(t *testing.T) {
-	tests := []struct {
-		name   string
-		inputs []string
-		want   []State
-	}{
-		{"absent", nil, nil},
-		{"one value", []string{"open"}, []State{Open}},
-		{"comma-joined", []string{"closed,in_progress"}, []State{Closed, InProgress}},
-		{"repeated", []string{"closed", "in_progress"}, []State{Closed, InProgress}},
-		{"repeated and comma-joined together", []string{"closed,in_progress", "open"}, []State{Closed, InProgress, Open}},
-		{"normalizing per fragment", []string{" CLOSED , in-progress "}, []State{Closed, InProgress}},
-		// Order is the caller's, preserved as given: the store ORs the set, so
-		// this pins that nothing here sorts or reorders behind the caller's back.
-		{"caller order preserved", []string{"in_progress,open,closed"}, []State{InProgress, Open, Closed}},
-		// Repeats survive: the store's allow-map absorbs them, and deduping here
-		// would be a third copy of a rule two other layers already apply.
-		{"repeats pass through", []string{"open,open"}, []State{Open, Open}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseStates(tt.inputs...)
-			if err != nil {
-				t.Fatalf("ParseStates(%q) error = %v", tt.inputs, err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("ParseStates(%q) = %#v, want %#v", tt.inputs, got, tt.want)
-			}
-		})
-	}
-}
-
-// Every fragment goes through the sealed gate and none is skipped, so a typo
-// anywhere in a set is loud. Without this, `--status open,todo` would narrow to
-// `open` and `status:` would mean "no status filter" — each returning a listing
-// shaped exactly like a real answer while quietly meaning something else.
-// [LAW:no-silent-failure]
-func TestParseStatesRejectsAnyBadFragment(t *testing.T) {
-	for _, inputs := range [][]string{
-		{"todo"},
-		{"open,todo"},    // a good fragment must not launder a bad one
-		{"todo,open"},    // nor in the other order
-		{"open", "todo"}, // nor across repeated arguments
-		{""},             // `status:` with nothing after it
-		{"open,"},        // a trailing comma is a dropped value, not an empty set
-		{","},            //
-		{"open,,closed"}, // nor a hole in the middle
-	} {
-		if _, err := ParseStates(inputs...); err == nil {
-			t.Fatalf("ParseStates(%q) expected error, got none", inputs)
 		}
 	}
 }

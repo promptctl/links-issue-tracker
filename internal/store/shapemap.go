@@ -733,7 +733,7 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 			view.RedirectTarget = &raw
 		}
 	}
-	return model.HydrateRow(issue, view, nil)
+	return model.HydrateRow(issue, view, model.Progress{})
 }
 
 // applyTransform converts one source cell. [LAW:types-are-the-program] Each

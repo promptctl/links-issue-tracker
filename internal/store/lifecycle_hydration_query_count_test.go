@@ -65,7 +65,7 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 
 	counter := swapInCountingDB(t, st)
 	atomic.StoreInt64(counter, 0)
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

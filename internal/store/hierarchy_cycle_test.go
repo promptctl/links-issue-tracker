@@ -518,12 +518,12 @@ func TestAReadRefusesAStoredLoopOfEpicsByName(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	chain := parentChain(t, ctx, st, "E", "F")
 	// The tree reads before the loop closes, so a refusal below is the loop's.
-	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := st.ListIssues(ctx, storage.Listing{}); err != nil {
 		t.Fatalf("ListIssues() on a tree error = %v", err)
 	}
 	seedParentEdge(t, ctx, st, chain[0].ID, chain[1].ID)
 
-	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	_, err := st.ListIssues(ctx, storage.Listing{})
 	var refusal storage.ParentCycleError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("ListIssues() over a loop error = %v, want a ParentCycleError", err)
@@ -592,7 +592,7 @@ func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
 	if got := parentOf(t, ctx, st, chain); got[hi] != "" || got[lo] != hi {
 		t.Errorf("parents after restore = %v, want %s under %s and %s at the top level", got, lo, hi, hi)
 	}
-	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := st.ListIssues(ctx, storage.Listing{}); err != nil {
 		t.Errorf("ListIssues() after the restore error = %v, want the store readable", err)
 	}
 }
@@ -737,7 +737,7 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	seedParentEdge(t, ctx, st, child.ID, second[0].ID)
 	lower := min(first[0].ID, second[0].ID)
 
-	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	listed, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v, want the workspace listed", err)
 	}

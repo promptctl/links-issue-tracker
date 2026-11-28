@@ -466,7 +466,7 @@ func (e *Engine) DependencyOrder(ctx context.Context) (storage.DependencyOrder, 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	listed, err := e.listIssues(storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
+	listed, err := e.listIssues(storage.Listing{Selection: storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen, model.StateInProgress)}})
 	if err != nil {
 		return storage.DependencyOrder{}, err
 	}
