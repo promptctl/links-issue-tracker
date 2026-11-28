@@ -797,10 +797,11 @@ the Go field name when the tag name is empty. Pinned by
 - `Export` — `model.go`: `Version int` (`version`), `WorkspaceID`
   (`workspace_id`), `ExportedAt` (`exported_at`), `Issues`, `Relations`,
   `Comments`, `Labels`, `Events`, `Purges []Purge` (`purges`),
-  `PlanReviews []PlanReview` (`plan_reviews`).
-  `ExportVersion = 5` — `model.go`: the version every store writes; version 5
-  is the first to carry plan reviews, version 4 the first to carry purge
-  records.
+  `PlanReviews []PlanReview` (`plan_reviews`), `ConfigApplies []ConfigApply`
+  (`config_applies` — every apply of the project config, oldest first).
+  `ExportVersion = 6` — `model.go`: the version every store writes; version 6
+  is the first to carry config applies, version 5 the first to carry plan
+  reviews, version 4 the first to carry purge records.
 - `Purge` — `purge.go`: `IssueID` (`issue_id`), `IssueCreatedAt time.Time`
   (`issue_created_at`), `PurgedAt time.Time` (`purged_at`), `PurgedBy`
   (`purged_by`). The record of a permanently removed issue: the ticket, named
@@ -869,6 +870,28 @@ the Go field name when the tag name is empty. Pinned by
   with the untrimmed `raw`.
 - `CanonicalLaws(laws []Law) []Law` — `plan_review.go`: a copy, `slices.Sort`ed
   then `slices.Compact`ed — sorted, each once; the input is untouched.
+- `ConfigApply` — `config_apply.go`: `ID` (`id`), `Content string` (`content`
+  — the whole bytes of the committed project config file), `CreatedAt
+  time.Time` (`created_at`), `CreatedBy` (`created_by`). One apply of the
+  project config; applies are never edited or removed, so the store's applies
+  are a history and the newest is the config in force. It holds no separate
+  name for its content: the digest is read off the bytes.
+- `(ConfigApply).Digest() ConfigDigest` — `config_apply.go`:
+  `DigestConfig(a.Content)`.
+- `ConfigDigest` — `config_apply.go`: `string`, the hex SHA-256 of one config
+  text.
+- `DigestConfig(content string) ConfigDigest` — `config_apply.go`:
+  `sha256.Sum256` of the content's bytes, hex-encoded.
+- `(ConfigDigest).Short() string` — `config_apply.go`: the first twelve hex
+  digits.
+- `ConfigApplyOrdering(a, b ConfigApply) int` — `config_apply.go`: the
+  `CreatedAt` instant (`time.Time.Compare`), then the id (`strings.Compare`) —
+  oldest first.
+- `ConfigInForce(applies []ConfigApply) (ConfigApply, bool)` —
+  `config_apply.go`: the greatest apply by `ConfigApplyOrdering`
+  (`slices.MaxFunc`), or false for none, when the store runs on lit's
+  defaults; every store holding the same applies picks the same one, whatever
+  order they arrived in.
 
 ## 2.9 `Attribution` — `model.go`
 
@@ -911,9 +934,10 @@ may be carried, because the database syncs to shared remotes
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
   (`model.go`). v2+ exports ignore any `history` array. If `raw.Version < 3`,
   every relation's `Type` is read through `RelationTypeFromStored`, so a
-  `blocks` edge decodes as `blocked-by` (`model.go`). `purges` and `plan_reviews` are
-  read at every version; a pre-v4 file has no purges and a pre-v5 file no plan
-  reviews (`model.go`). The decoded value's
+  `blocks` edge decodes as `blocked-by` (`model.go`). `purges`, `plan_reviews`, and
+  `config_applies` are read at every version; a pre-v4 file has no purges, a
+  pre-v5 file no plan reviews, and a pre-v6 file no config applies
+  (`model.go`). The decoded value's
   `Version` is `ExportVersion` whatever version was read, since it is now in
   the current format (`model.go`). Pinned by
   `TestExportDecodeRenamesLegacyBlocksEdges`, `relation_type_test.go`.

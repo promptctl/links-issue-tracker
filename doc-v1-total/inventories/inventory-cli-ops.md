@@ -15,7 +15,7 @@ data — described as assets, not as documentation of behavior).
 - `cmd/lit/main.go` wraps `context.Background()` in `interrupt.Guard(ctx, interrupt.DefaultGrace)` — a SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel.
 - `cmd/lit/main.go` builds a `cli.Invocation` from `os.Getwd`, `os.Args[1:]`, `environ.Of(os.Environ())` and the three standard streams and runs `cli.Run(ctx, inv)`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
 - `internal/cli/cli.go` `Run`: normalizes global args (`parseGlobalArgs`), builds the cobra root, `SilenceErrors`/`SilenceUsage` true; `pflag.ErrHelp` and `errHelpHandled` are swallowed to a nil error (exit 0).
-- `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go`. Outside a git repo (`OutsideWorkspaceError`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError`, with or without a help flag beside it (`cli.go`).
+- `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(inv.Env, ws.RootDir, project)` (identical to `lit quickstart`), `project` read by `appliedProject` — `cli.go`. Outside a git repo (`OutsideWorkspaceError`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError`, with or without a help flag beside it (`cli.go`).
 - `internal/cli/cli.go` root flag errors are wrapped as `UsageError` (exit 2).
 - `internal/cli/register.go` every registered command sets `DisableFlagParsing: true` and `Args: cobra.ArbitraryArgs`; each command parses its own flags.
 
@@ -55,6 +55,7 @@ data — described as assets, not as documentation of behavior).
 | `completion` | guidance | `runCompletion` | none | `register.go` |
 | `version` | guidance | `runVersion` | none | `register.go` |
 | `hooks` | maintenance | `wsFamilyCmd(hooksFamily)` | workspace | `register.go` |
+| `config` | maintenance | `familyCmd(configFamily)` | per-row: `apply` routine write, `status` read | `register.go` |
 | `sync` | data | `wsFamilyCmd(syncFamily)` | workspace | `register.go` |
 | `stores` | maintenance | raw `runStores` | none (discovery) | `register.go` |
 | `doctor` | maintenance | `appCmdDynamic(resolveDoctorAccessMode, doctorLeaf)` | read or write | `register.go` |
@@ -78,7 +79,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 ### 0.6 Post-command automatic behavior (`runWithApp`)
 
 `internal/cli/cli.go`:
-1. `app.Open(ctx, cwd, accessMode)`; `ErrNotGitRepo` → `OutsideWorkspaceError` (`cli.go`).
+1. `app.Open(ctx, cwd, accessMode)`; `ErrNotGitRepo` → `OutsideWorkspaceError` (`cli.go`). From here the workspace is `ap.Workspace`, whose `Project` holds the store's applied config, and `reportConfigLayers` runs on it once (`cli.go`, `config_keys.go`).
 2. Handler runs with `defer ap.Close()` (`cli.go`). A non-nil handler error returns immediately — no banner, no auto-sync (`cli.go`).
 3. On success and `accessMode == app.AccessWrite`: `printMutationSyncStalenessWarning(stdout, ws, time.Now())` (`cli.go`), after the engine close, before auto-sync.
 4. `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` (`cli.go`).
@@ -115,8 +116,9 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `
 3. If outcome state is `initSyncFailed`, **hard stop with no store created** (`init.go`): error text
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
 4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go`). Adopted ⇒ `dbCreated` stays `true` (`init.go`).
-5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
-6. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go`).
+5. `initConfig(ctx, inv, ws)` (`init.go`): `app.Open` with `app.AccessWriteRoutine`, `ConfigApplies`, then `readProjectFile`. Any apply held, or no committed file → the line is `inForceLine(applies)` and nothing is written. Otherwise `file.Applicable()` (its error fails init), then `ApplyConfig(ctx, content, resolveIdentity(inv.Env, ""))`; the line is `applied <path> (<short digest>)`. The store's close error is joined into the result.
+6. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
+7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go`).
 
 ### 1.3 Adopt decision machine (`internal/cli/init_sync.go`)
 
@@ -151,6 +153,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 - Line 1: `Initialized lit workspace` when `DBCreated`, else `lit workspace already initialized` (`init.go`).
 - Line 2, always: `  issue_prefix: <value>` — the prefix the workspace actually stored, which is not always the one `--prefix` was given, because `ConfiguredPrefix` slugifies and truncates at `PrefixMaxLength` (`init.go`).
 - Line 3 (only when adopted): `  Pulled existing backlog from <remote>/<branch> (<buildNote>)` (`init_sync.go`). No line for any other state.
+- Always: `  config: <line>`, the `initConfig` line (`init.go`).
 - Then, as applicable:
   - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go`)
   - `  Up to date: <entries>` for `unchanged` (`init.go`)
@@ -160,12 +163,12 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
 
-`init.go`: `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` (the `initSyncOutcome`).
+`init.go`: `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` (the `initSyncOutcome`), `config` (the `initConfig` line).
 
 ### 1.7 What `lit init` writes to disk
 
 1. `<git-common-dir>/links/` and `config.json` — via `workspace.Resolve` before the handler (`internal/workspace/workspace.go`).
-2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go`) or `store.AdoptRemoteByClone` (`init_sync.go`).
+2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go`) or `store.AdoptRemoteByClone` (`init_sync.go`); on a store holding no apply, one `config_applies` row of the committed project config (`initConfig`, `init.go`).
 3. `<GitCommonDir>/hooks/pre-push` (dir created `0o755`; see §9).
 5. A sync trace file under `<StorageDir>/traces/sync/` (see §7.6).
 6. No git config keys are set by `init` (no `git config` write exists on this path).
@@ -182,6 +185,8 @@ Every visible row is wrapped in `withSyncStore` (`sync.go`) which opens one sync
 ### 2.1 Session opening
 
 `openSyncSession` (`sync.go`) opens through `openSyncEngineAt`: `engine.Open(ctx, mode, DatabasePath, WorkspaceID)` (`engine.Sync` for a session, `engine.Maintenance` for the backstop), then `storage.Sync.Of(st)`. If the engine cannot sync, the store is closed and the joined error is returned — the whole family is refused at this point, not per-verb (`sync.go`). The close it returns first appends, through `reportEventValues` (`telemetry.Append` of each item's `EventValue()`; an empty list when none), under the event's `occurrences`: to `reroot.follows` every re-root the session's engine followed (`storage.FollowedReRoot`), to `collection.records` every collection below a cut it ran (`storage.Collection`), to `compaction.passes`, once it has looked for one owed (`reportCompactionPasses`), every compaction it attempted (`storage.CompactionPass`), to `reroot.declines` every re-root it recognized and did not follow (`storage.DeclinedReRoot`), to `fork_point.records` what each of its fetches did to each fork point (`storage.ForkPointRecord`), to `remote.removals` every `SyncRemoveRemote` attempt (`storage.RemoteRemovalRecord`), to `reconcile.bases` the base each of its reconcile plans decided on (`storage.ReconcileBase`), to `stranded_writes.commits`, once its engine has looked for any (`reportStrandedWrites`, which every command's close runs too), every commit it landed over writes a failed commit left in the working set (`storage.StrandedWritesCommit`), to `scratch.deletes`, once its engine has looked for any (`reportScratchDeletes`, which every command's close runs too), every scratch branch it deleted or failed to delete (`storage.ScratchDelete`: `scratch.branch`, `scratch.cause` `orphan` or `finished`, `scratch.error`), to `settled_last.writes` each settle's write of its `settled.last` record (`storage.SettledLastWrite`: `settled_last.error`, empty when written), and to `history_bound.records` what each of its pushes' history bounds did (`storage.HistoryBound`), then closes the store; `openSyncSessionAt` is the one session opener, so the clone sessions of the receive and the mirror record theirs too. The compaction backstop opens through `openMaintainer` instead (§ `maintainInline`), whose close records only `compaction.passes`.
+
+`withSyncStore` (`sync.go`), once the session opens, sets `ws.Project` to `app.ProjectOf(ctx, session.engine)` (a read failure fails the verb) and runs `reportConfigLayers` on it before the verb's work; the downgrade and the lift share the session and read no config.
 
 ### 2.2 `lit sync status`
 
@@ -838,7 +843,7 @@ Snapshot directory `<StorageDir>/snapshots` (`dbsnapshot.DirFor`, `internal/dbsn
 | `--label` | `""` | "Optional human-readable label appended to the snapshot name" | `snapshots.go` |
 
 - Any positional → `UsageError{"usage: lit snapshots new [--label <text>]"}` (exit 2); rationale: `snapshots new nightly` is a natural typo for `--label nightly` (`snapshots.go`).
-- `config.Load(pathspec.New(ws.RootDir))` for the retention budget (`snapshots.go`); default `snapshot.retention_budget = 5` (`internal/config/config.go`), validated `> 0` at load (`config.go`).
+- `appliedProject(ctx, inv.Env, inv.Stderr, ws)`, then `config.Load(inv.Env, project)` for the retention budget (`snapshots.go`); default `snapshot.retention_budget = 5` (`internal/config/config.go`), validated `> 0` at load (`config.go`).
 - `takeUserSnapshot` (`snapshots.go`) runs `dbsnapshot.Take` inside `withDoltDirectoryHeld` (`snapshots.go`), which takes three holds in order — workspace shared (`store.LockWorkspaceShared`), Dolt journal exclusive (`store.LockDoltJournalExclusive`), commit lock (`withCommitLock`) — releasing LIFO; every release failure is joined into the returned error (`snapshots.go`).
 - Between the workspace hold and the journal hold it checks `store.PendingAdopt(ws.DatabasePath)`; a pending-adopt marker refuses the snapshot (`snapshots.go`).
 - **The record prints the moment it exists** — before the prune and even beside a later failure: `<name> <path>` to stdout whenever the take produced a snapshot; a print error is joined to `err` (`snapshots.go`).
@@ -918,7 +923,7 @@ Positional args are the roots, each resolved against the invocation's directory 
 - Label = `cfg.IssuePrefix` from `workspace.ReadConfig(loc.ConfigPath)` when non-empty, else the `StorageDir` (`stores.go`).
 - `app.OpenLocationForRead`; failure → `row.Err`, no counts (`stores.go`).
 - Read-only close failure → `row.CloseErr`, set only when `row.Err` is nil (`stores.go`).
-- `classifyWorkable(ctx, st, nil)` — a **nil required-fields** argument opts out of the per-repo `required_fields` policy only; blockers, the lane gate, and the reserved blocking labels still apply (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
+- `app.ProjectOf(ctx, st)`, then `readyRequiredFields(env, project)`, then `classifyWorkable(ctx, st, requiredFields)` — the store's own `ready.required_fields` policy, read from the config applied to it, so its ready count is the one its own `lit backlog` gives; a failure of either read → `row.Err`, no counts (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
 
 `printCrossProjectRollup` (`stores.go`):
 - Zero rows → `(no stores discovered)` and return (`stores.go`).
@@ -945,6 +950,15 @@ Family usage `usage: lit hooks install` (`hooks.go`); the only row is `install` 
 8. Legacy marker migration: `# --- BEGIN LINKS INTEGRATION ---` / `# --- END LINKS INTEGRATION ---` → `# --- BEGIN LIT INTEGRATION ---` / `# --- END LIT INTEGRATION ---` (`hooks.go`). `migrateMarkers` (`managed_sections.go`) fires when EITHER legacy marker is present, so partial-state files converge.
 9. `upsertManagedSection` (`managed_sections.go`): replaces the region between the markers (from the start of the begin-marker's line through the end of the end-marker's line) when both markers exist and `start < end`; otherwise appends the section (with a separating blank line) to the end, or replaces the whole content when it is blank. Returns `changed = (updated != content)`.
 10. No change → `{Changed: false, Managed: true}`; else write at the preserved mode and return `{Changed: true, Managed: true}` (`hooks.go`).
+
+## 11a. `lit config`
+
+`configFamily` — `project_config.go`, family usage `usage: lit config <apply|status>`; rows `apply` (`app.AccessWriteRoutine`, `configApplyLeaf`) and `status` (`app.AccessRead`, `configStatusLeaf`). Registered `familyCmd(configFamily)`, group `maintenance`, summary "Put the committed project config in force for every clone (apply), or see how the file stands against it (status)" (`register.go`). Both read the file through `readProjectFile` = `workspace.ReadProjectFile(ctx, env, ws.RootDir, config.ProjectPath(env, pathspec.New(ws.RootDir)))`.
+
+- **`apply`** (`configApplyLeaf`): `--by` through `registerActor`; any positional → `UsageError{"usage: lit config apply"}`. `file.Applicable()` error is returned whole; then `ap.Store.ApplyConfig(ctx, content, resolveActor(inv.Env))`. Event facts `config.applied` (bool) and `config.digest` (full hex). Not written → `"%s is already the config in force (%s); nothing applied\n"`; written → `"applied %s (%s): it is the config in force, and every clone runs on it once it syncs\n"` (path, short digest).
+- **`status`** (`configStatusLeaf`): any positional → `UsageError{"usage: lit config status"}`. `config.StandingOf(file, applies)`; event fact `config.standing`; prints `"in force: %s\n%s: %s\n"` — `inForceLine(applies)` (`<short digest>, applied by <created_by> at <created_at UTC RFC3339>`, or `lit's defaults (no project config has been applied)`), the path, and `standingSentence(standing)`: `in_force` → "matches the config in force"; `not_applied` → "committed but not in force; it has no effect until `lit config apply` puts it in force"; `uncommitted` → "has uncommitted changes, which have no effect; commit them, then run `lit config apply`"; `no_file` → "no file; the applied config stays in force, and applying an empty file returns to the defaults". An unknown standing panics.
+- `configStandingNotice(ctx, env, ap)` — the `lit backlog` stderr line (`inventory-cli-issue.md` §2.13).
+- `appliedProject(ctx, env, stderr, ws)` — for a command holding no store (bare `lit`, `lit quickstart`, `lit snapshots new`): `app.Open` with `app.AccessRead`; `store.ErrWorkspaceNotInitialized` → `config.NoProject()`; otherwise `ap.Workspace.Project`, joined with the close error; then `reportConfigLayers` on the layer.
 
 ---
 
@@ -974,7 +988,7 @@ Usage string, derived from the topic table: `usage: lit quickstart [work|new|upd
 
 **Eject mode** (`cli.go`) → `ejectTemplates(selection, force)` then `writeEjectReport`.
 
-**Bare / `--refresh` mode** (`cli.go`): renders `renderQuickstartGuidance(ws.RootDir)` = the `quickstart.md` template trimmed, plus `soilSection` appended when `quickstart.soil_mode = true` in config (`quickstart_refresh.go`; the section text is at `quickstart_refresh.go`; config default `false` at `internal/config/config.go`). With `--refresh`, the workspace is re-resolved via `workspace.Resolve(".")` and the refresh summary plus a blank line is prepended (`cli.go`).
+**Bare / `--refresh` mode** (`cli.go`): reads the store's applied config through `appliedProject`, then renders `renderQuickstartGuidance(inv.Env, ws.RootDir, project)` = the `quickstart.md` template trimmed, plus `soilSection` appended when `quickstart.soil_mode = true` in config (`quickstart_refresh.go`; the section text is at `quickstart_refresh.go`; config default `false` at `internal/config/config.go`). With `--refresh`, the workspace is re-resolved via `workspace.Resolve(".")` and the refresh summary plus a blank line is prepended (`cli.go`).
 
 ### 12.3 `--refresh` behavior (`quickstart_refresh.go`)
 

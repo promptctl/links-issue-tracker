@@ -12,12 +12,26 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
+
+// openedWorkspace is the workspace at dir as a command holds it once its store
+// is open: resolved, with the project config applied to the store.
+func openedWorkspace(t testing.TB, dir string) workspace.Info {
+	t.Helper()
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
+	project, err := readAppliedProject(context.Background(), runEnv(t), testStderr(t), ws)
+	if err != nil {
+		t.Fatalf("read the applied project config at %s: %v", dir, err)
+	}
+	ws.Project = project
+	return ws
+}
 
 // workerHandoffStdin is the handoff a command run in dir hands the worker it
 // spawns, built by the launcher's own function, from a run in t's environment.
@@ -29,7 +43,7 @@ func workerHandoffStdin(t testing.TB, dir string) string {
 // workerHandoffStdinUnder is workerHandoffStdin from a run under deadlines.
 func workerHandoffStdinUnder(t testing.TB, dir string, deadlines deadline.Deadlines) string {
 	t.Helper()
-	ws := workspacetest.Resolved(t, runEnv(t), dir)
+	ws := openedWorkspace(t, dir)
 	handoff, err := handoffOf(underInvocation(context.Background()), ws, withFactParts(runEnv(t), func(p *suiteenv.FactParts) { p.Deadlines = deadlines }))
 	if err != nil {
 		t.Fatalf("handoffOf(%s): %v", dir, err)
@@ -79,14 +93,16 @@ func twoRemoteCheckout(t *testing.T) string {
 		t.Fatal(err)
 	}
 	runGit(t, root, "init", "-b", "trunk")
-	runGit(t, root, "-c", "user.email=h@h.co", "-c", "user.name=h", "commit", "--allow-empty", "-m", "seed")
+	// Committed with the seed, so `lit init` puts it in force.
+	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
+	runGit(t, root, "add", ".lit/config.toml")
+	runGit(t, root, "-c", "user.email=h@h.co", "-c", "user.name=h", "commit", "-m", "seed")
 	for _, remote := range []string{"origin", "backup"} {
 		runGit(t, base, "init", "--bare", "-b", "trunk", remote+".git")
 		runGit(t, root, "remote", "add", remote, filepath.Join(base, remote+".git"))
 		runGit(t, root, "push", remote, "HEAD")
 	}
 	runGit(t, root, "branch", "--set-upstream-to", "origin/trunk")
-	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
 	runCLIInDir(t, root, "init", "--skip-hooks")
 	return root
 }
@@ -97,7 +113,7 @@ func twoRemoteCheckout(t *testing.T) string {
 func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
-	ws := workspacetest.Resolved(t, runEnv(t), root)
+	ws := openedWorkspace(t, root)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	// The launcher's run carries facts the worker's own process does not, so
@@ -338,14 +354,13 @@ func TestAReceiveWithAnUnreadableHandoffRecordsAReceiveError(t *testing.T) {
 	}
 }
 
-// Which project layer a command read is on its event: the checkout's file for
-// a command run in a checkout, and the handed one for a worker.
+// Which project layer a command read is on its event: the config applied to
+// the store for a command run in a checkout, and the handed one for a worker.
 func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	runCLIInDir(t, root, "backlog")
-	checkoutFile := filepath.Join(workspacetest.Resolved(t, runEnv(t), root).RootDir, ".lit", "config.toml")
-	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+checkoutFile; got != want {
+	if got, want := lastEvent(t).Facts["config.project"], "applied:"+string(model.DigestConfig("[sync]\nreceive = false\n")); got != want {
 		t.Fatalf("backlog's config.project = %v, want %q", got, want)
 	}
 	runWorkerInDir(t, root, backgroundReceiveSubcommand)

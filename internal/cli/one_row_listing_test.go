@@ -55,7 +55,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	held := h.issueDetail(open.ID)
 	parent := h.issueDetail(epic.ID)
 
-	policy := workspaceReadyPolicy(runEnv(t), h.ap)
+	policy := projectReadyPolicy(runEnv(t), h.ap.Workspace.Project)
 	command := func(run func(testing.TB, context.Context, io.Writer, *app.App, []string) error, args ...string) func(io.Writer) error {
 		return func(w io.Writer) error { return run(t, h.ctx, w, h.ap, args) }
 	}

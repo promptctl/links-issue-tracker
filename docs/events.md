@@ -380,15 +380,15 @@ A `lit rank set`, or a `lit import` running one, refused because two tickets sha
 
 ## What checking the config records
 
-A command that runs in a workspace checks the global and project
-`config.toml` for keys that this version of lit does not read, once, before
-it runs. Such a key has no effect: a misspelling, a setting lit no longer
+A command that runs in a workspace checks the global `config.toml` and the
+project config applied to its store for keys that this version of lit does not
+read, once, when it opens the store. Such a key has no effect: a misspelling, a setting lit no longer
 has, or one a newer lit added. The command runs all the same, and prints a `warning:` line
 on stderr for each key, naming the key and the file that sets it.
 
 | Key | Meaning |
 | --- | --- |
-| `config.project` | Where the command's project config layer came from: `checkout:<path>`, the file a command run in a checkout reads (the path is `LIT_CONFIG_PROJECT_PATH`'s when it is set), `handed`, the layer a detached sync worker was handed by the command that spawned it, or `none`, a detached worker whose handoff could not be read. |
+| `config.project` | Where the command's project config layer came from: `applied:<digest>`, the config in force on the store, named by the SHA-256 of its content, `handed`, the layer a detached sync worker was handed by the command that spawned it, or `none`, a store nothing has been applied to, which runs on lit's defaults, or a detached worker whose handoff could not be read. |
 | `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. A file that could not be read adds none. |
 | `config.unknown_keys_error` | Why a config file's keys could not be checked, one reason for each file that does not parse, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
 
@@ -402,6 +402,14 @@ under, the released-schema ceiling, and the raise policy.
 | --- | --- |
 | `run_facts` | The facts the worker ran under, as `{"deadlines": {…}, "released_schema": {"max": …, "source": …, "bound": "released"}, "raise_policy": {"release": …}}`. Each deadline is in nanoseconds, under the name the handoff carries it by. |
 | `run_facts.source` | `handed`, facts the spawning command handed the worker, or `own`, the worker's own, when its handoff could not be read and it did no work. |
+
+## What `lit config` records
+
+| Key | Meaning |
+| --- | --- |
+| `config.applied` | `lit config apply`: `true` when it wrote an apply, `false` when the file was already the config in force. |
+| `config.digest` | `lit config apply`: the SHA-256 of the config in force after the command. |
+| `config.standing` | `lit config status`: how the checkout's file stands against the config in force: `in_force`, `not_applied`, `uncommitted`, or `no_file`. |
 
 ## What a schema-ahead refusal records
 

@@ -1,6 +1,6 @@
 # CLI: operations commands and the background sync engine
 
-This chapter covers everything in `lit` that manages the workspace rather than individual issues: `lit init` and its remote-adopt decision, the `lit sync` command family, the automatic background sync engine (spawned mirror and receive processes, the compaction backstop, staleness banners, owner notifications), `doctor`, `upgrade`/`downgrade`, `backup`/`snapshots`/`lifeboat`, `stores`, `hooks`, `quickstart`, `version`, and the managed-file/template machinery those commands share. The store-level sync and merge algorithms these commands invoke are specified in `05-sync-merge-compaction.md`; this chapter is the CLI/process level.
+This chapter covers everything in `lit` that manages the workspace rather than individual issues: `lit init` and its remote-adopt decision, the `lit sync` command family, the automatic background sync engine (spawned mirror and receive processes, the compaction backstop, staleness banners, owner notifications), `doctor`, `upgrade`/`downgrade`, `backup`/`snapshots`/`lifeboat`, `stores`, `hooks`, `config`, `quickstart`, `version`, and the managed-file/template machinery those commands share. The store-level sync and merge algorithms these commands invoke are specified in `05-sync-merge-compaction.md`; this chapter is the CLI/process level.
 
 ## Shared dispatch, flags, and exit codes
 
@@ -50,7 +50,8 @@ Sequence (`init.go`):
 2. A sync trace is recorded for the adopt decision, always, whatever the outcome (`init_sync.go`): command `lit init`, decision = the outcome state, status `error` iff failed, plus the build note and `{remote, sync_branch}` metadata. A trace-write failure goes to stderr, non-fatal.
 3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go`).
 4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go`).
-5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go`).
+5. **Config** (`initConfig`, `init.go`): opens the store for a routine write and reads its applies and the checkout's project config file (`workspace.ReadProjectFile`). A store that holds an apply — adopted from the remote or applied before — keeps the config in force, and so does a checkout whose HEAD holds no file; the line is the config in force (`inForceLine`, `project_config.go`). Otherwise the committed file must pass `ProjectFile.Applicable()` (a refusal fails init) and is applied with the acting identity (`resolveIdentity`); the line is `applied <path> (<short digest>)`.
+6. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go`).
 
 ### The adopt decision machine
 
@@ -60,9 +61,9 @@ Planning order (`init_sync.go`): pending-adopt residue check (residue converts e
 
 ### Output and disk footprint
 
-Human output (`init.go`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`; and always a final guidance line pointing at `lit workflows`.
+Human output (`init.go`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then always `  config: <line>` (step 5); then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`; and always a final guidance line pointing at `lit workflows`.
 
-What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `sync` — but no JSON output path renders it; `init.go`.)
+What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `sync`, `config` — but no JSON output path renders it; `init.go`.)
 
 ## The `lit sync` family
 
@@ -260,13 +261,20 @@ For stores the normal engine refuses to open. Rows: `dump`, `recover` (`lifeboat
 Not app-mode; positional args are discovery roots (default: cwd) (`stores.go`).
 
 - **Default**: streams one canonical storage dir per discovered store; none found is empty output, exit 0.
-- **`--counts`**: a cross-project rollup. Each store is opened read-only; its label is the configured issue prefix (falling back to the storage dir); workability is classified with a nil required-fields policy — opting out of per-repo required fields only, while blockers, the lane gate, and the reserved blocking labels still apply. Output: a `PROJECT / READY / IN-FLIGHT / BLOCKED` table with a TOTAL row summing exactly the shown rows (table omitted when every store errored), then `! <dir>: <err>` per unreadable store and `~ <dir>: close warning: <err>` per close warning (`stores.go`).
+- **`--counts`**: a cross-project rollup. Each store is opened read-only; its label is the configured issue prefix (falling back to the storage dir); workability is classified with the `ready.required_fields` policy of the config applied to that store (`app.ProjectOf`, then `readyRequiredFields`), so its ready count is the one its own `lit backlog` gives; a store whose applies or config cannot be read is reported as an unreadable store. Output: a `PROJECT / READY / IN-FLIGHT / BLOCKED` table with a TOTAL row summing exactly the shown rows (table omitted when every store errored), then `! <dir>: <err>` per unreadable store and `~ <dir>: close warning: <err>` per close warning (`stores.go`).
 
 ## `lit hooks`
 
 One row: `install`. Prints `installed <hookPath>` whether or not anything changed (`hooks.go`).
 
 `installHooks` — shared by `init`, `hooks install`, and `quickstart --refresh` (`hooks.go`): writes the managed section of `<git-common-dir>/hooks/pre-push`. Absent hook → created as `#!/usr/bin/env bash` + section, mode 0755. Existing hook → mode preserved (execute bit forced on); a hook whose first line is not a bash shebang is **left untouched** and reported `incompatible` — no error, exit 0. Legacy `LINKS INTEGRATION` markers migrate to `LIT INTEGRATION` (firing when either marker is present, so partial states converge); the managed region between markers is replaced in place, or the section is appended when markers are absent (`managed_sections.go`).
+
+## `lit config`
+
+Rows: `apply` (routine write access), `status` (read access); neither takes a positional (`project_config.go`, help group `maintenance`, `register.go`). Both read the checkout's project config file at `config.ProjectPath` in its working and HEAD versions (`workspace.ReadProjectFile`; the standings are in `10-platform.md`).
+
+- **`apply [--by <name>]`**: `ProjectFile.Applicable()` refuses with every fault joined (no file, not committed, uncommitted changes, a config `config.CheckProject` refuses); otherwise `Store.ApplyConfig` is called with the committed content and the acting identity. Already in force prints `<path> is already the config in force (<short digest>); nothing applied`; a written apply prints `applied <path> (<short digest>): it is the config in force, and every clone runs on it once it syncs`. Event facts `config.applied` (whether it wrote) and `config.digest` (the full digest).
+- **`status`**: prints `in force: <line>` — `<short digest>, applied by <actor> at <RFC3339 UTC>`, or `lit's defaults (no project config has been applied)` — then `<path>: <sentence>` for the file's standing (`in_force` `matches the config in force`; `not_applied`, `uncommitted`, and `no_file` each with their remedy, `standingSentence`). Event fact `config.standing`.
 
 ## `lit quickstart`
 

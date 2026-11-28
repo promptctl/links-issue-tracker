@@ -25,6 +25,15 @@ CREATE TABLE `comments` (
   CONSTRAINT `comments_created_at_stamp` CHECK ((regexp_like(`created_at`,'^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9][.][0-9]{9}Z\\z') AND (date_format(str_to_date(coalesce(SUBSTRING(`created_at`, 1, 19),'-'),'%Y-%m-%dT%H:%i:%s'), '%Y-%m-%dT%H:%i:%s') = SUBSTRING(`created_at`, 1, 19))))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE `config_applies` (
+  `id` varchar(191) NOT NULL,
+  `content` text NOT NULL,
+  `created_at` varchar(64) NOT NULL,
+  `created_by` text NOT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `config_applies_created_at_stamp` CHECK ((regexp_like(`created_at`,'^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9][.][0-9]{9}Z\\z') AND (date_format(str_to_date(coalesce(SUBSTRING(`created_at`, 1, 19),'-'),'%Y-%m-%dT%H:%i:%s'), '%Y-%m-%dT%H:%i:%s') = SUBSTRING(`created_at`, 1, 19))))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE `issue_event_changes` (
   `event_id` varchar(191) NOT NULL,
   `field` varchar(64) NOT NULL,

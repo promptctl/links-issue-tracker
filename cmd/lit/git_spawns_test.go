@@ -96,6 +96,9 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	// The remote list is the repository's too, asked the same way.
 	remoteList := "--git-dir " + gitDir + " --work-tree " + gitDir + " remote -v"
 	freshness := []string{geometry, remoteList, remoteHead, "worktree list --porcelain -z"}
+	// The backlog also says when the checkout's committed project config is
+	// not the config in force, which asks whether HEAD holds the file.
+	backlog := []string{geometry, remoteList, remoteHead, "rev-parse --verify --quiet HEAD:.lit/config.toml", "worktree list --porcelain -z"}
 	// Order matters only for the receive: the first command that wants one
 	// asks whether there is a remote to receive from, and the debounce keeps
 	// the commands after it from scheduling another.
@@ -106,7 +109,7 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 		{[]string{"quickstart"}, []string{geometry}},
 		{[]string{"workspace"}, []string{geometry}},
 		{[]string{"ls"}, []string{geometry, remoteList}},
-		{[]string{"backlog"}, freshness},
+		{[]string{"backlog"}, backlog},
 		{[]string{"next"}, freshness},
 		{[]string{"new", "--type", "epic", "--title", "spawns-write", "--topic", "demo"}, []string{geometry, remoteList}},
 	} {

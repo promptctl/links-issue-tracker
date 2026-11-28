@@ -17,7 +17,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
 var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
@@ -102,8 +101,9 @@ type Info struct {
 	// per invocation; see Remotes for who owns it.
 	Remotes *Remotes
 	// Project is the project config layer every config read of this unit of
-	// work takes: the checkout's, or the one a detached worker was handed.
-	// [LAW:one-source-of-truth] no config read derives it from RootDir again.
+	// work takes: the config applied to the store, set when the store opens
+	// (config.Unread until then), or the one a detached worker was handed.
+	// [LAW:one-source-of-truth] no config read derives it again.
 	Project config.ProjectLayer
 }
 
@@ -407,7 +407,7 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		// git prints --show-toplevel absolute with every symlink resolved, so its
 		// answer is a CheckoutRoot as it stands.
 		Remotes: NewRemotes(env, loc.Repository(), CheckoutRoot{path: geo.root}),
-		Project: config.CheckoutProject(env, pathspec.New(geo.root)),
+		Project: config.Unread(),
 	}, &settlement, nil
 }
 

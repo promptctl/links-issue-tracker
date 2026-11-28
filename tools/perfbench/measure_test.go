@@ -334,7 +334,9 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 		resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store),
 	}
 	var progress strings.Builder
-	lim := limits{budget: 5 * time.Millisecond}
+	// The kill limit is the window the fake's shell has to start and print
+	// the line the kill must report; it is wide enough for a loaded machine.
+	lim := limits{budget: 100 * time.Millisecond}
 	samples, err := measurePhase(litBinary{path: path}, store, phase, devNull(t), lim, &progress)
 	if err != nil {
 		t.Fatalf("measurePhase error = %v; a kill must not end the run", err)
@@ -348,7 +350,7 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 	if got := strings.Count(progress.String(), "killed: "); got != 1 {
 		t.Errorf("progress names %d kills, want 1 (the first kill of backlog, as it happened):\n%s", got, progress.String())
 	}
-	for _, want := range []string{`"backlog"`, "warm-up", "150ms", "waiting on lock"} {
+	for _, want := range []string{`"backlog"`, "warm-up", lim.kill().String(), "waiting on lock"} {
 		if !strings.Contains(progress.String(), want) {
 			t.Errorf("kill line does not mention %q:\n%s", want, progress.String())
 		}

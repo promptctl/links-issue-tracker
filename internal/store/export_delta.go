@@ -100,7 +100,7 @@ func diffTable[K comparable, R any](live, wanted []R, key func(R) K, persisted f
 }
 
 // wholeRow is the projection for the tables whose model type IS their row —
-// relations, comments, labels, events, and plan reviews all carry exactly their persisted
+// relations, comments, labels, events, plan reviews, and config applies all carry exactly their persisted
 // columns (an event's Changes included, since those are its child rows). Only
 // issues needs a narrower projection, because only model.Issue is a hydrated
 // view carrying fields no issues column holds.
@@ -116,12 +116,13 @@ type exportDelta struct {
 	events      tableDelta[model.ID, model.IssueEvent]
 	purges      tableDelta[model.PurgeKey, model.Purge]
 	planReviews tableDelta[model.ID, model.PlanReview]
+	applies     tableDelta[model.ID, model.ConfigApply]
 }
 
 // empty reports whether the two exports hold the same rows, so a caller can tell
 // a genuinely no-op step from one that merely looks small.
 func (d exportDelta) empty() bool {
-	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty() && d.purges.empty() && d.planReviews.empty()
+	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty() && d.purges.empty() && d.planReviews.empty() && d.applies.empty()
 }
 
 // diffExports derives the row work that turns live tables holding prev into
@@ -176,6 +177,9 @@ func diffExports(prev, next model.Export) exportDelta {
 			filterRows(prev.PlanReviews, func(r model.PlanReview) bool { return survivors[r.IssueID] }),
 			next.PlanReviews,
 			func(r model.PlanReview) model.ID { return r.ID }, wholeRow),
+		// Config applies name no issue either, so they too diff against prev
+		// unfiltered.
+		applies: diffTable(prev.ConfigApplies, next.ConfigApplies, func(a model.ConfigApply) model.ID { return a.ID }, wholeRow),
 	}
 }
 
@@ -242,7 +246,10 @@ func applyExportDelta(ctx context.Context, tx *sql.Tx, delta exportDelta) error 
 	if err := applyTableDelta(ctx, tx, delta.purges, deletePurgeTx, insertPurgeTx); err != nil {
 		return err
 	}
-	return applyTableDelta(ctx, tx, delta.planReviews, deletePlanReviewTx, insertPlanReviewTx)
+	if err := applyTableDelta(ctx, tx, delta.planReviews, deletePlanReviewTx, insertPlanReviewTx); err != nil {
+		return err
+	}
+	return applyTableDelta(ctx, tx, delta.applies, deleteConfigApplyTx, insertConfigApplyTx)
 }
 
 // applyTableDelta is the one body every table's change runs through; the table's

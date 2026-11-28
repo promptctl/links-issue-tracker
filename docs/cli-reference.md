@@ -184,6 +184,12 @@ the place that makes "clone + init = my tickets are here" true. Adoption runs on
 the local store has no tickets of its own — a workspace with local work is never
 overwritten — so it is also safe to re-run after a transient network failure.
 
+Every run prints `  config: …`, the project config the store runs on. A store
+nothing has been applied to, with a committed `.lit/config.toml`, has that file
+applied (see [`lit config`](#lit-config-apply--lit-config-status)); a store that
+already holds an applied config, adopted from the remote or applied before, keeps
+it.
+
 ---
 
 ## Working the queue
@@ -401,12 +407,9 @@ from the canonical graph, `-` if none) and `blocked` (`blocked` when the readine
 classifier says the ticket cannot be pulled, else `-`). That classifier is the one
 `lit backlog --columns blocked` reads, over all five reasons it knows — a still-open
 dependency, an earlier same-lane sibling still open, a missing required field,
-needs-design, external — so the cell means the same thing on both commands. Across a store
-boundary it narrows by one reason: under `--at <dir>` readiness is
-**store-intrinsic**, because a discovered store carries no repo root to load a
-`required_fields` policy from (the same caveat `lit stores --counts` carries), so
-the missing-required-field reason cannot fire there. A `-` from `--at` is
-authoritative about the other four reasons and silent about that one. What `ls` reports
+needs-design, external — so the cell means the same thing on both commands. Under
+`--at <dir>` the `required_fields` policy is the one the store at `<dir>` has in
+force, so the cell is the one that store's own `lit ls` gives. What `ls` reports
 is the fact, never which of the five reasons applies: it is a flat projection, one
 cell per column and no context block, so a reader who needs the why runs
 `lit backlog`, where the `blocked by:` and `blocked:` lines name it. The two
@@ -1157,6 +1160,30 @@ lit hooks install
 Installs the shared `pre-push` sync hook into the clone's common git dir, so every
 worktree of the clone inherits it.
 
+### `lit config apply` / `lit config status`
+
+```text
+lit config apply [--by <name>]
+lit config status
+```
+
+Every clone runs on the project config applied to the store, never on the
+checkout's `.lit/config.toml` (or the file `LIT_CONFIG_PROJECT_PATH` names):
+an edit to the file has no effect until it is committed and applied. Sync
+carries each apply to every clone, and the newest apply is the config in force.
+A store nothing has been applied to runs on lit's defaults, with the global
+config above them.
+
+`lit config apply` puts the committed file in force. It refuses a file that is
+missing, not committed, has uncommitted changes, or does not load, naming every
+fault at once. Applying the config already in force writes nothing.
+
+`lit config status` prints the config in force (its digest, who applied it, and
+when, or lit's defaults) and how the checkout's file stands against it: it
+matches, it is committed but not applied, it has uncommitted changes, or there
+is no file. `lit backlog` prints the same line on stderr while the file is not
+the config in force.
+
 ### `lit workspace`
 
 ```text
@@ -1184,11 +1211,10 @@ folded-in former `lit overview`; an old `lit overview` invocation returns a poin
 here.
 
 Every store opens strictly read-only, never contending with a project's own writer.
-Readiness under `--counts` is **store-intrinsic**: a repo's own `required_fields`
-policy is not applied across the boundary (a discovered store carries no repo root to
-load it from), so counts can differ from that project's own `lit backlog` when it
-configures `required_fields`. A `focus` label is the other source of divergence: it
-narrows that project's `lit backlog` but never these counts (see `lit label add`).
+Readiness under `--counts` follows each store's own project config in force, its
+`required_fields` policy included. A `focus` label is where the counts can differ from
+that project's own `lit backlog`: it narrows the backlog but never these counts (see
+`lit label add`).
 
 ### `lit prefix set`
 

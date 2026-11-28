@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -201,6 +202,16 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 		l := declare()
 		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 			return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
+				// The sync family reads config, so its workspace holds the store's
+				// applied config, read once the session opens. The downgrade and
+				// the lift share the session and read no config, so they read no
+				// applies. [LAW:locality-or-seam]
+				project, err := app.ProjectOf(ctx, session.engine)
+				if err != nil {
+					return err
+				}
+				ws.Project = project
+				reportConfigLayers(ctx, inv.Stderr, inv.Env, ws.Project)
 				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
 			})
 		})

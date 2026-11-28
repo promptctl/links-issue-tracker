@@ -111,7 +111,8 @@ trigger set) left no record anywhere once the process exited.
 The cadence — how often lit mirrors the store to the remote — is a single
 config policy you own, not a per-command behavior. Set it under `[sync]` in
 `config.toml` (global at `~/.config/links-issue-tracker/config.toml`, or
-per-project at `.lit/config.toml`):
+per-project at `.lit/config.toml`, which takes effect once `lit config apply`
+puts it in force):
 
 ```toml
 [sync]
@@ -394,10 +395,11 @@ keep = 1000        # default; at least 1 and fewer than re_root_at
 ```
 
 Each checkout that pushes applies its own window to the shared remote, so set
-it in the committed `.lit/config.toml`, where every clone reads the same one.
-A background push applies the window of the command that spawned it: the
-detached worker is handed that command's project config, so it reads no
-checkout, and finishes after the checkout that spawned it is removed.
+it in `.lit/config.toml` and put it in force with `lit config apply`: every
+clone runs on the config applied to the store. A background push applies the
+window of the command that spawned it: the detached worker is handed that
+command's project config, so it reads no store, and finishes after the checkout
+that spawned it is removed.
 A count that is not a whole number, or a window that keeps no commit or keeps
 as many as it re-roots at, is a config error naming `sync.history_bound`.
 Pushes still land, but each says `history bound not kept` with the error, and

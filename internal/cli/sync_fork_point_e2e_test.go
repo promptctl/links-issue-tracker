@@ -25,7 +25,7 @@ func newForkedBelowTheCut(t *testing.T) (r reRootedCheckouts, adopted string) {
 // alpha's re-root.
 func newForkedBelowTheCutAfter(t *testing.T, bravoWrites func(reRootedCheckouts)) (r reRootedCheckouts, adopted string) {
 	t.Helper()
-	r, base := newSharedCheckouts(t)
+	r, _ = newSharedCheckouts(t)
 	adopted, _ = syncHeadAndBranch(t, r.bravo)
 	bravoWrites(r)
 	for _, title := range []string{"past-1", "past-2"} {
@@ -36,7 +36,7 @@ func newForkedBelowTheCutAfter(t *testing.T, bravoWrites func(reRootedCheckouts)
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
 	runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 	runCLIInDir(t, r.alpha, "sync", "push")
-	finishSharedCheckouts(t, r, base, receivingNotifyConfig)
+	finishSharedCheckouts(t, r)
 	return r, adopted
 }
 

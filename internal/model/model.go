@@ -1100,12 +1100,13 @@ type IssueDetail struct {
 	PlanReviews []PlanReview `json:"plan_reviews"`
 }
 
-// ExportVersion is the export format every store writes. Version 5 carries
+// ExportVersion is the export format every store writes. Version 6 carries
+// the config applies; an export from an earlier version has none. Version 5 carries
 // the plan reviews; an export from an earlier version has none. Version 4
 // carries the purge records; an export from an earlier version has none. Version 3
 // spells the blocked-by edge "blocked-by"; versions 1 and 2 spelled it
 // "blocks", and UnmarshalJSON reads them through RelationTypeFromStored.
-const ExportVersion = 5
+const ExportVersion = 6
 
 type Export struct {
 	Version     int          `json:"version"`
@@ -1118,6 +1119,9 @@ type Export struct {
 	Events      []IssueEvent `json:"events"`
 	Purges      []Purge      `json:"purges"`
 	PlanReviews []PlanReview `json:"plan_reviews"`
+	// ConfigApplies is every apply of the project config, oldest first. They
+	// belong to no issue, so no purge reaches them.
+	ConfigApplies []ConfigApply `json:"config_applies"`
 }
 
 // v1ExportHistory is the legacy history row produced by Version 1 exports.
@@ -1148,7 +1152,7 @@ func v1EventID(issueID ID, action, fromStatus, toStatus, createdBy string, creat
 }
 
 // UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges
-// spelled "blocks"), v3, v4 (purge records), and v5 (plan reviews) export formats so old sync files and backup
+// spelled "blocks"), v3, v4 (purge records), v5 (plan reviews), and v6 (config applies) export formats so old sync files and backup
 // restores remain readable after each format change. The decoded value is in
 // the current format whatever version it was read from, so it carries
 // ExportVersion: the version read is consumed here, by the dispatch.
@@ -1166,6 +1170,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Events      []IssueEvent      `json:"events"`
 		Purges      []Purge           `json:"purges"`
 		PlanReviews []PlanReview      `json:"plan_reviews"`
+		Applies     []ConfigApply     `json:"config_applies"`
 		History     []v1ExportHistory `json:"history"`
 	}
 	var raw rawExport
@@ -1173,16 +1178,17 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*e = Export{
-		Version:     ExportVersion,
-		WorkspaceID: raw.WorkspaceID,
-		ExportedAt:  raw.ExportedAt,
-		Issues:      raw.Issues,
-		Relations:   raw.Relations,
-		Comments:    raw.Comments,
-		Labels:      raw.Labels,
-		Events:      raw.Events,
-		Purges:      raw.Purges,
-		PlanReviews: raw.PlanReviews,
+		Version:       ExportVersion,
+		WorkspaceID:   raw.WorkspaceID,
+		ExportedAt:    raw.ExportedAt,
+		Issues:        raw.Issues,
+		Relations:     raw.Relations,
+		Comments:      raw.Comments,
+		Labels:        raw.Labels,
+		Events:        raw.Events,
+		Purges:        raw.Purges,
+		PlanReviews:   raw.PlanReviews,
+		ConfigApplies: raw.Applies,
 	}
 	if raw.Version < 3 {
 		for i := range e.Relations {

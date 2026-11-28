@@ -57,9 +57,8 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ws := addOwnerNotifyHook(t, workspacetest.Resolved(t, runEnv(t), consumer), `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	if err := os.Remove(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the fetch-success marker: %v", err)
 	}
@@ -213,14 +212,13 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	return unblock
 }
 
-// addOwnerNotifyHook turns the owner channel on for an initialized workspace:
-// its checkout's whole project config becomes one whose only setting is the
-// owner hook hook.
-func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
+// addOwnerNotifyHook is ws with the owner channel turned on: its whole
+// project config is one whose only setting is the owner hook hook.
+func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) workspace.Info {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	writeCheckoutProject(t, ws.RootDir, ownerHookConfig(hook))
+	return workspacetest.WithProject(ws, ownerHookConfig(hook))
 }
 
 // receiveTraceStops is the stopped metadata of every receive trace the

@@ -169,6 +169,13 @@ func workableLeaf(view workableView) appLeaf {
 		if err := printStalenessWarning(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
+		// Beside it, for the same reason: a config edit that is not in force is
+		// a difference between what the reader expects and what lit runs on.
+		configNotice, err := configStandingNotice(ctx, inv.Env, ap)
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(inv.Stderr, configNotice)
 		knobs := workableKnobs{
 			filter:  filter,
 			limit:   limitValue,

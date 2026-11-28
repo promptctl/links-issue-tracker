@@ -14,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/historywindow"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
@@ -307,27 +308,22 @@ func configLayers(env environ.Env, project ProjectLayer) layers {
 	return layers{fileLayer{globalConfigPath(env)}, project}
 }
 
-// ProjectLayer is the project config layer, read above the global one. It is
-// either a checkout's, the file at LIT_CONFIG_PROJECT_PATH or else the
-// checkout's .lit/config.toml, read when Load runs; or the content a detached
-// worker was handed by the command that launched it, whose checkout may be
-// gone by the time the worker reads config. [LAW:types-are-the-program] a
-// worker's layer is a value it holds, so no config read on its path can reach
-// for a checkout that no longer exists.
+// ProjectLayer is the project config layer, read above the global one. A
+// command runs on the config applied to its store (Applied), read when the
+// store opens; a detached worker runs on the content the command that launched
+// it was running on (HandedProject). The checkout's own file is what
+// `lit config apply` puts in force, and nothing reads it as the config in
+// force: an edit to it has no effect until it is applied, so every clone runs
+// on one config. [LAW:one-source-of-truth] [LAW:types-are-the-program]
+// each layer is a value its holder carries, so no config read on a worker's
+// path reaches for a checkout or a store.
 type ProjectLayer interface {
 	// Content is what a launcher hands its worker.
 	layer
-	// Source names where the layer came from — checkout:<path> or handed —
+	// Source names where the layer came from — applied:<digest> or handed —
 	// for the command's event: which file won is a fact of every command.
 	// [LAW:nothing-unseen]
 	Source() string
-}
-
-// CheckoutProject is the project layer of the checkout at workspaceRoot, the
-// file LIT_CONFIG_PROJECT_PATH names taking its place. An empty root has no
-// file of its own, but the variable still names one.
-func CheckoutProject(env environ.Env, workspaceRoot pathspec.PathSpec) ProjectLayer {
-	return fileLayer{CheckoutProjectPath(env, workspaceRoot)}
 }
 
 // HandedProject is a project layer handed over as content, read from no file.
@@ -339,8 +335,6 @@ func HandedProject(content []byte) ProjectLayer {
 type fileLayer struct{ path pathspec.PathSpec }
 
 func (l fileLayer) String() string { return l.path.String() }
-
-func (l fileLayer) Source() string { return "checkout:" + l.path.String() }
 
 // Content is the file's bytes: no path, or no file at it, is a layer that
 // sets nothing.
@@ -358,9 +352,10 @@ func (l fileLayer) Content() ([]byte, error) {
 	return content, nil
 }
 
-// NoProject is the project layer of a worker that was handed none: it sets
-// nothing, and says so on the event, where "handed" would claim a handoff
-// that never arrived. [FRAMING:representation]
+// NoProject is a project layer that sets nothing: a store nothing has been
+// applied to, which runs on lit's defaults, or a worker that was handed no
+// layer. It says so on the event, where "applied" or "handed" would claim
+// something that never happened. [FRAMING:representation]
 func NoProject() ProjectLayer { return noProjectLayer{} }
 
 type noProjectLayer struct{}
@@ -370,6 +365,44 @@ func (noProjectLayer) Content() ([]byte, error) { return nil, nil }
 func (noProjectLayer) String() string { return "no project config" }
 
 func (noProjectLayer) Source() string { return "none" }
+
+// Applied is the project layer of a store holding applies: the config in
+// force, model.ConfigInForce's pick, or NoProject when nothing has been
+// applied.
+func Applied(applies []model.ConfigApply) ProjectLayer {
+	apply, applied := model.ConfigInForce(applies)
+	if !applied {
+		return NoProject()
+	}
+	return appliedLayer{apply: apply}
+}
+
+// appliedLayer is the config in force on a store.
+type appliedLayer struct{ apply model.ConfigApply }
+
+func (l appliedLayer) String() string {
+	return "the applied project config " + l.apply.Digest().Short()
+}
+
+func (l appliedLayer) Source() string { return "applied:" + string(l.apply.Digest()) }
+
+func (l appliedLayer) Content() ([]byte, error) { return []byte(l.apply.Content), nil }
+
+// Unread is the project layer of a workspace whose store has not been opened.
+// The project layer is read from the store, so a command that reads config
+// before opening it would run on a config no other clone runs on. It fails
+// instead, naming the defect. [LAW:no-silent-failure]
+func Unread() ProjectLayer { return unreadLayer{} }
+
+type unreadLayer struct{}
+
+func (unreadLayer) Content() ([]byte, error) {
+	return nil, errors.New("the project config is read from the store, and this command read it before opening the store")
+}
+
+func (unreadLayer) String() string { return "the unread project config" }
+
+func (unreadLayer) Source() string { return "unread" }
 
 // handedLayer is a project layer that arrived as content.
 type handedLayer struct{ content []byte }
@@ -381,38 +414,52 @@ func (l handedLayer) Source() string { return "handed" }
 func (l handedLayer) Content() ([]byte, error) { return l.content, nil }
 
 // merge folds every layer into v in precedence order and returns the
-// concatenated required-field contributions in that same order.
+// concatenated required-field contributions in that same order, with every
+// layer's fault: a layer that does not parse contributes nothing and hides
+// nothing another layer sets.
 // [LAW:dataflow-not-control-flow] Absent layers contribute nothing as data;
 // no layer is conditionally skipped.
 func (l layers) merge(v *viper.Viper) ([]string, error) {
 	var required []string
+	var errs []error
 	for _, layer := range l {
 		fields, err := mergeConfigFile(v, layer)
-		if err != nil {
-			return nil, err
-		}
+		errs = append(errs, err)
 		required = append(required, fields...)
 	}
-	return required, nil
+	return required, errors.Join(errs...)
 }
 
 // Load reads config from ~/.config/links-issue-tracker/config.toml and from
 // the project layer above it. A missing file is not an error; defaults are
-// returned.
+// returned. A config that is refused is refused for every fault it holds, so
+// one reading names everything to fix. [LAW:no-silent-failure]
 func Load(env environ.Env, project ProjectLayer) (Config, error) {
+	return configLayers(env, project).load()
+}
+
+// CheckProject refuses a project config file for every fault it holds, read
+// alone over the defaults: what `lit config apply` puts in force must be a
+// config on every clone, whatever global config each user layers under it.
+// [LAW:single-enforcer] the check is Load's, over one layer.
+func CheckProject(content []byte) error {
+	_, err := layers{HandedProject(content)}.load()
+	return err
+}
+
+// load reads the chain over the defaults and checks the result.
+func (l layers) load() (Config, error) {
 	v := viper.New()
 	for key, value := range settings {
 		v.SetDefault(key, value)
 	}
 
-	required, err := configLayers(env, project).merge(v)
-	if err != nil {
-		return Config{}, err
-	}
+	required, mergeErr := l.merge(v)
+	errs := []error{mergeErr}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return Config{}, fmt.Errorf("decode config: %w", err)
+		return Config{}, errors.Join(mergeErr, fmt.Errorf("decode config: %w", err))
 	}
 	if len(required) > 0 {
 		cfg.Ready.RequiredFields = required
@@ -421,14 +468,14 @@ func Load(env environ.Env, project ProjectLayer) (Config, error) {
 	// trust boundary; downstream callers (lit snapshots new, future migration
 	// callers of dbsnapshot.Prune) trust the value is > 0.
 	if cfg.Snapshot.RetentionBudget <= 0 {
-		return Config{}, fmt.Errorf("config: snapshot.retention_budget must be > 0, got %d", cfg.Snapshot.RetentionBudget)
+		errs = append(errs, fmt.Errorf("config: snapshot.retention_budget must be > 0, got %d", cfg.Snapshot.RetentionBudget))
 	}
 	// [LAW:single-enforcer] sync.cadence is validated once at the trust
 	// boundary; the one owner of sync scheduling trusts the value is a legal
 	// cadence and switches on it without re-checking. [LAW:no-silent-failure]
 	// An unknown value fails loudly here rather than silently falling back.
 	if !cfg.Sync.Cadence.valid() {
-		return Config{}, fmt.Errorf("config: sync.cadence must be one of %s, got %q", syncCadenceValues(), cfg.Sync.Cadence)
+		errs = append(errs, fmt.Errorf("config: sync.cadence must be one of %s, got %q", syncCadenceValues(), cfg.Sync.Cadence))
 	}
 	// [LAW:single-enforcer] claims.freshness_window becomes a duration once, here,
 	// so claim derivation reads the window as a trusted positive duration and
@@ -438,18 +485,17 @@ func Load(env environ.Env, project ProjectLayer) (Config, error) {
 	// off. GetString rather than GetDuration: viper's cast would repeat the weak
 	// decode this exists to refuse. [LAW:no-silent-failure]
 	window, err := parseFreshnessWindow(v.GetString("claims.freshness_window"))
-	if err != nil {
-		return Config{}, err
-	}
+	errs = append(errs, err)
 	cfg.Claims.FreshnessWindow = window
 	// [LAW:single-enforcer] sync.history_bound becomes a historywindow.Window
 	// once, here, so the push path is handed a window that keeps and drops and
 	// never re-checks it.
 	historyWindow, err := parseHistoryWindow(v)
-	if err != nil {
+	errs = append(errs, err)
+	cfg.Sync.HistoryWindow = historyWindow
+	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
 	}
-	cfg.Sync.HistoryWindow = historyWindow
 	return cfg, nil
 }
 
@@ -458,9 +504,9 @@ func globalConfigPath(env environ.Env) pathspec.PathSpec {
 		Or(pathspec.New(ConfigDir(env)).Join("config.toml"))
 }
 
-// CheckoutProjectPath is the file CheckoutProject reads the project config of
-// the checkout at workspaceRoot from: the one LIT_CONFIG_PROJECT_PATH names,
-// or else the checkout's .lit/config.toml.
+// CheckoutProjectPath is the project config file of the checkout at
+// workspaceRoot, the one `lit config apply` puts in force: the file
+// LIT_CONFIG_PROJECT_PATH names, or else the checkout's .lit/config.toml.
 func CheckoutProjectPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
 	return pathspec.New(env.Get(projectConfigPathEnv)).
 		Or(workspaceRoot.Join(".lit", "config.toml"))

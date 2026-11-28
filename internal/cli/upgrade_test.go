@@ -665,7 +665,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		"migration.snapshot_left_out":       nil,
 		"migration.prune_error":             nil,
 		"migration.schema_ahead":            float64(ahead),
-		"migration.min_writer_schema":       float64(0),
+		"migration.min_writer_schema":       float64(13),
 		"migration.min_writer_schema_error": nil,
 		"migration.read_only":               false,
 		"migration.schema_hold":             float64(0),

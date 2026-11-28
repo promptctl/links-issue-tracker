@@ -27,7 +27,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
 
-	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+3, 2))
+	applyProjectConfig(t, r.alpha, receivingNotifyConfig()+historyWindowConfig(uint64(seeded)+3, 2))
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
@@ -94,7 +94,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)
 	}
 
-	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+1, 2))
+	applyProjectConfig(t, r.alpha, receivingNotifyConfig()+historyWindowConfig(uint64(seeded)+1, 2))
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	bound := boundRecordOf(t, lastEvent(t))
@@ -204,7 +204,9 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	pushed := extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic))
-	writeCheckoutProject(t, r.alpha, historyWindowConfig(5, 5))
+	// `lit config apply` refuses this window, so it is planted in force, as a
+	// newer lit that admits it would apply it.
+	plantProjectConfig(t, r.alpha, receivingNotifyConfig()+historyWindowConfig(5, 5))
 	isolateEvents(t)
 	const refusal = "config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at 5, keep 5 is not one"
 	if out := runCLIInDir(t, r.alpha, "sync", "push"); !strings.Contains(out, "history bound not kept: "+refusal) {
@@ -217,8 +219,12 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	if records, ok := ev.Occurrences["history_bound.records"]; !ok || len(records) != 0 {
 		t.Fatalf("event %q history_bound.records = %v; want an empty list: no bound ran", ev.Event, ev.Occurrences["history_bound.records"])
 	}
+	// bravo runs on alpha's config once it pulls, so it reads the pushed
+	// ticket through a listing that loads no config.
 	runCLIInDir(t, r.bravo, "sync", "pull")
-	runCLIInDir(t, r.bravo, "show", pushed)
+	if out := runCLIInDir(t, r.bravo, "ls"); !strings.Contains(out, pushed) {
+		t.Fatalf("bravo does not hold the pushed %s after its pull:\n%s", pushed, out)
+	}
 }
 
 // historyWindowConfig is a project config setting sync.history_bound, so

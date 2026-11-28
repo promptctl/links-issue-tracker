@@ -160,7 +160,11 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 			if wsErr != nil {
 				return wsErr
 			}
-			guidance, guidanceErr := renderQuickstartGuidance(inv.Env, ws.RootDir, ws.Project)
+			project, projectErr := appliedProject(cmd.Context(), inv.Env, inv.Stderr, ws)
+			if projectErr != nil {
+				return projectErr
+			}
+			guidance, guidanceErr := renderQuickstartGuidance(inv.Env, ws.RootDir, project)
 			if guidanceErr != nil {
 				return guidanceErr
 			}
@@ -207,6 +211,10 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 		}
 		return err
 	}
+	// From here on the workspace is the opened one, holding the store's applied
+	// config, which the automatic sync below reads after the engine closes.
+	ws = ap.Workspace
+	reportConfigLayers(ctx, inv.Stderr, inv.Env, ws.Project)
 	// The engine closes inside runThenMeasure (including on panic), so the close
 	// always precedes the automatic sync below, which needs only the workspace.
 	runErr := runThenMeasure(ctx, ws.DatabasePath, ap.Close, func() error {
@@ -272,7 +280,6 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 		return workspace.Info{}, err
 	}
 	recordWorkspaceResolution(ctx, ws)
-	reportConfigLayers(ctx, stderr, env, ws.Project)
 	return ws, nil
 }
 
@@ -621,17 +628,17 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 		}
 		return runThenMeasure(ctx, loc.DatabasePath, st.Close, func() error {
 			reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(st))
-			// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
-			// foreign-store call: a Location carries no repo root, so there is no ready
-			// policy to read. It opts out of ONLY the field-presence gate; every
-			// store-intrinsic annotation — blockers, the lane gate, reserved blocking
-			// labels — still runs, so `--columns blocked` over a foreign store answers the
-			// registry's question minus the one input that store cannot supply.
-			return l.work(ctx, inv, listScope{store: st, policy: noReadyPolicy}, positional)
+			// The foreign store's applied config sets its ready policy, so
+			// `--columns blocked` over it answers as that store's own `lit ls`.
+			project, err := app.ProjectOf(ctx, st)
+			if err != nil {
+				return err
+			}
+			return l.work(ctx, inv, listScope{store: st, policy: projectReadyPolicy(inv.Env, project)}, positional)
 		})
 	}
 	return runWithApp(ctx, inv, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return l.work(ctx, inv, listScope{store: ap.Store, policy: workspaceReadyPolicy(inv.Env, ap)}, positional)
+		return l.work(ctx, inv, listScope{store: ap.Store, policy: projectReadyPolicy(inv.Env, ap.Workspace.Project)}, positional)
 	})
 }
 
@@ -891,14 +898,13 @@ func parseSearchTerms(raw []string) ([]string, error) {
 // policy is the repo's ready policy, resolved HERE rather than by the caller and
 // only on the rung that consults it — `lit ls --columns id,title` never reads
 // config at all, which is what keeps a defect in an unrelated setting from
-// taking out the plain listing. `lit ls --at <dir>` supplies noReadyPolicy: a
-// foreign store has no repo root and so no config, and that opts out of ONLY the
-// field-presence gate, leaving every store-intrinsic annotation to run.
+// taking out the plain listing. `lit ls --at <dir>` supplies the foreign
+// store's own policy, read from the config applied to it.
 //
 // [LAW:dataflow-not-control-flow] which data to load is a value (the column
 // set's maximum rung); the switch below branches on that domain enum alone,
 // which is the entire point of having it. The policy is a value for the same
-// reason — the foreign-store case differs by what it was handed, not by a branch
+// reason: the foreign-store case differs by what it was handed, not by a branch
 // here.
 // [LAW:no-silent-failure] the default arm panics rather than returning nil: a
 // fourth rung added without a loader would otherwise render "-" in a column it
@@ -1041,16 +1047,16 @@ func gatherWorkableAnnotated(ctx context.Context, env environ.Env, ap *app.App, 
 // its filter decides which rows it may serve, not which rows its walks may read,
 // so it needs the rows a filter would drop (see routeNext).
 func gatherWorkableQueue(ctx context.Context, env environ.Env, ap *app.App) (focusedQueue, error) {
-	requiredFields, err := readyRequiredFields(env, ap)
+	requiredFields, err := readyRequiredFields(env, ap.Workspace.Project)
 	if err != nil {
 		return focusedQueue{}, err
 	}
 	// [LAW:locality-or-seam] The pipeline's real inputs are a store surface and
 	// the ready required-fields policy; the *app.App only supplied those two.
-	// Splitting the config read (a repo-rooted effect) from the classification
-	// lets the cross-project rollup run the SAME pipeline over a read-only
-	// foreign store — which has no repo root and so no per-repo config — by
-	// passing the policy as a value. [LAW:single-enforcer]
+	// Splitting the config read from the classification lets the cross-project
+	// rollup run the SAME pipeline over a read-only foreign store, with the
+	// policy that store's applied config sets, passed as a value.
+	// [LAW:single-enforcer]
 	queue, err := classifyWorkable(ctx, ap.Store, requiredFields)
 	if err != nil {
 		return focusedQueue{}, err
@@ -1061,13 +1067,14 @@ func gatherWorkableQueue(ctx context.Context, env environ.Env, ap *app.App) (foc
 	return focusQueue(ctx, ap.Store, queue)
 }
 
-// readyRequiredFields reads this repo's ready required-fields policy. Every
-// surface that annotates — the workable pipeline and `lit show`'s epic plan
-// slice — reads it through here, so the two cannot disagree about which fields
-// a ticket must fill before it counts as startable.
+// readyRequiredFields reads a store's ready required-fields policy from its
+// project layer. Every surface that annotates — the workable pipeline, `lit
+// show`'s epic plan slice, and the reads of a foreign store — reads it through
+// here, so they cannot disagree about which fields a ticket must fill before
+// it counts as startable.
 // [LAW:one-source-of-truth] One read of the policy, one place it is named.
-func readyRequiredFields(env environ.Env, ap *app.App) ([]string, error) {
-	cfg, err := config.Load(env, ap.Workspace.Project)
+func readyRequiredFields(env environ.Env, project config.ProjectLayer) ([]string, error) {
+	cfg, err := config.Load(env, project)
 	if err != nil {
 		return nil, err
 	}
@@ -1090,16 +1097,10 @@ func readyRequiredFields(env environ.Env, ap *app.App) ([]string, error) {
 // that depends on it.
 type readyPolicy func() ([]string, error)
 
-// workspaceReadyPolicy reads the repo's policy when asked.
-func workspaceReadyPolicy(env environ.Env, ap *app.App) readyPolicy {
-	return func() ([]string, error) { return readyRequiredFields(env, ap) }
+// projectReadyPolicy reads the policy project sets when asked.
+func projectReadyPolicy(env environ.Env, project config.ProjectLayer) readyPolicy {
+	return func() ([]string, error) { return readyRequiredFields(env, project) }
 }
-
-// noReadyPolicy is the policy of a store with no repo root to read one from.
-// A foreign store opened through --at gets this rather than a nil check at the
-// point of use, so the field-presence gate opts out by the value it was handed.
-// [LAW:dataflow-not-control-flow]
-func noReadyPolicy() ([]string, error) { return nil, nil }
 
 // classifyWorkable is the store-facing core of the workable pipeline: list
 // workable leaves, fetch details, annotate against the given required-fields
@@ -2529,7 +2530,7 @@ func quickstartLeaf() wsLeaf {
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
 	// The optional topic, declared. [LAW:single-enforcer]
-	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		ejectChanged := fs.Changed("eject")
 		ejectValue := *eject
 		if ejectChanged && ejectValue == "" {
@@ -2583,7 +2584,11 @@ func quickstartLeaf() wsLeaf {
 		}
 
 		// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
-		guidance, err := renderQuickstartGuidance(inv.Env, ws.RootDir, ws.Project)
+		project, err := appliedProject(ctx, inv.Env, inv.Stderr, ws)
+		if err != nil {
+			return err
+		}
+		guidance, err := renderQuickstartGuidance(inv.Env, ws.RootDir, project)
 		if err != nil {
 			return err
 		}

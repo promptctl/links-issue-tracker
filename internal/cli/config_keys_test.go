@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // A key a config layer sets that is no setting is named, with its file, once
@@ -16,16 +18,16 @@ func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
-	globalFile, projectFile := writeConfigLayers(t, repo,
+	globalFile, projectLayer := writeConfigLayers(t, repo,
 		"[init]\ninstall_hooks = false\n",
 		"[snapshot]\nretention_budgt = 2\n")
 	wantLines := []string{
 		"warning: " + globalFile + ` sets "init.install_hooks", which this version of lit does not read, so it has no effect`,
-		"warning: " + projectFile + ` sets "snapshot.retention_budgt", which this version of lit does not read, so it has no effect`,
+		"warning: " + projectLayer + ` sets "snapshot.retention_budgt", which this version of lit does not read, so it has no effect`,
 	}
 	wantFact := []any{
 		map[string]any{"key": "init.install_hooks", "file": globalFile},
-		map[string]any{"key": "snapshot.retention_budgt", "file": projectFile},
+		map[string]any{"key": "snapshot.retention_budgt", "file": projectLayer},
 	}
 
 	for _, args := range [][]string{{}, {"backlog"}, {"quickstart"}} {
@@ -78,12 +80,12 @@ func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
-	globalFile, projectFile := writeConfigLayers(t, repo, "[init]\ninstall_hooks = false\n", "[sync\n")
+	globalFile, projectLayer := writeConfigLayers(t, repo, "[init]\ninstall_hooks = false\n", "[sync\n")
 
 	_, stderr, _ := runCLIInDirSplit(t, repo, "backlog")
 	got := warningLines(stderr)
 	if len(got) != 2 ||
-		!strings.HasPrefix(got[0], "warning: config keys were not checked: parse config "+projectFile+":") ||
+		!strings.HasPrefix(got[0], "warning: config keys were not checked: parse config "+projectLayer+":") ||
 		got[1] != "warning: "+globalFile+` sets "init.install_hooks", which this version of lit does not read, so it has no effect` {
 		t.Errorf("stderr warnings = %q, want the project file's parse failure, then the global file's unknown key", got)
 	}
@@ -92,28 +94,26 @@ func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
 	if got := ev.Facts["config.unknown_keys"]; !reflect.DeepEqual(got, wantFact) {
 		t.Errorf("config.unknown_keys = %#v, want %#v", got, wantFact)
 	}
-	if got, _ := ev.Facts["config.unknown_keys_error"].(string); !strings.Contains(got, projectFile) {
-		t.Errorf("config.unknown_keys_error = %#v, want the parse failure naming %s", ev.Facts["config.unknown_keys_error"], projectFile)
+	if got, _ := ev.Facts["config.unknown_keys_error"].(string); !strings.Contains(got, projectLayer) {
+		t.Errorf("config.unknown_keys_error = %#v, want the parse failure naming %s", ev.Facts["config.unknown_keys_error"], projectLayer)
 	}
 }
 
 // writeConfigLayers writes the global layer under a fresh XDG_CONFIG_HOME and
-// the project layer into repo, returning each file's path as lit names it.
-func writeConfigLayers(t *testing.T, repo, global, project string) (globalFile, projectFile string) {
+// puts the project layer in force on repo's store, returning each layer's name
+// as lit names it. The project layer may be one `lit config apply` refuses.
+func writeConfigLayers(t *testing.T, repo, global, project string) (globalFile, projectLayer string) {
 	t.Helper()
 	globalFile = filepath.Join(t.TempDir(), "links-issue-tracker", "config.toml")
 	setRunEnv(t, "XDG_CONFIG_HOME", filepath.Dir(filepath.Dir(globalFile)))
-	root, err := filepath.EvalSymlinks(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(globalFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(globalFile, []byte(global), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return globalFile, writeCheckoutProject(t, root, project)
+	plantProjectConfig(t, repo, project)
+	return globalFile, "the applied project config " + model.DigestConfig(project).Short()
 }
 
 // warningLines is every line of stderr that is a warning, in order.

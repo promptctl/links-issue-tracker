@@ -689,6 +689,8 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: versionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
 			Run: r.wsFamilyCmd(hooksFamily), Subcommands: hooksFamily.subcommandSpecs()},
+		{Name: "config", Summary: "Put the committed project config in force for every clone (apply), or see how the file stands against it (status)", GroupID: "maintenance",
+			Run: r.familyCmd(configFamily), Subcommands: configFamily.subcommandSpecs()},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
 			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
 		// The detached sync workers a command spawns (spawnDetachedWorker):
@@ -782,7 +784,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(workspaceLeaf)},
-		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead. Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
+		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead, each under the project config in force on that store",GroupID: "maintenance",
 			Run: func(args []string) error { return runStores(ctx, inv, args) }},
 		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
 		// `lit stores --counts`. Both kept hidden+dispatchable for the documented

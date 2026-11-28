@@ -49,8 +49,9 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 			{name: "lit sync push", run: func(t *testing.T, dir string) (string, error) { return runCLIInDirAllowError(t, dir, "sync", "push") }, fails: true, reason: "sync_divergence", failureClass: "push_diverged"},
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
-				r, base := newSharedCheckouts(t)
-				finishSharedCheckouts(t, r, base, func(sink string) string { return ownerNotifyConfig(sink, receive.on) })
+				r, _ := newSharedCheckouts(t)
+				finishSharedCheckouts(t, r)
+				applyProjectConfig(t, r.bravo, ownerNotifyConfig(receive.on, sharedOwnerNotifySink))
 				runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 				runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 				runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)

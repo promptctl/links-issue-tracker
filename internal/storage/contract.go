@@ -325,6 +325,7 @@ type Store interface {
 	IssueWriter
 	CommentStore
 	PlanReviewStore
+	ConfigStore
 	RelationStore
 	Ranker
 	BulkWriter

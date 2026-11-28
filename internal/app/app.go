@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -121,11 +122,29 @@ func Open(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.I
 		// [LAW:no-silent-failure]
 		return nil, errors.Join(err, errors.Join(storage.OpenMigration(st).Failures()...), st.Close())
 	}
+	project, err := ProjectOf(ctx, st)
+	if err != nil {
+		return nil, errors.Join(err, errors.Join(storage.OpenMigration(st).Failures()...), st.Close())
+	}
+	ws.Project = project
 	// Every mode attributes, and the mode's own identity contract decides what
 	// that means: a write open has just minted a token, while a read open in a
 	// never-mutated checkout passes an empty one and its store stamps nothing.
 	// [LAW:dataflow-not-control-flow]
 	return New(ws, st, stream), nil
+}
+
+// ProjectOf is the project config layer of an opened store: the config
+// applied to it. It is read once, as the store opens, and held as a value, so
+// every config read of the command, those after the store closes included,
+// runs on the one config every clone of the store runs on.
+// [LAW:single-enforcer] the one place a store's applies become the layer.
+func ProjectOf(ctx context.Context, st storage.ConfigStore) (config.ProjectLayer, error) {
+	applies, err := st.ConfigApplies(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the applied project config: %w", err)
+	}
+	return config.Applied(applies), nil
 }
 
 // StoreOpenError is a store that would not open in a workspace that did

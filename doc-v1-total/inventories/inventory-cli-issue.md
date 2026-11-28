@@ -734,10 +734,11 @@ else ready.
   a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)` with the resolved path,
   wrapping the open error marked with holder contention for that location
   (`cli.go`). The store is closed on return (`cli.go`). The work runs
-  with `noReadyPolicy`, which returns no required fields (`cli.go`).
+  with `projectReadyPolicy(env, project)`, `project` the config applied to
+  that store (`app.ProjectOf`; a read failure fails the command) (`cli.go`).
 - With no `--at`, opens the cwd workspace store through `runWithApp` with
-  `app.AccessRead`, and the work runs with `workspaceReadyPolicy(ap)`
-  (`cli.go`).
+  `app.AccessRead`, and the work runs with
+  `projectReadyPolicy(env, ap.Workspace.Project)` (`cli.go`).
 
 **Flags** (declared in `listLeaf`, `cli.go`; read in its `work` closure,
 `cli.go`). "Only if visited" means the flag appears on the command line
@@ -836,7 +837,7 @@ column is `sourceIssue` (`columns.go`).
   and `readinessColumnsFor` sets `parentID` from the relation graph and
   `blocked = !ClassifyReadiness(row.Annotations).IsReady()` (`cli.go`;
   `workable.go`). A policy error fails the command. Over `--at`,
-  `noReadyPolicy` supplies no required fields.
+  the policy is the one the config applied to that store sets.
 - A missing cell renders as the zero `derivedColumns` (`output.go`):
   `parent` renders `-` for an empty id, and `blocked` renders `blocked` when set
   and `-` otherwise (`columns.go`, `output.go`).
@@ -953,9 +954,10 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   parent's plan with itself focused; anything else returns nil and **nothing is
   printed**.
 - The target is resolved first, so the `ready.required_fields` policy is read
-  from repo config (`readyRequiredFields` → `config.Load`, `cli.go`)
-  **only when a plan slice exists**. An issue in no epic reads no repo config, so
-  a `.lit/config.toml` that fails validation for an unrelated reason (for example
+  from the project config applied to the store
+  (`readyRequiredFields(env, ap.Workspace.Project)` → `config.Load`, `cli.go`)
+  **only when a plan slice exists**. An issue in no epic reads no config, so
+  an applied config that fails validation for an unrelated reason (for example
   `snapshot.retention_budget <= 0`) does not affect `lit show` on it; for an epic
   member the same config error fails the command, before any output.
 - Prints a leading blank line then `renderEpicContext(ec)` (`epic_context.go`);
@@ -1386,7 +1388,11 @@ line for `done` and `close`, each group omitted when empty:
 - A bad member of `--type`, `--assignee` or `--labels` (unknown type, blank
   slot) → `model.ValidationError` → exit 3, the same refusal `lit ls` gives
   (`workableFilterFlags.parse`, `workable.go`; `cli.go`).
-- Prints the sync-staleness warning first (`workable.go`).
+- Prints the sync-staleness warning first (`workable.go`), then on stderr
+  `configStandingNotice(ctx, env, ap)` (`project_config.go`): `"lit: %s is not the config in force: %s (lit config status)\n"`
+  with the project config file's path and its standing's sentence when the file
+  stands `not_applied` or `uncommitted`, and nothing otherwise; a failure to
+  read the file or the applies fails the command.
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
   (`workable.go`), then `gatherClaimContext` (`workable.go`). The focus scope
   then partitions the rows,
