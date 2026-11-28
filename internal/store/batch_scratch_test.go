@@ -56,7 +56,7 @@ func gcContention() error {
 
 func countTasks(t *testing.T, ctx context.Context, st *Store) int {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueType.Is(model.TypeTask)}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

@@ -117,7 +117,7 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("goose version = %d, want %d", v, headVersion(t))
 	}
 	// The seeded row survived the forward migration with its data intact.
-	issues, err := second.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"Pre-migration issue"}})
+	issues, err := second.ListIssues(ctx, selecting(t, `text~"Pre-migration issue"`))
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

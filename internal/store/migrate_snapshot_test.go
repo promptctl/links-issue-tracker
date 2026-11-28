@@ -180,7 +180,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() after restore error = %v", err)
 	}
-	if _, err := restored.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := restored.ListIssues(ctx, storage.Listing{}); err != nil {
 		t.Fatalf("ListIssues() after restore error = %v", err)
 	}
 	if err := restored.Close(); err != nil {

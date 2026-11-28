@@ -35,7 +35,7 @@ Five types (`internal/model/issue_type.go`): `task`, `feature`, `bug`, `chore`, 
 
 Containers differ from leaves in three ways:
 
-1. **Derived state.** An epic's state is computed from its children: all children closed (and at least one child) → `closed`; any child in progress or closed → `in_progress`; otherwise → `open`. An epic with no children is `open` (`internal/model/lifecycle/all_of.go`). Progress is the field-wise sum of every non-container descendant's counts (`all_of.go`).
+1. **Derived state.** An epic's state is computed from its children: all children closed (and at least one child) → `closed`; any child in progress or closed → `in_progress`; otherwise → `open`. An epic with no children is `open` (`internal/model/lifecycle/all_of.go`). Progress is the field-wise sum of every non-container descendant's counts (`model.go`, `internal/store/walk.go`).
 2. **No direct transitions.** Applying any status action to an epic returns a typed `ContainerActionError` whose message varies with child progress — no children, all done, or N unfinished (`model.go`).
 3. **No status on the wire.** A serialized epic carries no `status`, `closed_at`, `resolution`, or `redirect_target` keys (`model.go`), and JSON alone cannot reconstruct an epic's lifecycle — a decoded epic is marked pending until the store re-derives its state from children (`model.go`).
 
@@ -51,7 +51,7 @@ A leaf issue's status is one of three states (`internal/model/lifecycle/lifecycl
 - `in_progress`
 - `closed`
 
-State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, query language) reject them (`lifecycle.go`).
+State parsing lowercases, trims, and accepts `in-progress` as an alias for `in_progress` (`lifecycle.go`). Lenient boundaries (import, hydration, storage) default unparseable states to `open`; strict boundaries (CLI flags, and a selector's `status` atom, which parses through `ParseState`) reject them (`lifecycle.go`, `internal/storage/issue_fields.go`).
 
 ### Transition actions
 

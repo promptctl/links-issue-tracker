@@ -38,7 +38,7 @@ func readDBState(t *testing.T, ctx context.Context, st *Store) dbState {
 // sit on a closed ticket.
 func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

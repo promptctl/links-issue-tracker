@@ -128,8 +128,8 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 		if outer.ID == secondOuter.ID {
 			want = []model.ID{secondLeaf.ID, firstLeaf.ID}
 		}
-		assertIssueIDs(t, "a listing bound to the parents", mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []model.ID{firstMiddle.ID, secondMiddle.ID}}), want)
-		assertIssueIDs(t, "a listing bound to the ids", mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []model.ID{firstLeaf.ID, secondLeaf.ID}}), want)
+		assertIssueIDs(t, "a listing bound to the parents", mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(firstMiddle.ID, secondMiddle.ID)}}), want)
+		assertIssueIDs(t, "a listing bound to the ids", mustList(t, ctx, st, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(firstLeaf.ID, secondLeaf.ID)}}), want)
 	}
 
 	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})

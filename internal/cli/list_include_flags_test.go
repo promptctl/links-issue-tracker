@@ -8,14 +8,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestListQuerySupersetMatchesDiscreteFlags pins parity at the CLI surface:
-// the discrete flag form and the --query token form of the four list
-// options (sort/limit/archived/deleted) must render byte-identical output.
-// Struct-level parity lives in the query package; this test proves the two
-// grammars reach ListIssues with the same intent end to end, and that the flags
-// actually do something (the archived/deleted issues are hidden by default and
-// surfaced by both forms). [LAW:behavior-not-structure]
-func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
+// TestListIncludeFlagsAdmitArchivedAndDeleted pins that an archived or deleted
+// issue is listed only when its flag admits it, and that the flags list it.
+func TestListIncludeFlagsAdmitArchivedAndDeleted(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	// Three plainly-visible issues plus one archived and one deleted, so every
@@ -34,22 +29,15 @@ func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
 		t.Fatalf("Apply(delete) error = %v", err)
 	}
 
-	flagForm := runLs(t, h.ap, "--sort", "rank:asc", "--limit", "10", "--include-archived", "--include-deleted")
-	queryForm := runLs(t, h.ap, "--query", "sort:rank:asc limit:10 archived deleted")
-	if flagForm != queryForm {
-		t.Fatalf("flag form and query form diverged:\n--- flags ---\n%s\n--- query ---\n%s", flagForm, queryForm)
-	}
-
-	// Both forms must actually surface the archived and deleted issues; otherwise
-	// identical-but-empty output would pass vacuously.
+	included := runLs(t, h.ap, "--include-archived", "--include-deleted")
 	for _, id := range []string{arch.ID.Raw(), del.ID.Raw()} {
-		if !strings.Contains(queryForm, id) {
-			t.Fatalf("query form omitted included issue %q; output:\n%s", id, queryForm)
+		if !strings.Contains(included, id) {
+			t.Fatalf("ls --include-archived --include-deleted omitted %q; output:\n%s", id, included)
 		}
 	}
 
-	// Baseline: without the visibility tokens the archived and deleted issues are
-	// hidden, proving the tokens are what surfaced them.
+	// Baseline: without the flags the archived and deleted issues are hidden,
+	// proving the flags are what surfaced them.
 	bare := runLs(t, h.ap)
 	for _, id := range []string{a.ID.Raw(), b.ID.Raw(), c.ID.Raw()} {
 		if !strings.Contains(bare, id) {

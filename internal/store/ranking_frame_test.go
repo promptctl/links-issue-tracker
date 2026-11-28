@@ -1282,7 +1282,7 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 			t.Errorf("rank set wrote %q onto %s, the key %s holds inside the epic; a rank orders one issue", after[id], id, opener.ID)
 		}
 	}
-	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	listed, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}
@@ -1399,7 +1399,7 @@ func TestRankSetReversingALargeFrameHandsRoundEveryKey(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	ids := makeTopLevelIssues(t, ctx, st, 2*idChunkSize+3, "row %d")
-	before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	before, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1408,7 +1408,7 @@ func TestRankSetReversingALargeFrameHandsRoundEveryKey(t *testing.T) {
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
-	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	after, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1437,7 +1437,7 @@ func TestRankSetWritesOnlyTheIssuesItNamed(t *testing.T) {
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
-	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	after, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1479,7 +1479,7 @@ func TestRankSetHandsRoundTheKeysOfTheIssuesLeadingTheFrame(t *testing.T) {
 
 func storedKeys(t *testing.T, ctx context.Context, st *Store) map[model.ID]string {
 	t.Helper()
-	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	listed, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1585,13 +1585,13 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			if tc.reversed {
 				named = []model.ID{high, low}
 			}
-			before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			before, err := st.ListIssues(ctx, storage.Listing{})
 			if err != nil {
 				t.Fatalf("ListIssues() error = %v", err)
 			}
 
 			_, err = st.RankSet(ctx, named)
-			after, listErr := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			after, listErr := st.ListIssues(ctx, storage.Listing{})
 			if listErr != nil {
 				t.Fatalf("ListIssues() error = %v", listErr)
 			}
@@ -1659,7 +1659,7 @@ func TestRankSetNeverHandsOnAKeyAnUnnamedIssueShares(t *testing.T) {
 	if _, err := st.RankSet(ctx, []model.ID{low, other}); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
-	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	after, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1708,7 +1708,7 @@ func TestRankSetMintsPastATieItCannotHandRound(t *testing.T) {
 			if _, err := st.RankSet(ctx, named); err != nil {
 				t.Fatalf("RankSet(%v) error = %v", named, err)
 			}
-			after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			after, err := st.ListIssues(ctx, storage.Listing{})
 			if err != nil {
 				t.Fatalf("ListIssues() error = %v", err)
 			}
@@ -1825,7 +1825,7 @@ func TestRankSetReadsATieInIDOrder(t *testing.T) {
 				if _, err := st.RankSet(ctx, []model.ID{ids[at]}); err != nil {
 					t.Fatalf("RankSet error = %v", err)
 				}
-				byID, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
+				byID, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(ids...)}})
 				if err != nil {
 					t.Fatalf("ListIssues() error = %v", err)
 				}
@@ -1856,7 +1856,7 @@ func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 	if _, err := st.RankSet(ctx, []model.ID{b, c}); err != nil {
 		t.Fatalf("RankSet naming an unranked issue error = %v", err)
 	}
-	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	after, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

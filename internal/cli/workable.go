@@ -11,7 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/query"
+	"github.com/promptctl/links-issue-tracker/internal/selector"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -147,7 +147,7 @@ func workableLeaf(view workableView) appLeaf {
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
 	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		filter, err := filterFlags.parse()
+		filter, err := filterFlags.parse(time.Now())
 		if err != nil {
 			return err
 		}
@@ -158,7 +158,7 @@ func workableLeaf(view workableView) appLeaf {
 		if err != nil {
 			return err
 		}
-		limitValue, err := query.ParseLimit(*limit)
+		limitValue, err := parseLimit(*limit)
 		if err != nil {
 			return fmt.Errorf("parse --limit: %w", err)
 		}
@@ -267,9 +267,9 @@ type workableFilterFlags struct {
 	labels    *[]string
 }
 
-// registerWorkableFilter declares the filter flags. The set-valued flags are StringArrays because the filter fields they feed
-// are sets: a second occurrence widens the set rather than replacing the first.
-// [LAW:no-silent-failure]
+// registerWorkableFilter declares the filter flags. The set-valued ones are
+// StringArrays, so a second occurrence widens the set rather than replacing the
+// first. [LAW:no-silent-failure]
 func registerWorkableFilter(fs *cobraFlagSet) workableFilterFlags {
 	return workableFilterFlags{
 		assignee:  fs.StringArray("assignee", assigneeFlagUsage),
@@ -279,27 +279,21 @@ func registerWorkableFilter(fs *cobraFlagSet) workableFilterFlags {
 	}
 }
 
-// parse turns the flag occurrences into the filter, through the same set
-// parsers `lit ls` uses, so a type or label the listing refuses is refused here
-// too, with the same exit code.
-func (f workableFilterFlags) parse() (workableFilter, error) {
+// parse reads the flag occurrences as the filter's selector, each flag the atom
+// it stands for in `lit ls`, so a type or label the listing refuses is refused
+// here too, with the same exit code.
+func (f workableFilterFlags) parse(now time.Time) (workableFilter, error) {
 	status, err := parseWorkableStatus(*f.status)
 	if err != nil {
 		return workableFilter{}, err
 	}
-	issueTypes, err := parseIssueTypeSet(*f.issueType)
-	if err != nil {
-		return workableFilter{}, err
-	}
-	assignees, err := parseAssigneeSet(*f.assignee)
-	if err != nil {
-		return workableFilter{}, err
-	}
-	labels, err := parseLabelSet(*f.labels)
-	if err != nil {
-		return workableFilter{}, err
-	}
-	return workableFilter{Assignees: assignees, IssueTypes: issueTypes, Status: status, Labels: labels}, nil
+	sel, err := flagSelector(now, []flagAtom{
+		{flag: "status", path: storage.IssueStatus.Name(), op: selector.Eq, values: toSlice(string(status))},
+		{flag: "type", path: storage.IssueType.Name(), op: selector.Eq, values: *f.issueType, split: true},
+		{flag: "assignee", path: storage.IssueAssignee.Name(), op: selector.Eq, values: *f.assignee, split: true},
+		{flag: "labels", path: storage.IssueLabels.Name(), op: selector.Eq, values: *f.labels, split: true, each: true},
+	})
+	return workableFilter{selector: sel}, err
 }
 
 // optionalString registers the flag only when the view exposes it; an

@@ -1,13 +1,6 @@
 // Package lifecycle defines the internal lifecycle expression primitives used
 // by model.Issue. Callers outside internal/model must use the model package
 // hydration, capability, and action APIs instead of importing this package.
-//
-// Container Progress aggregation is leaf-primitive based: AllOf.Progress folds
-// over Progresses(a), which walks through Containers and collects every
-// non-Container descendant's Progress. New primitive kinds that need to
-// contribute to Progress should be leaf primitives or should implement
-// Container so traversal reaches their children. Adding a wrapper primitive
-// without Container semantics will make it contribute only its own Progress.
 package lifecycle
 
 import (
@@ -119,29 +112,6 @@ type Lifecycle interface {
 	Progress() Progress
 }
 
-// Container marks lifecycle combinators that own child lifecycle expressions.
-// [LAW:one-type-per-behavior] Recursive traversal depends on one container contract instead of ad hoc structural assertions per combinator.
-type Container interface {
-	Lifecycle
-	Children() []Lifecycle
-}
-
-// Walk visits the lifecycle tree depth-first. Recursion is the substrate;
-// the model package's capability and action APIs deliberately do NOT use
-// Walk because they are root-only by policy. Only call Walk when you know
-// you want full-tree traversal, such as Progresses for progress aggregation.
-// [LAW:dataflow-not-control-flow] Tree traversal is one primitive that receives variable lifecycle data instead of scattering recursive special cases across callers.
-func Walk(l Lifecycle, visit func(Lifecycle) bool) {
-	if l == nil || !visit(l) {
-		return
-	}
-	if container, ok := l.(Container); ok {
-		for _, child := range container.Children() {
-			Walk(child, visit)
-		}
-	}
-}
-
 // stateName is a state's name as every state parser reads it: any case,
 // surrounding space ignored, and in-progress for in_progress.
 // [LAW:one-source-of-truth] ParseState and ParseStateNode spell names alike.
@@ -165,45 +135,10 @@ func ParseState(value string) (State, error) {
 	return "", fmt.Errorf("invalid status %q (valid: %s)", value, strings.Join(names, ", "))
 }
 
-// ParseStates turns however a caller spelled a set of states into the set the
-// storage filter ORs together: a comma list (`--status closed,in_progress`,
-// `status:closed,in_progress`), a repeated flag, or both at once. No inputs is
-// the empty set — the shape an absent flag already has — so "no narrowing"
-// needs no encoding of its own.
-//
-// [LAW:single-enforcer] Comma-splitting a status set lives here and nowhere
-// else. The `--status` flag and the query grammar's `status:` term are two
-// spellings of one question, and the day they own separate splitters is the day
-// they disagree about what a set looks like.
-// [LAW:dataflow-not-control-flow] Widening is a longer slice, never a second
-// code path: one state and three states leave here as the same type, and every
-// stage downstream already ORs whatever it is handed.
-// [LAW:no-silent-failure] Every fragment goes through the sealed ParseState
-// gate and nothing is skipped, so `status:`, `--status ,` and `--status open,`
-// stay loud errors rather than degrading into "no status filter" and handing
-// back the default listing wearing the shape of an answer.
-func ParseStates(inputs ...string) ([]State, error) {
-	var out []State
-	for _, input := range inputs {
-		for _, field := range strings.Split(input, ",") {
-			state, err := ParseState(field)
-			if err != nil {
-				return nil, err
-			}
-			// No dedup: the store builds an allow-map from this slice, so a
-			// repeat is already absorbed, and query.Merge dedups across the two
-			// grammars. A third copy of that rule here would be one more thing
-			// to keep in agreement.
-			out = append(out, state)
-		}
-	}
-	return out, nil
-}
-
 // DefaultOpen parses a state, defaulting to Open for blank or unrecognized
 // input. Use this for lenient boundaries (import, hydration, storage) where
-// the data may be absent or legacy. Strict boundaries (CLI flags, query
-// language) should use ParseState directly.
+// the data may be absent or legacy. Strict boundaries (CLI flags, a selector's
+// status atom) should use ParseState directly.
 func DefaultOpen(value string) State {
 	state, err := ParseState(value)
 	if err != nil {
@@ -244,19 +179,4 @@ func ParseAction(value string) (ActionName, error) {
 		}
 	}
 	return "", fmt.Errorf("unsupported lifecycle action %q", value)
-}
-
-// Progresses collects every non-Container Progress reachable from l by walking
-// through Containers. Used by AllOf.Progress to aggregate container progress;
-// see the package doc for the leaf-primitive aggregation contract.
-func Progresses(l Lifecycle) []Progress {
-	out := []Progress{}
-	Walk(l, func(current Lifecycle) bool {
-		if _, ok := current.(Container); ok {
-			return true
-		}
-		out = append(out, current.Progress())
-		return true
-	})
-	return out
 }

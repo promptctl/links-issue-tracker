@@ -59,7 +59,7 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 					t.Errorf("Apply error = %v", err)
 					return
 				}
-				if _, err := engine.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+				if _, err := engine.ListIssues(ctx, storage.Listing{}); err != nil {
 					t.Errorf("ListIssues error = %v", err)
 					return
 				}
@@ -79,7 +79,7 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 	if want := int64(writers*perWriter + 1); count != want {
 		t.Errorf("LocalIssueCount = %d, want %d", count, want)
 	}
-	listed, err := engine.ListIssues(ctx, storage.ListIssuesFilter{})
+	listed, err := engine.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}

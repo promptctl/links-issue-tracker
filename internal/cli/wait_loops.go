@@ -48,9 +48,7 @@ func doctorWaitLoops(ctx context.Context, st storage.Store, report storage.Healt
 // that would close a loop, exactly as heldAncestry does for lit backlog and lit
 // next. A loop named here is one those commands enforce.
 func findWaitLoops(ctx context.Context, st storage.Store) ([]waitLoop, error) {
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{
-		Statuses: []model.State{model.StateOpen, model.StateInProgress},
-	})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen, model.StateInProgress)}})
 	if err != nil {
 		return nil, err
 	}

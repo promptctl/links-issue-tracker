@@ -87,7 +87,7 @@ func reconcileB(t *testing.T, ctx context.Context, rootB string) (storage.SyncRe
 	if res.State != storage.SyncReconcileLinearized {
 		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileLinearized)
 	}
-	if _, err := syncB.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := syncB.ListIssues(ctx, storage.Listing{}); err != nil {
 		t.Fatalf("ListIssues(B) after the reconcile: %v, want the store readable", err)
 	}
 	return res, syncB

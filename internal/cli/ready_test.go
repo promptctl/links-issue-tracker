@@ -407,7 +407,7 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 		Lane:      storage.MustParseLane("bob"),
 	})
 
-	got := h.runWorkableAnnotated(workableFilter{Assignees: []string{"alice"}}, 1)
+	got := h.runWorkableAnnotated(filterOf(t, "assignee=alice"), 1)
 
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1; got=%#v", len(got), got)

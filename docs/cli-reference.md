@@ -338,9 +338,9 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>]... [--query <q>] [--status <csv of open|in_progress|closed>]...
-       [--type <csv of task|feature|bug|chore|epic>]... [--labels <csv>]... [--assignee <csv>]... [--has-comments]
-       [--updated-after <rfc3339>] [--updated-before <rfc3339>]
+lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>]... [--query <selector>] [--status <csv of open|in_progress|closed>]...
+       [--type <csv of task|feature|bug|chore|epic>]... [--labels <csv>]... [--assignee <csv>]... [--has-comments[=false]]
+       [--updated-after <stamp>] [--updated-before <stamp>]
        [--include-archived] [--include-deleted]
        [--sort rank:asc,updated_at:desc] [--limit <n>] [--columns <csv>]
        [--format lines|table|yaml]
@@ -353,44 +353,56 @@ sort, column, and format below applies to that foreign store, with one narrowing
 the `blocked` column evaluates four of its five reasons across a store boundary,
 described with that column below. This is the folded-in
 former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
-`lit ls --at <dir>`. `--search` matches title and description
-text; `--query` is a compact query language combining filters and text (e.g.
-`status:in_progress type:task has:comments login`). It is a strict superset of the
-discrete filter and list-shaping flags: every flag above has an equivalent token, so
-`--query` alone can express any filter. The token spellings are `status:` (e.g.
-`status:closed,in_progress`, comma-separate multiple states),
-`resolution:`, `type:`, `assignee:`, `id:`, `parent:`, `label:` (the last four
-comma-separate multiple values, like their flags), `has:comments`,
-`updated>=`/`updated<=`, `sort:` (e.g. `sort:rank:asc`, comma-separate multiple keys),
-`limit:` (e.g. `limit:5`), and the bare keywords `archived` and `deleted` (the
-`--include-archived` / `--include-deleted` equivalents). Any bare word that is not a
-recognized token is a search term. Archived and deleted issues are hidden unless
-explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
-they are not filter concerns.
+`lit ls --at <dir>`.
+
+`--query` takes a selector: atoms, all of which an issue must satisfy, each
+`path`, `!path` or `path OP value[,value...]` with OP one of `=` `!=` `~` `<`
+`<=` `>` `>=`. A path reads a field of the issue (`status`, `labels`,
+`updated_at`), steps across an edge to read the fields of the issues it reaches
+(`parent/status=in_progress`), keeps only those a selector holds of
+(`children(status!=closed)`), counts them (`blocked_by/count>0`), or starts at the
+workspace with a leading `/` (`/issues(type=bug status=open)/count>20`). `lit ls
+--help` prints every field, its kind and the operators the kind takes, generated
+from the table the parser reads; that reference is the whole contract. An atom's
+values are any of: `status=closed,in_progress` lists both. A path reads a set of
+values and an atom holds when one of them satisfies it, so `!=` holds exactly
+where `=` does not, including for an issue with no value. A stamp is an RFC 3339
+instant or `now`, optionally `-` or `+` a whole number of `m`, `h`, `d` or `w`,
+read once per command. An unknown field, an operator the field's kind does not
+take, a value its vocabulary refuses, or an empty value, is refused (exit 3)
+before anything is read.
+
+Every filter flag is one atom of that selector: `--type bug,task` is
+`type=bug,task`, `--labels a,b` is `labels=a labels=b`, `--search x` is
+`text~x`, `--has-comments` is `comments` (`=false`, `!comments`), and
+`--updated-after T` is `updated_at>=T`. The flags and `--query` are one
+conjunction, so each narrows the listing. Archived and deleted issues exist for
+the selector only with `--include-archived` / `--include-deleted`, at every step
+of every path. Unless an atom reads the issue's own status or resolution, the
+listing selects open and in_progress issues.
 
 `--status`, `--type`, `--ids`, `--parent`, `--labels` and `--assignee` are sets: each
 takes a comma list, may be repeated, and a repeat adds to the set rather than
 replacing it. `--status` and `--type` members are checked against their vocabulary, so
 one bad member fails the whole listing and is named. An empty `--ids`, `--parent`,
-`--labels` or `--assignee`, a blank slot in one (`--ids a,`), or a bare `id:`,
-`parent:`, `label:` or `assignee:`, is refused rather than ignored. `--search` may be
+`--labels` or `--assignee`, or a blank slot in one (`--ids a,`), is refused rather
+than ignored. `--search` may be
 repeated too, but a comma is ordinary search text, so each occurrence is one term,
 whole; a row must match every term, and a blank `--search` is refused. Every one of
 these refusals exits 3. `--labels` requires every label named, so each one added
 narrows the listing.
 
-`--parent <csv>` (token `parent:<id>`; comma-separated and/or repeated) keeps only the
+`--parent <csv>` (the atom `parent=<id>`; comma-separated and/or repeated) keeps only the
 direct children of the named issues, read from the parent-child edge, so a grandchild is not listed. An id that
 names no issue is a not-found error (exit 4) rather than an empty listing, and an
-empty `--parent` or a bare `parent:` is refused rather than ignored.
+empty `--parent` is refused rather than ignored.
 `lit children <id>` is this same listing under its own name.
 
 `--status` takes a set, not one state: `--status closed,in_progress` and the
 repeated `--status closed --status in_progress` are the same request, and both
 return one listing spanning both buckets in a single ordering rather than two
-listings the caller merges by hand. The query term widens the same way
-(`--query "status:closed,in_progress"`), because the flag and the token share one
-parser. Every member must be a legal state — a typo anywhere in the set, or an
+listings the caller merges by hand. The atom reads the same set
+(`--query "status=closed,in_progress"`), because the flag is that atom. Every member must be a legal state — a typo anywhere in the set, or an
 empty value, is an error, never a silently narrower listing.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the

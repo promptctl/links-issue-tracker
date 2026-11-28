@@ -17,7 +17,7 @@ import (
 // is part of it, so a lane no family landed in fails too.
 func RequireLaneFamiliesMatchTheBacklog(t testing.TB, ctx context.Context, st storage.Store) {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}

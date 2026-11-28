@@ -52,11 +52,14 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 		t.Fatalf("Downgrade to v%d: %v", baselineVersion+1, err)
 	}
 
-	// Pre-lift: the binary's Export cannot read the old-schema working set.
+	// Pre-lift: the binary's Export cannot read the old-schema working set: its
+	// read names a column the old schema lacks. Which of the missing columns
+	// Dolt names is the order the read binds them in; that the lift below
+	// supplies it is what the export after the lift shows.
 	if _, err := st.Export(ctx); err == nil {
 		t.Fatalf("Export on downgraded (v%d) working set unexpectedly succeeded; the skew was not reproduced", baselineVersion+1)
-	} else if !strings.Contains(err.Error(), "resolution") {
-		t.Fatalf("Export failed but not on the resolution column: %v", err)
+	} else if !strings.Contains(err.Error(), "does not have column") {
+		t.Fatalf("Export failed but not on a column the old schema lacks: %v", err)
 	}
 
 	// The lift replays 00003/00004 over the working set, uncommitted.

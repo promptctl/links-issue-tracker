@@ -46,7 +46,7 @@ func benchListByIDs(b *testing.B, rows int) {
 	st, ctx, ids := benchIssueIDs(b, rows)
 	b.ResetTimer()
 	for range b.N {
-		got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
+		got, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueID.Is(ids...)}})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func benchListByParents(b *testing.B, parents int) {
 	}
 	b.ResetTimer()
 	for range b.N {
-		got, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: parentIDs})
+		got, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(parentIDs...)}})
 		if err != nil {
 			b.Fatal(err)
 		}

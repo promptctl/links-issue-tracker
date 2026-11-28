@@ -30,10 +30,9 @@ func statusSetFixture(t *testing.T) (h readyTestHarness, openID, inProgressID, c
 	return h, open.ID.Raw(), started.ID.Raw(), closed.ID.Raw()
 }
 
-// TestListStatusSetSpansBucketsInOneListing is the links-listing-09m5
-// acceptance. storage.ListIssuesFilter.Statuses is a set both engines already
-// OR together; this pins that every spelling the CLI offers can actually reach
-// that set, and that they all reach the SAME one.
+// TestListStatusSetSpansBucketsInOneListing pins that every spelling of a
+// status set the CLI offers reaches the same set: an atom's values are any of,
+// so naming two states lists both.
 //
 // The repeated-flag row is the one that fails loudest on a regression: were
 // `--status` a plain string flag, a second occurrence would overwrite the
@@ -49,9 +48,7 @@ func TestListStatusSetSpansBucketsInOneListing(t *testing.T) {
 	}{
 		{"flag, comma-joined", []string{"--status", "closed,in_progress"}},
 		{"flag, repeated", []string{"--status", "closed", "--status", "in_progress"}},
-		{"query, comma-joined", []string{"--query", "status:closed,in_progress"}},
-		{"query, repeated terms", []string{"--query", "status:closed status:in_progress"}},
-		{"flag and query together", []string{"--status", "closed", "--query", "status:in_progress"}},
+		{"query", []string{"--query", "status=closed,in_progress"}},
 	}
 	for _, sp := range spellings {
 		t.Run(sp.name, func(t *testing.T) {
@@ -86,8 +83,8 @@ func TestListStatusSetRejectsABadMemberLoudly(t *testing.T) {
 		{"--status", "closed", "--status", "todo"},
 		{"--status", ""},
 		{"--status", "closed,"},
-		{"--query", "status:closed,todo"},
-		{"--query", "status:"},
+		{"--query", "status=closed,todo"},
+		{"--query", "status="},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out strings.Builder

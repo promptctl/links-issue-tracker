@@ -45,11 +45,16 @@ General contract: every method is a pure read from the caller's view; two identi
 - Returns what `GetIssueDetail` holds that the issue's own row and edges name, at the cost of that neighbourhood and not the store's size (`internal/storage/contract.go`).
 - A missing id returns `NotFoundError` (`internal/storage/contract.go`).
 
-**`ListIssues(ctx, filter ListIssuesFilter) ([]model.Issue, error)`** — `internal/storage/contract.go`
-- Ordered by `SortBy`, then — always, as the final key — by id ascending (`internal/storage/contract.go`).
-- With no `SortBy`: rank ascending, ties broken by id (`internal/storage/contract.go`).
+**`ListIssues(ctx, listing Listing) ([]model.Issue, error)`** — `internal/storage/contract.go`
+- Returns the issues the listing selects, ordered by `Sort`, then — always, as the final key — by id ascending (`internal/storage/contract.go`).
+- With no `Sort`: rank ascending (tree order), ties broken by id (`internal/storage/contract.go`).
 - The trailing id key is contract, not engine convenience: without it, a sort on any duplicated field value leaves tied rows in engine-incidental order and two engines diverge (`internal/storage/contract.go`).
-- `SortBy` may name only a key `sortKeys` holds (`internal/storage/contract.go`).
+- `Sort` may name only a key `sortKeys` holds (`internal/storage/contract.go`).
+- A store whose parent links loop has no state for an epic on or above the loop, so a listing that holds one, or whose selector reads the status of one, refuses with `ParentCycleError` naming the loop (`internal/storage/contract.go`).
+
+**`SelectIssueIDs(ctx, selection Selection) ([]model.ID, error)`** — `internal/storage/contract.go`
+- The ids of the issues the selection selects, id ascending, hydrating nothing: the selection alone, for a caller narrowing rows it already holds (`internal/storage/contract.go`).
+- Refuses a parent loop where `ListIssues` would for the same selector (`internal/storage/contract.go`).
 
 **`ListTopics(ctx) ([]string, error)`** — `internal/storage/contract.go`
 - Distinct non-empty topics that *live* issues carry, ascending. Derived vocabulary, never stored (`internal/storage/contract.go`).
@@ -350,7 +355,7 @@ Exactly ten keys, each with its comparison. One table in the contract package; b
 |---|---|
 | `id` | `strings.Compare(a.ID, b.ID)` |
 | `title` | `strings.Compare(a.Title, b.Title)` |
-| `status` | `strings.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as the `Statuses` filter compares |
+| `status` | `cmp.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as a selector's `status` field reads it |
 | `priority` | `cmp.Compare(a.Priority, b.Priority)` |
 | `rank` | `ancestry.Compare` — tree order (`storage.RankAncestry.Compare`, `internal/storage/rank.go`) |
 | `type` | `strings.Compare(string(a.IssueType), string(b.IssueType))` |
@@ -358,29 +363,54 @@ Exactly ten keys, each with its comparison. One table in the contract package; b
 | `assignee` | `strings.Compare(a.Assignee, b.Assignee)` |
 | `created_at` | `a.CreatedAt.Compare(b.CreatedAt)` |
 | `updated_at` | `a.UpdatedAt.Compare(b.UpdatedAt)` |
-- `"status"` orders the DERIVED lifecycle state — the reading the status FILTER takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it. There is no stored-status comparator (`internal/storage/ordering.go`).
+- `"status"` orders the DERIVED lifecycle state — the reading a selector's `status` atom takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it. There is no stored-status comparator (`internal/storage/ordering.go`).
 
-#### `ListIssuesFilter` (`internal/storage/issues.go`)
-Rule for the whole struct: **every slice is an OR within itself and an AND against the other criteria**; every zero value means "do not constrain on this axis" (`internal/storage/issues.go`).
+#### Selections (`internal/storage/issue_fields.go`)
+A read names its issues with a selector, in the grammar of `internal/selector` (`selector.go`, `parse.go`), over the fields this file declares.
 
-| Field | Type | Effect |
+- `IssueTable` — every field a selection can read of an issue, and the one statement of which fields exist: the parser refuses a name it lacks, the help text lists it, and the conformance suite asks both engines to answer every field in it. `WorkspaceTable` is what a path starting with `/` reads; `IssueSchema` is `selector.Schema{Root: IssueTable, Anchor: WorkspaceTable}`. `init` defines both tables, `IssueID` the issue table's key and the workspace table keyless (`internal/storage/issue_fields.go`).
+- Each `=`/`!=` value is canonicalized by its field's own domain parser, so a value is compared in the store's spelling whichever surface typed it (`internal/storage/issue_fields.go`; `internal/selector/selector.go`).
+
+| Field | Kind | Reads / canonical form |
 |---|---|---|
-| `Statuses` | `[]model.State` | `internal/storage/issues.go` |
-| `Resolutions` | `[]model.Resolution` | `internal/storage/issues.go` |
-| `IssueTypes` | `[]model.IssueType` | include-list (`internal/storage/issues.go`) |
-| `ExcludeIssueTypes` | `[]model.IssueType` | exclude-list (`internal/storage/issues.go`) |
-| `Assignees` | `[]string` | `internal/storage/issues.go` |
-| `SearchTerms` | `[]string` | `internal/storage/issues.go` |
-| `IDs` | `[]string` | `internal/storage/issues.go` |
-| `ParentIDs` | `[]string` | direct children of the named issues, read off the parent-child edge, never the id prefix; the one axis whose criteria must exist: an id naming no issue makes `ListIssues` return `NotFoundError` (`internal/storage/issues.go`) |
-| `HasComments` | `*bool` | nil = unconstrained (`internal/storage/issues.go`) |
-| `LabelsAll` | `[]string` | `internal/storage/issues.go` |
-| `UpdatedAfter` | `*time.Time` | `internal/storage/issues.go` |
-| `UpdatedBefore` | `*time.Time` | `internal/storage/issues.go` |
-| `IncludeArchived` | `bool` | one of the two axes whose default is a filter rather than an absence (`internal/storage/issues.go`) |
-| `IncludeDeleted` | `bool` | ditto (`internal/storage/issues.go`) |
-| `SortBy` | `[]SortSpec` | `internal/storage/issues.go` |
-| `Limit` | `int` | `internal/storage/issues.go` |
+| `id` | text | the id, as typed |
+| `title` | text | as typed |
+| `topic` | text | `issueid.NormalizeTopicForCreate` |
+| `type` | enum | `model.ParseIssueType`, members `model.IssueTypes()` |
+| `priority` | enum | `model.ParsePriorityName`, compared by its name |
+| `assignee` | text | `model.NormalizeAssignee`; absent when nobody holds the issue |
+| `lane` | text | `ParseLane` then `Text()`; absent in the shared lane |
+| `labels` | texts | `model.NormalizeLabel` |
+| `status` | enum | `model.ParseState`, members `model.States()`; an epic's is its leaves': closed once every one is, in_progress once any has started or closed, else open, a live epic counting only live leaves |
+| `resolution` | enum | `model.ParseResolution`, members `model.Resolutions()`; absent for an open issue and for one closed by done |
+| `created_at`, `updated_at` | stamp | the instant |
+| `closed_at` | stamp | when a closed leaf closed; absent otherwise |
+| `description`, `prompt`, `plan` | text | as typed |
+| `text` | search | title, description, prompt, plan and topic, `~` only |
+| `parent` | ref | the epic the issue sits in |
+| `children`, `siblings` | refs | the issues in this one; the other issues in the same epic |
+| `blocked_by`, `blocks` | refs | the issues this one waits on; those waiting on it |
+| `related` | refs | related either way round |
+| `follows_up` / `follow_ups` | ref / refs | the issue this one follows up; those following it up |
+| `redirect_target` | ref | where a duplicate or superseded issue points |
+| `comments`, `plan_reviews` | records | present, absent or counted |
+| `phase` | enum | `model.ParsePhase`, members `model.Phases()`; an in-progress leaf's newest phase move, or plan since it started; absent for every other issue |
+
+`WorkspaceTable`'s one field is `issues` (refs): every issue (`internal/storage/issue_fields.go`).
+
+- `FieldOf[T ~string]{*selector.Field}` — a field whose values are `T` (`IssueID`, `IssueType`, `IssueStatus`, `IssueParent`), so a program builds atoms from values the compiler checks; `Is(values ...T) Selector` is the atom holding where the field is one of them (`internal/storage/issue_fields.go`).
+- `LabelsOf.Has(label)` — the atom holding where the issue carries `label`, canonicalized by `model.NormalizeLabel`; a label the rule refuses is the program's mistake and **panics** (`internal/storage/issue_fields.go`).
+- `SelectorExamples` — the ten selectors the reference shows, each with what it selects; `TestEverySelectorExampleParses` parses every one against the table (`internal/storage/issue_fields.go`; `internal/storage/selector_examples_test.go`). `SelectorReference()` is `selector.Describe(IssueSchema, SelectorExamples)` — grammar, kinds, both tables' fields and the examples, generated (`internal/storage/issue_fields.go`; `internal/selector/describe.go`).
+- `Selector{sel selector.Selector}` — a selection over `IssueTable`, minted only by parsing against `IssueSchema` or from the typed fields, so the port is never handed atoms over a table it does not hold. The zero `Selector` selects every issue (`internal/storage/issue_fields.go`).
+  - `ParseSelector(text, now)` — `selector.Parse` against `IssueSchema`; `now` is the instant a stamp written from now is read against. `ParseAtom(now, path, op, values...)` — one atom given as its parts, read as the same atom in a selector's text would be. Both refuse with `model.ValidationError` (`internal/storage/issue_fields.go`; `internal/selector/parse.go`).
+  - `And(parts...)` — the conjunction of every part's atoms, so adding a part only narrows (`internal/storage/issue_fields.go`; `internal/selector/selector.go`).
+  - `Atoms()`; `Starts(f)` — an atom reads `f` from the issue itself (unanchored, first step); `Reads(f)` — any step of any atom's path, or any filter on one, reads `f` (`internal/storage/issue_fields.go`; `internal/selector/selector.go`).
+- `Selection{Selector Selector; IncludeArchived, IncludeDeleted bool}` — the issues `Selector` selects among those that exist for the read. Archived and deleted issues exist only when included, **at every step of every path**: a deleted child is no child, a deleted parent no parent (`internal/storage/issue_fields.go`). `Admits(r model.Retention)` — `model.Archived` → `IncludeArchived`, `model.Deleted` → `IncludeDeleted`, otherwise true (`internal/storage/issue_fields.go`).
+- `Listing{Selection; Sort []SortSpec; Limit int}` — a selection read as issues, in `Sort`'s order, then cut to the first `Limit`; `Limit` 0 is no limit (`internal/storage/issue_fields.go`).
+
+#### `ParseNames(refusal string, inputs ...string) ([]string, error)` (`internal/storage/names.go`)
+- Each input is a comma list and the inputs union, so a repeated flag widens one set; every fragment is trimmed (`internal/storage/names.go`).
+- A blank fragment (`--ids ""`, `--ids a,`) returns `model.ValidationError{Message: refusal}` rather than being dropped, since a dropped name narrows or unfilters the listing while keeping the shape of a real answer (`internal/storage/names.go`).
 
 #### Edge inputs (`internal/storage/edges.go`)
 - `AddCommentInput{IssueID, Body, CreatedBy string}` — `internal/storage/edges.go`
@@ -463,7 +493,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - With a `:`, the value is split into at most 2 chunks; field is trimmed; direction is lowercased and trimmed (`internal/storage/sort.go`).
 - `"asc"` → `Desc=false`; `"desc"` → `Desc=true`; anything else → `ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}` (`internal/storage/sort.go`).
 - Empty and whitespace-only expressions yield `nil, nil` (`internal/storage/sort.go`).
-- It is THE parser from sort expression to `[]SortSpec`; both the `--sort` flag and the `--query sort:` token route through it (`internal/storage/sort.go`).
+- It is THE parser from sort expression to `[]SortSpec`, beside the type it builds; its one caller is `lit ls --sort` (`internal/storage/sort.go`; `internal/cli/cli.go`).
 - Note: the field name is **not** validated against the sort keys here — that rejection happens in `IssueOrdering`, which each engine calls (`internal/storage/sort.go`; cf. `internal/storage/ordering.go`).
 
 ---
@@ -570,7 +600,7 @@ They live beside the specs rather than in an engine because the schema is the co
 
 - `ParentCycle(parentOf map[string][]string) []string` — `parentOf` maps each child to every parent edge it holds. Returns the members of one loop in walk order, each the child of the next and the last the child of the first, or nil for a forest. A depth-first search: start nodes are the map's keys sorted ascending; a parent still on the current path closes the loop, which is returned as the path from that parent to the end; a node whose parents are all followed is settled and never walked again. Callers: `Store.Doctor`, `rejectParentCycle` (`internal/store`), `BreakParentCycles`.
 - `ParentCycleRepair` (const) — `"break it with 'lit parent set --child <one member> --parent <an epic outside the loop>', which replaces every parent that member holds, or with 'lit parent clear <member>' for a member that is an epic belonging at the top level"`. Named by the doctor finding, the write boundary's refusal of an edge onto a hierarchy already holding a loop, and the read refusal.
-- `ParentCycleError{Cycle []string}` — a read's refusal of a hierarchy that loops; `Cycle` in walk order. `Error()` is `fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s)", strings.Join(e.Cycle, " -> "), ParentCycleRepair)`. Returned by the store's hydration when a child is already on its epic's descent chain (`lifecycleChildrenByEpicIDs`), and wrapped by both engines' `ancestorChain` when the walk up revisits a member; `Store.Doctor` appends the same text as its error line. The CLI maps it to exit 7 and reason `parent_cycle`.
+- `ParentCycleError{Cycle []string}` — a read's refusal of a hierarchy that loops; `Cycle` in walk order. `Error()` is `fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s)", strings.Join(e.Cycle, " -> "), ParentCycleRepair)`. Returned by the store's epic walk when an epic's descent reaches an issue already on its path (`loopFrom`, `internal/store/walk.go`) — on hydrating such an epic, and on a selection reading the status of one it admits — and wrapped by both engines' `ancestorChain` when the walk up revisits a member; `Store.Doctor` appends the same text as its error line. The CLI maps it to exit 7 and reason `parent_cycle`.
 - `Unlooped{IssueID string; Parent string; Cycle []string}` (json `issue_id`, `parent`, `cycle`) — one parent edge a landing cut: the child that held it, the parent it named, and the loop it closed, in walk order.
 - `Unloop(parentOf map[string][]string) []Unlooped` — pure; works on a copy, leaving `parentOf` as given. Repeats `ParentCycle` until it returns nil; for each loop the cut edge is the one held by the member with the greatest id (`slices.Max`), onto the next member of the loop (wrapping to the first), and the cuts are returned in the order made. Nil for a forest. Called by `BreakParentCycles` and by the store's `cutParentLoops` (`inventory-store-sync.md`).
 - `BreakParentCycles(export model.Export) (model.Export, []Unlooped)` — pure. Builds the child → parents map from the export's `parent-child` relations and cuts by `Unloop`. Each matching `parent-child` relation is removed from a clone of `Relations`; every other relation, a `blocked-by` edge between the same pair included, stays. An export with no loop is returned as given with nil. Called first by `landExport` (`internal/store`). Tests: `TestBreakParentCyclesCutsTheGreatestMembersEdgeInEachLoop` (two-member, three-member, tail-entered, self-parent, two-parent child, two separate loops), `TestBreakParentCyclesLeavesAForestAlone`, `TestALoopTwoClonesMergeIntoIsCutOnLanding` (`internal/storage/parent_cycle_test.go`).
@@ -713,7 +743,7 @@ These types live in the contract, not in an engine, because a capability interfa
 - **`mustRecord(id)`** — the one place "you named an issue that isn't here" is decided; returns `storage.NotFoundError{Entity: "issue", ID: id}` (`internal/storage/memory/engine.go`).
 - **`positions()`** — derives an id→index map from `order` on every read rather than maintaining a cached index (`internal/storage/memory/engine.go`).
 - **`rankAt(index int) string`** — renders a position as `fmt.Sprintf("%09d", index)`. Any encoding whose ascending string order matches the engine's order satisfies the contract; the width is fixed so the comparison stays lexicographic (`internal/storage/memory/engine.go`).
-- **`hydrate(rec, pos)`** (`internal/storage/memory/engine.go`) — composes `model.Issue` from the record: `ID`, `Title`, `Description`, `Prompt`, `Priority`, `IssueType`, `Topic`, `Assignee`, `Rank: rankAt(pos[rec.id])`, `Lane`, `Labels: e.labelNames(rec.id)`, `CreatedAt`, `UpdatedAt`; then `SetRetention(rec.retention)`; then `model.HydrateRow(issue, rec.status, children)` with `children` = lifecycle children.
+- **`hydrate(rec, pos)`** (`internal/storage/memory/engine.go`) — composes `model.Issue` from the record: `ID`, `Title`, `Description`, `Prompt`, `Priority`, `IssueType`, `Topic`, `Assignee`, `Rank: rankAt(pos[rec.id])`, `Lane`, `Labels: e.labelNames(rec.id)`, `CreatedAt`, `UpdatedAt`; then `SetRetention(rec.retention)`; then `model.ProgressOf(children)` over the lifecycle children, and `model.HydrateRow(issue, rec.status, leaves)` with the summed leaf progress — a container takes the progress, a leaf its status view (`internal/model/model.go`).
 - **`lifecycleChildren`** (`internal/storage/memory/engine.go`) — a non-container returns nil; a container returns its rank-ordered children filtered by `visibleUnder`.
 - **`visibleUnder(parent, child model.Retention) bool`** (`internal/storage/memory/engine.go`) — `model.Frozen(parent) || !model.Frozen(child)`. A live container shows only live children, so archiving a child removes it from the epic's progress; a container itself out of the flow keeps its whole child set (`internal/storage/memory/engine.go`).
 - **`childRecords(parentID, pos)`** (`internal/storage/memory/engine.go`) — scans `relations` for `RelParentChild` edges with `DstID == parentID`, collects existing `SrcID` records, then `slices.SortStableFunc` by `pos[a.id] - pos[b.id]` (rank order).
@@ -780,48 +810,54 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 **`eventsFor(issueID)`** (`internal/storage/memory/issues.go`) — `sortEvents(cloneEvents(e.events[issueID]))`.
 
-### 2.7 `ListIssues` (`internal/storage/memory/list.go`)
+### 2.7 `ListIssues` and `SelectIssueIDs` (`internal/storage/memory/list.go`)
 
-Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
+Both lock the engine and read one `storage.Selection`; the listing's pipeline is fixed and every stage always runs — an empty selector selects everything, and no limit is a cap of everything (`internal/storage/memory/list.go`).
 
-1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`).
-2. `storage.IssueOrdering(filter.SortBy, ancestry)` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
-3. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
-4. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
-5. Hydrates **all** issues in `e.order` sequence.
-6. `e.selects(issue, filter, criteria)` per issue.
-7. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order.
-8. `capLimit(selected, filter.Limit)`.
+**`listIssues(listing)`**:
+1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`; `internal/storage/memory/rank.go`).
+2. `storage.IssueOrdering(listing.Sort, ancestry)` — built before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
+3. `e.selected(listing.Selection)`.
+4. `slices.SortStableFunc(selected, order)` — the ordering is total (every comparison ends in a distinct id), so the result does not depend on arrival order.
+5. `capLimit(selected, listing.Limit)`.
 
-**`selects`** — the composition, and only the half no issue can answer alone (`internal/storage/memory/list.go`): `criteria.Selects(issue)` first, then `ParentIDs` and `HasComments`, which are readings of the engine's own edge and comment tables.
+**`SelectIssueIDs`** — `e.selected(selection)`, the ids alone, `slices.Sort`ed: id ascending (`internal/storage/memory/list.go`).
 
-| Criterion | Semantics | Cite |
-|---|---|---|
-| `ParentIDs` | `matchesParents(issue.ID, ParentIDs)`: empty = pass; else some `RelParentChild` relation has `SrcID == issue.ID` and `DstID` in the list; the parent's retention is not consulted | |
-| `HasComments` | reject if `*HasComments != (len(commentsFor(issue.ID)) > 0)` | |
+**`selected(selection)`** — every issue of the reading's universe for which `holds(selection.Selector.Atoms(), issue)`, hydrated (`internal/storage/memory/list.go`).
 
-**`storage.IssueCriteria`** (`internal/storage/selects.go`) — a `ListIssuesFilter` reduced to the criteria readable from an issue alone, with the label canonicalization already taken, so `Selects` is total. It is exported because a caller narrowing rows it already holds applies the **same** rule storage defines rather than a second one of its own (the memory engine narrows with it directly; the SQL store expresses the same selection in its own query) — the workable pipeline reads the whole queue and `keepRows` narrows it at the point of use (`internal/cli/queue_facts.go`).
+**`reading`** — the engine as one selection reads it, and the plain reading of a selector the conformance suite holds the SQL compiler to, written to be obviously right rather than fast: each path is the set of values it reads, computed whole, and each atom a test of that set (`internal/storage/memory/list.go`). `e.reading(selection)` hydrates **every** record in `e.order` sequence through `hydrateAll`, so an atom reads the same derived facts — an epic's state, a closed issue's resolution — the listing hands back; the universe is the hydrated issues `selection.Admits(issue.Retention())`, indexed by id in `byID`. A hydration error returns before any atom is read.
 
-**`Selects`** — every criterion ANDs; every slice ORs within itself; the zero value selects everything **live**, archived and deleted issues being excluded unless the filter asks for them (`internal/storage/selects.go`):
-| Criterion | Semantics | Cite |
-|---|---|---|
-| Retention | `model.Archived` excluded unless `IncludeArchived`; `model.Deleted` excluded unless `IncludeDeleted`; anything else (Live) always passes | |
-| `Statuses` | `matchesStates`: empty = pass; otherwise matches if any `model.DefaultOpen(string(state)) == issue.State()` — compares the **DERIVED** state | |
-| `Resolutions` | `matchesResolutions`: empty = pass; a nil `ResolutionValue()` matches **no** non-empty criteria set; otherwise `slices.Contains(wanted, *resolution)` | |
-| `IssueTypes` | `matchesAny(string(issue.IssueType)...)`: empty = pass; else exact string membership | |
-| `ExcludeIssueTypes` | if non-empty AND the type is in the list → reject | |
-| `Assignees` | `matchesAny(issue.Assignee...)`: exact match after the criteria are trimmed | |
-| `IDs` | `matchesAny(issue.ID...)`: exact match | |
-| `UpdatedAfter` | reject if `issue.UpdatedAt.Before(*UpdatedAfter)` (i.e. inclusive of equality) | |
-| `UpdatedBefore` | reject if `issue.UpdatedAt.After(*UpdatedBefore)` (inclusive of equality) | |
-| `LabelsAll` | **conjunctive**: every canonical label criterion must be in `issue.Labels` | |
-| `SearchTerms` | **conjunctive across terms**: every term must match | |
+**`holds(atoms, issue)`** — every atom holds; the empty conjunction holds (`internal/storage/memory/list.go`).
 
-**`TrimmedNonEmpty`** (`internal/storage/selects.go`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
+**`atom`** — reads `values(atom.Path(), issue)`, then by test (`internal/storage/memory/list.go`):
+| Test | Holds when |
+|---|---|
+| `Count` `=` / `!=` | the number of values is / is not in the listed counts |
+| `Count` `<` `<=` `>` `>=` | `ordered(op, n, bound)` |
+| `Presence` | the path read at least one value (`Present`), or none (`Absent`) |
+| `Match` | some value `matches` the test, negated for `!=` — so `!=` holds for a path that reads nothing |
 
-**`matchesSearch`** (`internal/storage/selects.go`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly five fields: `Title`, `Description`, `Prompt`, `Plan`, `Topic`.
+**`matches(v, test)`** — `=` and `!=` are membership in the canonical values; `~` holds when `strings.ToLower(v)` contains some fragment (the parser lowercased each), `%` and `_` meaning themselves; an ordering compares `v` with the one value by `ordered` — a stamp compares as its stamp text, which orders as its instant does (`internal/storage/memory/list.go`; `internal/selector/selector.go`).
 
-**`capLimit`** (`internal/storage/memory/list.go`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling.
+**`values(path, issue)`** — starts from the issue, or from nothing when the path is anchored; a step whose field has no table reads `fieldValues` of every row reached; a step into rows keeps each row `rowsFrom` reaches once, and only where `holds(step.Where().Atoms(), row)`, its values being the kept rows' ids. The result drops empty texts, sorts and compacts, so a count counts **distinct** values (`internal/storage/memory/list.go`).
+
+**`rowsFrom(f, from)`** — `WorkspaceIssues` is the universe itself; any other field is `related(f, issue)` for each issue of `from`, kept only where the id is in `byID` — so a path never reaches an issue the selection does not admit (`internal/storage/memory/list.go`).
+
+**`related(f, issue)`** — the ids a field names, whether or not they exist for the read (`internal/storage/memory/list.go`):
+| Field | Ids |
+|---|---|
+| `parent` | `RelParentChild` edges out (`SrcID == issue`), their `DstID` |
+| `children` | `RelParentChild` edges in, their `SrcID` |
+| `siblings` | for each admitted parent, its children other than the issue |
+| `blocked_by` / `blocks` | `RelBlockedBy` edges out / in |
+| `related` | `RelRelatedTo` edges either way round |
+| `follows_up` | `issue.FollowsUp` |
+| `follow_ups` | every universe issue whose `FollowsUp` is the issue |
+| `redirect_target` | `issue.RedirectTargetValue()`, none when nil |
+
+**`fieldValues(f, issue)`** — one value per scalar field off the hydrated issue (`Title.Raw()`, `Topic.Raw()`, `string(IssueType)`, `Priority.String()`, `Assignee.Raw()`, `Lane.Raw()`, `Description`, `Prompt`, `Plan`); `labels` is `model.RawTexts(issue.Labels)`; `status` is `issue.State()`, the **derived** state; `resolution` is `ResolutionValue()`, none when nil; `created_at`, `updated_at` and `closed_at` are `model.StampText` of the instant, `closed_at` none when `ClosedAtValue()` is nil; `text` is the five texts title, description, prompt, plan, topic; `phase` is `model.PhaseOf(issue, e.eventsFor(issue.ID))`, none when it reports no phase; `comments` and `plan_reviews` are the ids of the issue's comments and reviews. A field with no reading **panics** (`internal/storage/memory/list.go`).
+
+**`capLimit`** (`internal/storage/memory/list.go`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling, so a limited listing is always the head of the unlimited one.
 
 **`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's rank ancestry (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
@@ -950,7 +986,7 @@ The engine has no label method; the label verbs are `Apply` plans (§1.6), and `
 - `nil` input yields an empty (non-nil) map.
 
 **`DependencyOrder`**
-- Under the engine lock: `listIssues` with `Statuses: [open, in_progress]` is the live set; every `RelBlockedBy` relation with both ends live becomes a `storage.DependencyEdge`; returns `storage.NewDependencyOrder(e.rankAncestry(e.positions()), edges)` (`internal/storage/memory/edges.go`).
+- Under the engine lock: `listIssues` selecting `storage.IssueStatus.Is(open, in_progress)` is the live set — the derived state, the population the SQL engine reads; every `RelBlockedBy` relation with both ends live becomes a `storage.DependencyEdge`; returns `storage.NewDependencyOrder(e.rankAncestry(e.positions()), edges)` (`internal/storage/memory/edges.go`).
 
 **`SetParent`**
 - Blank child or parent (after trim) → `model.ValidationError{Message: "child and parent ids are required"}`.
@@ -1084,7 +1120,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 ### 2.14 `Export` (`internal/storage/memory/export.go`)
 
-- Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
+- Locks, then builds issues via `listIssues(storage.Listing{Selection: storage.Selection{IncludeArchived: true, IncludeDeleted: true}})` — the empty selector over **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
 - Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.clock.Now(), Issues, Relations: e.relationsWhere(all), Comments: e.commentsWhere(all), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
 - `Relations` and `Comments` come back sorted by `storage.RelationOrdering` / `storage.CommentOrdering` (`relationsWhere` / `commentsWhere` keeping every row); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
@@ -1126,7 +1162,7 @@ Stated in `internal/storage/memory/doc.go`:
 
 ### 3.2 The 72 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `a_reported_handover_is_the_one_recorded`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `a_plan_review_judges_one_version`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `rank_inversions_read_tree_order`, `interleaved_epics_hold_no_rank_inversion`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `an_import_file_refused_at_a_write_writes_nothing`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_file_orders_its_rank_top_documents`, `bulk_file_ranks_a_create_at_the_top_of_its_epic`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `a_reported_handover_is_the_one_recorded`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `list_updated_range_compares_instants`, `a_selector_reads_every_kind_alike`, `a_selector_reads_across_edges`, `a_selector_reads_an_epics_derived_state`, `a_selections_universe_holds_at_every_step`, `every_field_answers`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `a_plan_review_judges_one_version`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `rank_inversions_read_tree_order`, `interleaved_epics_hold_no_rank_inversion`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `an_import_file_refused_at_a_write_writes_nothing`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_file_orders_its_rank_top_documents`, `bulk_file_ranks_a_create_at_the_top_of_its_epic`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1223,62 +1259,61 @@ Stated in `internal/storage/memory/doc.go`:
 **`list_defaults_to_rank_order`**
 - Three creates come back in creation order — an unsorted listing is rank ascending with ties broken by id, and `lit backlog` is this order.
 
-**`list_filters_select`** — each filter is asserted to select exactly the listed ids:
-| Filter | Expected |
+**`list_filters_select`** — fixture: an epic (`"gamma home"`) homing a bug (`"alpha widget"`, topic `renderer`, assignee `ada`, labels `perf`, `ui`, one comment) and a task (`"beta gadget"`, topic `parser`, assignee `grace`, started). The epic is a row like any other: it lists wherever its own type, its derived state (`in_progress` once the task starts) and its stamps match. Each selector, parsed by `mustSelect` against the case's clock, is asserted to list exactly:
+| Selector | Expected |
 |---|---|
-| `Statuses: [in_progress]` | the started task |
-| `IssueTypes: [bug]` | the bug |
-| `ExcludeIssueTypes: [bug]` | the task |
-| `Assignees: ["grace"]` | the task |
-| `IDs: [bug.ID]` | the bug |
-| `SearchTerms: ["widget"]` | the bug — matches title |
-| `SearchTerms: ["parser"]` | the task — **search matches topic too** |
-| `LabelsAll: ["perf","ui"]` | the bug — conjunctive |
-| `LabelsAll: ["perf","absent"]` | nothing — a label the issue lacks excludes it |
-| `HasComments: &true` | the commented bug |
-| `UpdatedBefore: now+1h` | both |
-| `UpdatedAfter: now+1h` | nothing |
-| `UpdatedAfter: now-1h` | both |
-| `IssueTypes:[bug] + Assignees:["grace"]` | nothing — **criteria AND across axes**, so no caller can widen a listing by adding a criterion |
-| `Assignees: ["ada","grace"]` | both — **a slice ORs within itself** |
+| `status=in_progress` | the epic and the started task |
+| `type=bug` | the bug |
+| `type!=bug` | the epic and the task |
+| `assignee=grace` | the task |
+| `id=<bug>` | the bug |
+| `text~widget` | the bug — matches title |
+| `text~parser` | the task — **search matches topic too** |
+| `labels=perf labels=ui` | the bug — one atom per label, all must hold |
+| `labels=perf labels=absent` | nothing — a label the issue lacks excludes it |
+| `comments` | the commented bug |
+| `updated_at<=now+1h` | all three |
+| `updated_at>=now+1h` | nothing |
+| `updated_at>=now-1h` | all three |
+| `type=bug assignee=grace` | nothing — **atoms AND**, so no caller can widen a listing by adding an atom |
+| `assignee=ada,grace` | the bug and the task — **a value list ORs within its atom** |
 
-**`list_by_parent`** — fixture: two epics, two children under the first, a grandchild under the second child, a cousin under the other epic, and one parentless issue; the first child is started:
-| Filter | Expected |
+**`list_by_parent`** — fixture: two epics, two children under the first (the second itself an epic), a grandchild under that second child, a cousin under the other epic, and one top-level epic nobody below names; the first child is started:
+| Selector | Expected |
 |---|---|
-| `ParentIDs: [epic]` | the two children, in rank order — not the grandchild |
-| `ParentIDs: [second]` | the grandchild |
-| `ParentIDs: [cousin]` | nothing |
-| `ParentIDs: [epic, other]` | both children and the cousin — **a slice ORs within itself** |
-| `ParentIDs: [epic]` + `Statuses: [in_progress]` | the started child — criteria AND across axes |
-
-`ParentIDs: [epic, "no-such-issue"]` → `NotFoundError{Entity: "issue"}`, not an empty listing.
+| `parent=<epic>` | the two children, in rank order — not the grandchild |
+| `parent=<second>` | the grandchild |
+| `parent=<cousin>` | nothing |
+| `parent=<epic>,<other>` | both children and the cousin — **a value list ORs within its atom** |
+| `parent=<epic> status=in_progress` | the started child — atoms AND |
+| `parent=<epic>,no-such-issue` | the two children — a parent no issue holds is a parent with no children, since a selector states what holds |
 
 **`list_hides_archived_and_deleted`**
-- Default listing shows only live issues.
-- `IncludeArchived: true` → live + archived.
+- The zero `Listing` shows only live issues.
+- `Selection{IncludeArchived: true}` → live + archived.
 - `IncludeDeleted: true` → live + deleted.
 - Both → all three.
 - Expected order in each case is creation order (live, archived, deleted), i.e. rank order is preserved across the retention filter.
 
 **`list_sorts_and_limits`**
-- `SortBy: [{title}]` ascending, `{title, Desc:true}` descending.
+- `Sort: [{title}]` ascending, `{title, Desc:true}` descending.
 - `Limit: 2` returns the **head** of the ordered result, not a sample.
-- `Limit: 0` is the absence of a limit, not a limit of zero.
+- The zero `Limit` is the absence of a limit, not a limit of zero.
 - Sorting by an unknown field (`"nonsense"`) is an error.
 
 **`list_breaks_sort_ties_by_id`**
 - Four issues sharing one title, the epic included: the result is ordered by id ascending.
 - Descending on the named key leaves the id tie-break **ascending**.
-- `SortBy: [{id, Desc: true}]` → the four ids in descending order.
+- `Sort: [{id, Desc: true}]` → the four ids in descending order.
 
 **`list_orders_by_each_value_key`**
-- One pair per key, under one epic. In each pair `second` is created with the clock pinned to `2026-01-01T00:00:00.12Z`, then `first` at `2026-01-01T00:00:00.123456789Z`; every other value a key reads is equal. Listings are narrowed to the pair and take `created_at` as their second key, in the first key's direction.
+- One pair per key, under one epic. In each pair `second` is created with the clock pinned to `2026-01-01T00:00:00.12Z`, then `first` at `2026-01-01T00:00:00.123456789Z`; every other value a key reads is equal. Listings are narrowed to the pair by `storage.IssueID.Is` and take `created_at` as their second key, in the first key's direction.
 - `title`: `"Zeta"` / `"alpha"`. `assignee`: `"Zed"` / `"ada"`. `topic`: `alpha` / `beta`. `type`: `bug` / `task`. `priority`: `normal` / `urgent` (first / second).
-- `SortBy: [{key}, {created_at}]` → first, second; `[{key, Desc: true}, {created_at, Desc: true}]` → second, first.
+- `Sort: [{key}, {created_at}]` → first, second; `[{key, Desc: true}, {created_at, Desc: true}]` → second, first.
 
 **`list_sorts_status_by_derived_state`**
 - Fixture: epic `home` with children `closedLeaf` (then `Done{}`) and `openLeaf`; a second epic with one child that is then `Start{Assignee: "ada"}`. The second epic's `State()` is `in_progress`.
-- `ListIssues{IDs: [closedLeaf, openLeaf, epic], SortBy: [{status}]}` → closedLeaf, epic, openLeaf.
+- A listing selecting `storage.IssueID.Is(closedLeaf, openLeaf, epic)` with `Sort: [{status}]` → closedLeaf, epic, openLeaf.
 - The same with `{status, Desc: true}` → openLeaf, epic, closedLeaf.
 
 **`stamps_come_from_the_clock_the_engine_was_given`**
@@ -1287,9 +1322,100 @@ Stated in `internal/storage/memory/doc.go`:
 - The `CreatedAt` read back through `GetIssue` equals the pinned instant.
 
 **`list_orders_timestamps_by_instant_not_spelling`**
-- Fixture: an epic on the unpinned clock; then, under it, `newer` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `older` created with the clock pinned to `2026-01-01T00:00:00.12Z`. A description patch then moves `newer`'s `UpdatedAt` to `2026-01-01T00:00:00.13Z` and `older`'s to `2026-01-01T00:00:00.1300001Z`. Listings are narrowed to `IDs: [older, newer]`.
-- `SortBy: [{created_at}, {updated_at}]` → older, newer; `[{created_at, Desc: true}, {updated_at, Desc: true}]` → newer, older.
-- `SortBy: [{updated_at}, {created_at}]` → newer, older; `[{updated_at, Desc: true}, {created_at, Desc: true}]` → older, newer.
+- Fixture: an epic on the unpinned clock; then, under it, `newer` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `older` created with the clock pinned to `2026-01-01T00:00:00.12Z`. A description patch then moves `newer`'s `UpdatedAt` to `2026-01-01T00:00:00.13Z` and `older`'s to `2026-01-01T00:00:00.1300001Z`. Listings are narrowed to `storage.IssueID.Is(older, newer)`.
+- `Sort: [{created_at}, {updated_at}]` → older, newer; `[{created_at, Desc: true}, {updated_at, Desc: true}]` → newer, older.
+- `Sort: [{updated_at}, {created_at}]` → newer, older; `[{updated_at, Desc: true}, {created_at, Desc: true}]` → older, newer.
+
+**`list_updated_range_compares_instants`**
+- Fixture: two epics; `later` created under one with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `earlier` under the other at `2026-01-01T00:00:00.12Z`. Each selector is prefixed with `id=<earlier>,<later>` and listed with `Sort: [{updated_at}]`; `between` is `model.StampText` of the earlier instant plus 1ms.
+- `updated_at>=between` → later; `updated_at<=between` → earlier.
+- `>=` the earlier instant and `<=` the later instant → both; `>=` the later instant → later; `<=` the earlier instant → earlier — both bounds inclusive of equality.
+- `>` the earlier instant → later; `<` the later instant → earlier.
+
+**The selector workspace** (`buildSelectorWorkspace`, `internal/storage/conformance/selector.go`) — one workspace every selector case reads, built so each kind, op and path has an issue that holds it and one that does not. Every write is stamped `2026-01-01T00:00:00.12Z` but the last, and every issue has topic `core` unless named:
+- Epics: `home`; `nested` under `home`; `away` (label `area`); `done`; `empty`; `shelved`.
+- Under `home`: `alpha` (`"Alpha widget"`, topic `renderer`, priority urgent, labels `perf`, `ui`, description `"Burns 100% of the cpu_time"`, prompt `"port it"`, plan `"first step"`), `gamma`, `xray`, `yankee`. Under `nested`: `delta`, `echo`. Under `away`: `beta` (a bug, `"Beta gadget"`, topic `parser`, assignee `grace`, lane `night`, description `"a cpuxtime spike in 2010"`), `follow` (follows up `alpha`), `dup`. Under `done`: `hotel`, `zulu`. Under `shelved`: `papa`, `romeo`.
+- `alpha` started by ada and moved to impl; `delta` and `echo` started by grace, `delta` moved to review and reclaimed by ada (no status move, so it keeps review); `echo` stays in plan. `gamma` closed wontfix; `dup` closed duplicate of `alpha`; `hotel` and `papa` done; `xray`, `zulu`, `romeo` archived; `yankee` deleted; then `shelved` archived, keeping the state it left with.
+- `beta` blocked-by `alpha`; `gamma` related-to `alpha`; two comments on `alpha`, one on `beta`; one plan review on `alpha`.
+- Last, with the clock pinned to `2026-01-01T00:00:00.123456789Z` — the `now` every selector is parsed against — `beta` is retitled `"Beta gadget v2"`.
+- The live issues are the five epics other than `shelved`, plus `alpha`, `beta`, `gamma`, `delta`, `echo`, `follow`, `dup`, `hotel`, `papa`.
+- `assertSelects` holds both reads to the wanted ids: `SelectIssueIDs` returns exactly them, and `ListIssues` over the same selection lists exactly them.
+
+**`a_selector_reads_every_kind_alike`** — over the live universe; "all but X" is every live issue but X:
+| Selector | Expected |
+|---|---|
+| `title="Alpha widget"`, `title~WIDGET` | alpha — `~` ignores case |
+| `description~"100%"`, `description~"0%"`, `description~cpu_time` | alpha — `%` and `_` mean themselves (beta's `cpuxtime` and `2010` do not match) |
+| `topic=parser` / `topic~rend` | beta / alpha |
+| `assignee=ada,grace`, `assignee` | alpha, beta, delta, echo |
+| `!assignee` | all but alpha, beta, delta, echo |
+| `assignee!=ada` | all but alpha and delta — `!=` holds of an issue with no value |
+| `lane=night` / `prompt~port` / `plan` | beta / alpha / alpha |
+| `type=bug` / `type=epic` / `type!=epic,task` | beta / the five live epics / beta |
+| `priority=urgent` / `priority!=urgent` | alpha / all but alpha |
+| `resolution=wontfix` / `resolution=duplicate` / `resolution` | gamma / dup / gamma, dup |
+| `!resolution status=closed` | done, hotel, papa |
+| `phase=impl` / `phase=review` / `phase=plan` / `phase=plan,impl` | alpha / delta / echo / alpha, echo |
+| `phase!=impl` / `!phase` | all but alpha / all but alpha, delta, echo |
+| `updated_at>=now` / `updated_at<now` | beta / all but beta |
+| `created_at<=now-1h` / `created_at>now-1d` | nothing / every live issue |
+| `closed_at`; `closed_at<` the later instant | gamma, dup, hotel, papa |
+| `text~gamma` / `text~renderer` / `text~"port it"` / `text~"first step"` | gamma / alpha — topic / alpha — prompt / alpha — plan |
+| `labels=perf labels=ui`, `labels~er`, `labels/count=2`, `labels/count>1` | alpha |
+| `!labels` | all but alpha and away |
+| `labels/count!=0` / `labels/count<=1` | alpha, away / all but alpha |
+
+**`a_selector_reads_across_edges`** — over the live universe; `long(...)` is the named ids among sixty ids no issue has, so a list longer than an engine may bind one value at a time still reads as the list:
+| Selector | Expected |
+|---|---|
+| `parent=<home>` | alpha, gamma, nested |
+| `id=long(alpha, beta)` / `id!=long(alpha)` | alpha, beta / all but alpha |
+| `parent=long(home, nested)` | alpha, gamma, nested, delta, echo |
+| `parent/type=epic` | every live issue with a live parent: alpha, beta, gamma, delta, echo, follow, dup, hotel, nested — papa's parent is archived |
+| `parent/labels=area` | beta, follow, dup |
+| `parent/parent=<home>` | delta, echo |
+| `parent=no-such-issue`, `follows_up=no-such-issue` | nothing |
+| `!blocked_by` | all but beta |
+| `parent(status=closed)` | hotel |
+| `children` | home, nested, away, done |
+| `children/count=3` / `children/count=0` | home, away / all but home, nested, away, done |
+| `children(status=closed)/count=1` | home, away, done |
+| `children(status=in_progress)` | home, nested |
+| `children(type=bug,task status=open)` | away |
+| `siblings=<gamma>` / `siblings/type=bug` | alpha, nested / follow, dup |
+| `siblings/count=2` | alpha, gamma, nested, beta, follow, dup |
+| `blocked_by=<alpha>` / `blocks=<beta>` | beta / alpha |
+| `related=<alpha>` / `related=<gamma>` | gamma / alpha — either way round |
+| `follows_up=<alpha>` / `follow_ups/count=1` | follow / alpha |
+| `redirect_target=<alpha>`, `redirect_target/status=in_progress` | dup |
+| `comments/count=2` / `comments` / `!comments` / `comments/count<2` | alpha / alpha, beta / all but alpha, beta / all but alpha |
+| `plan_reviews/count=1` | alpha |
+| `type=epic /issues(status=open)/count=3` | the five live epics — the workspace holds three open issues |
+| `/issues(type=bug)/count=2` | nothing |
+
+**`a_selector_reads_an_epics_derived_state`** — an epic's status is its leaves' at every depth, read the same way through a path as at the issue:
+| Selector | Expected |
+|---|---|
+| `status=in_progress` | home, nested, away, alpha, delta, echo |
+| `status=closed` | done, gamma, dup, hotel, papa — `done` counts no archived `zulu` |
+| `status=open` | empty, beta, follow |
+| `status!=open type=epic` | home, nested, away, done |
+| `parent/status=closed` | hotel |
+| `children/status=in_progress` | home, nested |
+
+**`a_selections_universe_holds_at_every_step`** — the issues a read admits are the issues every path reads; an epic's state is not the universe's (a live epic counts its live leaves whatever the read admits, an archived one every leaf):
+| Universe | Selector | Expected |
+|---|---|---|
+| live | `!parent` | home, away, done, empty, papa — papa's archived parent is no parent |
+| archived | `!parent` | home, away, done, empty, shelved |
+| live | `parent=<home>` | alpha, gamma, nested |
+| archived / deleted / both | `parent=<home>` | alpha, gamma, nested, plus xray / yankee / both |
+| archived | `type=epic children/count=2` | nested, done, shelved |
+| archived | `status=in_progress` | home, nested, away, alpha, delta, echo, shelved |
+| archived | `status=closed type=epic` | done |
+
+**`every_field_answers`**
+- Over the selector workspace, every field of `storage.IssueTable` is read in each form its kind admits — `!field`; `field~x` alone for a search field; plus `field/count>0` for a list; plus `field(id=x)` for a field whose values are rows — through `SelectIssueIDs` over both the live universe and the one admitting archived and deleted issues, and none errors. A field an engine has no reading for fails here.
 
 **`events_are_totally_ordered`**
 - After a create plus three title changes, `ListAllEvents` returns at least 4 events.
@@ -1368,8 +1494,8 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`a_container_lists_before_everything_inside_it`**
 - Fixture: epic `outer`, epic `epic`, `child` under `epic`, epic `nested` under `epic`, `grandchild` under `nested`, epic `last`. After `RankBelow(epic, last)`, no two issues in the default listing share a non-empty `Rank`, and the listing is exactly outer, last, epic, child, nested, grandchild.
-- `SortBy: [{rank, Desc: true}]` → exactly grandchild, nested, child, epic, last, outer.
-- `IDs: [outer, last, child, nested, grandchild]` (the epic left out) → exactly outer, last, child, nested, grandchild.
+- `Sort: [{rank, Desc: true}]` → exactly grandchild, nested, child, epic, last, outer.
+- `storage.IssueID.Is(outer, last, child, nested, grandchild)` (the epic left out) → exactly outer, last, child, nested, grandchild.
 - After `RankAbove(epic, outer)`, the default listing is exactly epic, child, nested, grandchild, outer, last.
 - After `RankSet([outer, last])`, no two listed issues share a non-empty `Rank`, and the default listing is exactly outer, last, epic, child, nested, grandchild.
 - After `AddRelation` of `outer` `RelBlockedBy` `grandchild`, `epic`, and `last` (in that order), `GetIssueDetail(outer).BlockedBy` is exactly last, epic, grandchild.
@@ -1469,7 +1595,7 @@ Stated in `internal/storage/memory/doc.go`:
 - After `base` is started and done, `Interleaved()` is empty and `later` blocked by `middle` is `Inverted` — only live work is ordered.
 
 **`parent_wiring`**
-- `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it.
+- `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` selecting `storage.IssueParent.Is(parent)`, `IncludeArchived` and `IncludeDeleted`) shows it.
 - **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child.
 - `ClearParent` detaches; the parent then has no children.
 - `ClearParent` on a parentless child → `storage.RelationAbsentError{SrcID: child, Type: RelParentChild}`.
@@ -1582,7 +1708,6 @@ Derived from what the suite never exercises (the `cases` table at is the complet
 - Concurrency/thread safety — the suite is sequential by construction, so the memory engine tests it separately (`internal/storage/memory/engine_test.go`).
 - The exact `Rank` string encoding.
 - The exact minted-id shape.
-- `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go`, implemented at `internal/storage/memory/list.go`, but no case in the table exercises it).
 - `Close()` behavior beyond the engine factory's own cleanup.
 - `AddRelation` cycle rejection for `blocked-by` (implemented at `internal/storage/memory/edges.go`, not exercised by any listed case).
 - `ParseSortSpecs`, `ParseBulkSpecs`, `ParseImportTreeSpecs` — tested in the contract package instead (`internal/storage/specs_test.go`).

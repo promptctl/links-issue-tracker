@@ -19,7 +19,7 @@ func TestListYAMLRoundTripsThroughImport(t *testing.T) {
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: epic\ntitle: epic\ntype: epic\ntopic: demo\n---\nlocal_id: full\ntitle: full\ntype: task\ntopic: demo\nparent: epic\ndescription: |-\n  first line\n\n  second paragraph\nassignee: ada\nlabels: [alpha, beta]\n---\nlocal_id: bare\ntitle: bare\ntype: task\ntopic: demo\nparent: epic\n"))
 	full := importedID(t, seeded, "full")
 
-	listed := runCLIInDir(t, dir, "ls", "--query", "sort:rank:asc", "--format", "yaml")
+	listed := runCLIInDir(t, dir, "ls", "--sort", "rank:asc", "--format", "yaml")
 	assertFacts(t, map[string]string{"ls.format": "yaml"})
 	docs := strings.Count(listed, "id: ")
 	if docs != 3 || strings.Count(listed, "\n---\n") != 2 || strings.Contains(listed, "topic:") {
@@ -73,7 +73,7 @@ func TestListYAMLOfNoIssuesPrintsNothing(t *testing.T) {
 	t.Parallel()
 	dir := newInitTestRepo(t)
 	newEpicInDir(t, dir, "epic")
-	if out := runCLIInDir(t, dir, "ls", "--query", "label:matches-nothing", "--format", "yaml"); out != "" {
+	if out := runCLIInDir(t, dir, "ls", "--query", "labels=matches-nothing", "--format", "yaml"); out != "" {
 		t.Errorf("ls --format yaml over no issues printed:\n%s", out)
 	}
 }

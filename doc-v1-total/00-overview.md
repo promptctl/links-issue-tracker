@@ -46,11 +46,11 @@ The store defends itself in layers: kernel file locks with no stale-lock heurist
 | Chapter | Contents |
 |---|---|
 | [01 — Data model](01-data-model.md) | Issues, epics, lifecycle, retention, resolutions, lanes, relations, events, attribution, IDs, ranks, the export format |
-| [02 — Storage contract](02-storage-contract.md) | The engine-agnostic store interface, filters and sorts, capabilities, the in-memory reference engine, what conformance guarantees |
+| [02 — Storage contract](02-storage-contract.md) | The engine-agnostic store interface, selections and sorts, capabilities, the in-memory reference engine, what conformance guarantees |
 | [03 — Dolt store: schema and records](03-store-schema.md) | The SQL schema, commit and locking semantics, create/read/update/event/label/relation/rank operations, the shapemap |
 | [04 — Dolt store: operations](04-store-operations.md) | Export/import, delta application, Doctor, disaster recovery (dump → rebuild → verify → promote), checkpoints, the lock inventory, the vendored driver |
 | [05 — Sync, merge, compaction, migrations](05-sync-merge-compaction.md) | The sync algorithm, field-level merge rules, prose conflicts, unrelated-history takes, Dolt GC, the migration runner, recovery snapshots |
-| [06 — CLI: issue commands](06-issue-commands.md) | Every issue-facing command, the query grammar, the workability predicate, exit codes, output shapes |
+| [06 — CLI: issue commands](06-issue-commands.md) | Every issue-facing command, the selector grammar, the workability predicate, exit codes, output shapes |
 | [07 — CLI: operations and the sync engine](07-ops-commands-and-sync-engine.md) | `init`, the `sync` family, the background mirror, doctor, backups, snapshots, lifeboat, quickstart, managed files |
 | [08 — Claims and identity](08-claims-and-identity.md) | Stream tokens, acting identity, attribution, the derivation predicate, takeover and routing gates |
 | [09 — Workflows and events](09-workflows.md) | The guidance-injection system: definition format, event catalog, matching, layering |

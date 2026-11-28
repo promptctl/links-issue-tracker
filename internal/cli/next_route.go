@@ -497,8 +497,8 @@ func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 // lanes of its own starts straight at the global pool — unfocus is the zero
 // state, not a hop through the earlier steps.
 //
-// rows is the whole workable queue and asked is the filter the run was given
-// (--type/--status/--labels/--assignee). The filter decides which rows may be
+// rows is the whole workable queue and asked is what the filter the run was
+// given (--type/--status/--labels/--assignee) selects. The filter decides which rows may be
 // SERVED and nothing else: every walk reads every row, so a dependency is found
 // through a ticket the filter leaves out, and "is the scope exhausted" — or
 // "is anything ready" — is asked of the queue rather than of the part of it the
@@ -526,7 +526,7 @@ func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 // epicsAbove climbs to tell which rows sit under an epic. evidence is the
 // reading standings were derived from; routing counts a stopped scope's
 // progress from it, since rows hold no closed ticket to count.
-func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, epics map[model.ID]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, epics map[model.ID]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked issueSet) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -536,7 +536,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 	reachFor := func(row annotation.AnnotatedIssue) reachKind {
 		return reachOf(row, standings.Of(laneOf(row)), self)
 	}
-	selected := func(row annotation.AnnotatedIssue) bool { return asked.Selects(row.Issue) }
+	selected := func(row annotation.AnnotatedIssue) bool { return asked.has(row.ID) }
 	anyRow := func(annotation.AnnotatedIssue) bool { return true }
 	// pickFrom keeps the first row, in rank order, that the run may serve, sits
 	// in an admitted lane and carries one of the accepted verdicts.

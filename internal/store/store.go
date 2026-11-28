@@ -831,7 +831,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			FollowsUp:   in.FollowsUp.Trim(),
 			CreatedAt:   at.Time(),
 		}.Stamped(at)
-		issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
+		issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, model.Progress{})
 		if err != nil {
 			return err
 		}
@@ -930,229 +930,6 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	return issue, nil
 }
 
-func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error) {
-	var where []string
-	var args []any
-	if !filter.IncludeArchived {
-		where = append(where, "i.archived_at IS NULL")
-	}
-	if !filter.IncludeDeleted {
-		where = append(where, "i.deleted_at IS NULL")
-	}
-	// [LAW:one-source-of-truth] Container DB status is dead data; the lifecycle
-	// derivation in hydrateIssues is the only truth source for epic state. The
-	// status filter therefore lives entirely past the hydration boundary; here we
-	// only validate the requested tokens so bad input fails before the query runs.
-	allowedStates, err := parseStatusFilter(filter.Statuses)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.requireIssues(ctx, filter.ParentIDs); err != nil {
-		return nil, err
-	}
-	// The two caller-supplied id sets collapse onto ONE axis before any row is
-	// read, and that is a decomposition choice rather than an optimisation.
-	// "Which issues are children of these parents" is a question about the
-	// relations table; answering it there instead of as an EXISTS subquery
-	// inside the issue scan leaves this query with a single open-ended id set
-	// to join against. [LAW:decomposition]
-	selected, restricted, err := s.selectedIssueIDs(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	// Parsed before the listing query rather than after it, so an unsupported
-	// sort field never pays for one; the comparator it yields reads hydrated
-	// values, so the ordering itself cannot run until the rows are back and
-	// built. No ORDER BY could stand in for it: a container's state is a
-	// reading of its children that no column holds — the status FILTER lives
-	// past hydration for the same reason (see filterByState) — and tree order
-	// reads the keys of containers the listing may have filtered out.
-	// [LAW:one-source-of-truth]
-	ordering, err := s.listingOrdering(ctx, filter.SortBy, selected, restricted)
-	if err != nil {
-		return nil, err
-	}
-	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary,
-	// so they need no defensive trim/skip.
-	//
-	// That parse is also what lets the next two clauses stay a single `IN` list
-	// where an id list may not: model.IssueType is a closed vocabulary, so the
-	// DISTINCT types a caller can name are at most len(model.IssueTypes()) —
-	// five — however long the slice it passed. distinctTypes is what makes that
-	// a property of this clause rather than of the callers: `--type` parses to
-	// one value and internal/query dedupes, but storage.Store is an
-	// engine-facing interface and a direct caller passing a repeated list would
-	// otherwise get exactly the unbounded shape idSet describes.
-	// [LAW:parse-dont-validate]
-	if types := distinctTypes(filter.IssueTypes); len(types) > 0 {
-		for _, t := range types {
-			args = append(args, t)
-		}
-		where = append(where, "i.issue_type IN ("+placeholders(len(types))+")")
-	}
-	// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
-	// filter above, bound included; keeping both at the store boundary means
-	// one definition of "which types qualify" regardless of caller.
-	if types := distinctTypes(filter.ExcludeIssueTypes); len(types) > 0 {
-		for _, t := range types {
-			args = append(args, t)
-		}
-		where = append(where, "i.issue_type NOT IN ("+placeholders(len(types))+")")
-	}
-	// Assignee is the one filter here whose values are neither a closed
-	// vocabulary nor ids — the list bounded by provenance that idSet's rule
-	// names — and it stays a single clause on that narrower bound: the list is
-	// assembled from `--assignee` and from `assignee:` query terms, both of
-	// which a person types, and nothing derives it from the backlog. A caller
-	// that did derive it from the backlog would be handing the planner the
-	// quadratic shape idSet describes, so that caller joins a set of its own
-	// here first, rather than being written.
-	if assignees := storage.TrimmedNonEmpty(filter.Assignees); len(assignees) > 0 {
-		for _, assignee := range assignees {
-			args = append(args, assignee)
-		}
-		where = append(where, "i.assignee IN ("+placeholders(len(assignees))+")")
-	}
-	if filter.UpdatedAfter != nil {
-		where = append(where, "i.updated_at >= ?")
-		args = append(args, model.StampText(*filter.UpdatedAfter))
-	}
-	if filter.UpdatedBefore != nil {
-		where = append(where, "i.updated_at <= ?")
-		args = append(args, model.StampText(*filter.UpdatedBefore))
-	}
-	if filter.HasComments != nil {
-		if *filter.HasComments {
-			where = append(where, "EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)")
-		} else {
-			where = append(where, "NOT EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)")
-		}
-	}
-	if len(filter.LabelsAll) > 0 {
-		labels, err := canonicalizeLabels(filter.LabelsAll)
-		if err != nil {
-			return nil, err
-		}
-		for _, label := range labels {
-			where = append(where, "EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)")
-			args = append(args, label)
-		}
-	}
-	for _, term := range storage.TrimmedNonEmpty(filter.SearchTerms) {
-		// Five disjuncts, fixed by the five columns a search term reads, and
-		// they stay five however many terms the caller supplies — an extra term
-		// is an extra AND'd clause, never a longer OR. The planner's quadratic
-		// range merge needs a disjunct set that GROWS with caller input, which
-		// is the property this shape lacks; see idSet.
-		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)")
-		like := "%" + strings.ToLower(term) + "%"
-		args = append(args, like, like, like, like, like)
-	}
-	// One query either way. An id restriction is a join against the selected
-	// set rather than a clause, so the restriction to no ids at all is a join
-	// against no rows, answered by the same query as any other.
-	// [LAW:dataflow-not-control-flow]
-	from, fromArgs := "issues i", []any{}
-	if restricted {
-		set, arg := newIDSet(selected).rows("sel")
-		from, fromArgs = set+" JOIN issues i ON i.id = sel.id", []any{arg}
-	}
-	query := `SELECT ` + issueColumnsQualified + ` FROM ` + from
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
-	}
-	rowsOut, err := s.scanListRows(ctx, query, append(fromArgs, args...))
-	if err != nil {
-		return nil, err
-	}
-	hydrated, err := s.hydrateIssues(ctx, rowsOut)
-	if err != nil {
-		return nil, err
-	}
-	// [LAW:dataflow-not-control-flow] Sort, filter and cap always run; the helpers
-	// absorb "no order", "no filter" and "no limit" as data so the body stays a
-	// straight pipe.
-	slices.SortStableFunc(hydrated, ordering)
-	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
-}
-
-// distinctTypes drops repeats from an issue-type filter, which is what bounds
-// the `IN` list it becomes by the size of the vocabulary rather than by the
-// length of what the caller passed.
-func distinctTypes(types []model.IssueType) []model.IssueType {
-	out := make([]model.IssueType, 0, len(types))
-	for _, t := range types {
-		if !slices.Contains(out, t) {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// scanListRows runs ListIssues' query and reads its rows.
-func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list issues: %w (query=%s)", err, query)
-	}
-	defer rows.Close()
-	out := []issueRow{}
-	for rows.Next() {
-		issue, err := scanIssue(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, issue)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// selectedIssueIDs folds ListIssues' two id-shaped filters into the single set
-// of ids the scan may return, and says whether they narrow anything at all.
-//
-// restricted is not len(ids) > 0: a caller that asked for children of a
-// childless parent, or for the intersection of two disjoint id sets, narrowed
-// the result to nothing, and an empty set must mean "no rows" rather than "no
-// filter". A filter holding only blank ids is the opposite case — it narrows
-// nothing, because every entry was dropped before the count was taken.
-// [LAW:parse-dont-validate]
-//
-// The ids are sorted so that the row order is a function of the id set
-// alone, not of the order a caller happened to type or the order the
-// relations table happened to store. ListIssues' comparator runs over the rows
-// afterwards and is stable, so this is what keeps the order of equal-sorting
-// rows the same from call to call.
-func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]model.ID, bool, error) {
-	selected := storage.TrimmedNonEmpty(filter.IDs)
-	restricted := len(selected) > 0
-	if len(filter.ParentIDs) > 0 {
-		children, err := s.childIDsOfParents(ctx, filter.ParentIDs)
-		if err != nil {
-			return nil, false, err
-		}
-		if restricted {
-			// Intersected through a set rather than slices.Contains, which
-			// would be O(len(children) x len(selected)) — the same quadratic
-			// over two caller-supplied id lists that idSet keeps out of the
-			// planner, in Go where no index hides it.
-			// The rule beside idSet governs an id set wherever it is tested,
-			// not only where it is rendered into SQL.
-			// [LAW:one-type-per-behavior]
-			keep := make(map[model.ID]bool, len(selected))
-			for _, id := range selected {
-				keep[id] = true
-			}
-			children = slices.DeleteFunc(children, func(id model.ID) bool { return !keep[id] })
-		}
-		selected, restricted = children, true
-	}
-	slices.Sort(selected)
-	return slices.Compact(selected), restricted, nil
-}
-
 // childIDsQuery reads the direct children of the named parents. The membership
 // test it carries is over dst_id, the leading column of idx_relations_dst_type,
 // and the hint keeps the join a run of point lookups there: unhinted it plans as
@@ -1164,7 +941,7 @@ func childIDsQuery(parentIDs []model.ID) (string, any) {
 }
 
 // childIDsOfParents returns the ids of the direct children of the named
-// parents. This is the parent filter's whole implementation.
+// parents.
 func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []model.ID) ([]model.ID, error) {
 	query, arg := childIDsQuery(parentIDs)
 	rows, err := s.db.QueryContext(ctx, query, arg, string(model.RelParentChild))
@@ -1188,98 +965,9 @@ func scanIDColumn(rows *sql.Rows) ([]model.ID, error) {
 	return out, rows.Err()
 }
 
-// requireIssues answers NotFoundError for the first id naming no issue row, in
-// the order given. It reads existence only — a soft-deleted issue still exists —
-// so it agrees with GetIssue about what an id names.
-func (s *Store) requireIssues(ctx context.Context, ids []model.ID) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	named, arg := newIDSet(ids).rows("named")
-	rows, err := s.db.QueryContext(ctx, `SELECT i.id FROM `+named+` JOIN issues i ON i.id = named.id`, arg)
-	if err != nil {
-		return fmt.Errorf("check issues exist: %w", err)
-	}
-	present, err := scanIDColumn(rows)
-	if err != nil {
-		return err
-	}
-	found := make(map[model.ID]bool, len(present))
-	for _, id := range present {
-		found[id] = true
-	}
-	// Reported in the caller's order, over the caller's list, so a repeated id
-	// is still named once.
-	for _, id := range ids {
-		if !found[id] {
-			return storage.NotFoundError{Entity: "issue", ID: id}
-		}
-	}
-	return nil
-}
-
-func parseStatusFilter(input []model.State) ([]model.State, error) {
-	out := make([]model.State, 0, len(input))
-	for _, raw := range input {
-		state := model.DefaultOpen(string(raw))
-		out = append(out, state)
-	}
-	return out, nil
-}
-
-// filterByState keeps only issues whose lifecycle State() is in allowed; an
-// empty allow-list passes everything through so callers can route every list
-// through one boundary that always reads State(), never the DB column.
-// [LAW:single-enforcer] Status filtering happens against derived lifecycle
-// state because container DB status is dead data; hydration is the truth source.
-func filterByState(issues []model.Issue, allowed []model.State) []model.Issue {
-	if len(allowed) == 0 {
-		return issues
-	}
-	allow := make(map[model.State]struct{}, len(allowed))
-	for _, state := range allowed {
-		allow[state] = struct{}{}
-	}
-	out := make([]model.Issue, 0, len(issues))
-	for _, issue := range issues {
-		if _, ok := allow[issue.State()]; ok {
-			out = append(out, issue)
-		}
-	}
-	return out
-}
-
-// filterByResolution keeps only issues whose recorded close resolution is in
-// allowed; an empty allow-list passes everything through. Resolution lives in
-// the lifecycle, so the filter reads the derived ResolutionValue() rather than
-// the DB column — the same post-hydration discipline as filterByState. An issue
-// with no resolution (open, in_progress, or a `done`/legacy close) matches no
-// non-empty allow-list. [LAW:single-enforcer]
-func filterByResolution(issues []model.Issue, allowed []model.Resolution) []model.Issue {
-	if len(allowed) == 0 {
-		return issues
-	}
-	allow := make(map[model.Resolution]struct{}, len(allowed))
-	for _, r := range allowed {
-		allow[r] = struct{}{}
-	}
-	out := make([]model.Issue, 0, len(issues))
-	for _, issue := range issues {
-		resolution := issue.ResolutionValue()
-		if resolution == nil {
-			continue
-		}
-		if _, ok := allow[*resolution]; ok {
-			out = append(out, issue)
-		}
-	}
-	return out
-}
-
 // capLimit truncates issues to the first n entries. limit <= 0 means uncapped,
-// matching the existing ListIssuesFilter.Limit convention; the helper exists so
-// the LIMIT semantic is one expression at the boundary rather than a branch in
-// the body.
+// as storage.Listing.Limit states; the helper exists so the LIMIT semantic is
+// one expression at the boundary rather than a branch in the body.
 func capLimit(issues []model.Issue, limit int) []model.Issue {
 	if limit <= 0 || len(issues) <= limit {
 		return issues
@@ -2696,11 +2384,11 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 
 // issueColumns is the single authoritative ordered projection of the issues
 // table. Every read site selects exactly these columns in this order, and the
-// positional scanners below (scanIssue, scanIssueWithParent) consume them by
-// position — each scanner's Scan() argument order MUST match this slice. A
+// positional scanner below (scanIssue) consumes them by position — its Scan()
+// argument order MUST match this slice. A
 // column added, removed, or reordered is one edit here that flows to every read
-// site through the derived projections, leaving only the two adjacent scanners
-// to move with it. [LAW:one-source-of-truth] [FRAMING:representation]
+// site through the derived projections, leaving only the scanner below to move
+// with it. [LAW:one-source-of-truth] [FRAMING:representation]
 var issueColumns = []string{
 	"id", "title", "description", "agent_prompt", "work_plan", "status", "priority",
 	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
@@ -2729,9 +2417,9 @@ var (
 	issueColumnsQualified = issueProjection("i")
 )
 
-// scanIssue and scanIssueWithParent consume a row positionally; the Scan()
-// argument order below is the other half of issueColumns' positional contract
-// and must stay in lockstep with that slice.
+// scanIssue consumes a row positionally; the Scan() argument order below is
+// the other half of issueColumns' positional contract and must stay in
+// lockstep with that slice.
 func scanIssue(row issueScanner) (issueRow, error) {
 	var issue partialIssue
 	var prompt sql.NullString
@@ -2745,23 +2433,6 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	issue.Prompt = prompt.String
 	issue.FollowsUp = model.ID(followsUp.String)
 	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
-}
-
-func scanIssueWithParent(row issueScanner) (model.ID, issueRow, error) {
-	var parentID model.ID
-	var issue partialIssue
-	var prompt sql.NullString
-	var status sql.NullString
-	var assignee string
-	var createdAt, updatedAt string
-	var closedAt, resolution, redirectTarget, followsUp, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &issue.Plan, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
-		return "", issueRow{}, err
-	}
-	issue.Prompt = prompt.String
-	issue.FollowsUp = model.ID(followsUp.String)
-	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
-	return parentID, parsed, err
 }
 
 func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, resolution sql.NullString, redirectTarget sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
@@ -2851,7 +2522,7 @@ func scanNullableTime(value sql.NullString) (*time.Time, error) {
 // The capability presence is the type-encoded answer to the container-vs-leaf
 // question — leaves expose Status, containers do not — so this projection
 // never asks IsContainer; it asks the lifecycle.
-// [LAW:one-source-of-truth] Container state lives in the AllOf lifecycle, not
+// [LAW:one-source-of-truth] Container state lives in its leaves' tally, not
 // the DB column. Writing NULL keeps the column from lying about what it owns.
 func statusForStorage(issue model.Issue) sql.NullString {
 	if status := issue.Capabilities().Status; status != nil {
@@ -2860,70 +2531,43 @@ func statusForStorage(issue model.Issue) sql.NullString {
 	return sql.NullString{}
 }
 
+// hydrateIssues builds the issues rows hold: each with its labels, and an
+// epic with the progress its leaves have made, read from the walk
+// (epicProgress), which refuses an epic on or above a parent loop.
 func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Issue, error) {
-	return s.hydrateBelow(ctx, rows, make([]*descent, len(rows)))
+	return s.hydrateKnowing(ctx, rows, nil)
 }
 
-// descent is the chain of containers a hydration descended through to reach a
-// row, nearest first; a row the caller asked for has none. It is a list that
-// shares its tail, so extending it for a child costs one node.
-type descent struct {
-	id model.ID
-	up *descent
-}
-
-// loopTo returns the chain from its nearest container up to id, or nothing
-// when id is not on it. A child already on its own chain is a parent cycle:
-// the chain from its parent up to it is the loop, each the child of the next,
-// and the child of the first.
-func (d *descent) loopTo(id model.ID) []model.ID {
-	var loop []model.ID
-	for at := d; at != nil; at = at.up {
-		loop = append(loop, at.id)
-		if at.id == id {
-			return loop
-		}
-	}
-	return nil
-}
-
-// hydrateBelow hydrates rows, each reached through the containers in its
-// chain. A container's state is derived from its children's, so a container
-// that is its own descendant has none to derive; the descent refuses it there,
-// naming the loop, rather than descending into it again. The chain is what
-// bounds the descent: no row is hydrated below itself.
-// [LAW:no-silent-failure]
-func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*descent) ([]model.Issue, error) {
+// hydrateKnowing is hydrateIssues for a caller that has read the progress of
+// some epics already: the walk reads only the epics known does not hold.
+func (s *Store) hydrateKnowing(ctx context.Context, rows []issueRow, known map[model.ID]model.Progress) ([]model.Issue, error) {
 	if len(rows) == 0 {
 		return []model.Issue{}, nil
 	}
 	issueIDs := make([]model.ID, 0, len(rows))
+	var unknown []model.ID
 	for _, row := range rows {
 		issueIDs = append(issueIDs, row.Issue.ID)
+		if _, read := known[row.Issue.ID]; row.Issue.IssueType.IsContainer() && !read {
+			unknown = append(unknown, row.Issue.ID)
+		}
 	}
 	labelsByID, err := s.loadLabelsByIssueIDs(ctx, issueIDs)
 	if err != nil {
 		return nil, err
 	}
-	epicIDs := make([]model.ID, 0, len(rows))
-	below := make(map[model.ID]*descent, len(rows))
-	for i, row := range rows {
-		if row.Issue.IssueType.IsContainer() {
-			epicIDs = append(epicIDs, row.Issue.ID)
-			below[row.Issue.ID] = &descent{id: row.Issue.ID, up: chains[i]}
-		}
-	}
-	childrenByEpicID, err := s.lifecycleChildrenByEpicIDs(ctx, epicIDs, below)
+	progress, err := s.epicProgress(ctx, unknown)
 	if err != nil {
 		return nil, err
 	}
+	maps.Copy(progress, known)
 	hydrated := make([]model.Issue, 0, len(rows))
 	for _, row := range rows {
 		base := rowFields(row.Issue, labelsByID[row.Issue.ID])
 		// [LAW:single-enforcer] This store hydrator is the only read boundary
-		// that turns row status plus child relations into model lifecycle state.
-		// HydrateRow owns the container-vs-leaf dispatch.
-		issue, err := model.HydrateRow(base, row.Status, childrenByEpicID[row.Issue.ID])
+		// that turns row status plus an epic's leaves into model lifecycle
+		// state. HydrateRow owns the container-vs-leaf dispatch.
+		issue, err := model.HydrateRow(base, row.Status, progress[row.Issue.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -2936,80 +2580,6 @@ func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*des
 		hydrated = append(hydrated, issue)
 	}
 	return hydrated, nil
-}
-
-// lifecycleChildrenByEpicIDs hydrates the children of each epic in epicIDs,
-// grouped by epic. below holds each epic's chain, the epic itself nearest, and
-// every child is hydrated under its epic's.
-func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []model.ID, below map[model.ID]*descent) (map[model.ID][]model.Issue, error) {
-	out := make(map[model.ID][]model.Issue, len(epicIDs))
-
-	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
-	// pass rather than once per epic. A parallel parentID slice carries the epic
-	// each child row belongs to, so the per-recursion-level query count is one
-	// regardless of how many epics are open instead of scaling as one label query
-	// plus one child-relation query per epic. hydrateIssues preserves input order
-	// and the SELECT groups children by epic (dst_id) then item_rank, so
-	// re-bucketing the hydrated result by parentID reproduces the per-epic,
-	// rank-ordered grouping.
-	childRows, parentIDs, err := s.scanLifecycleChildRows(ctx, newIDSet(epicIDs))
-	if err != nil {
-		return nil, err
-	}
-	chains := make([]*descent, len(childRows))
-	for i, child := range childRows {
-		chains[i] = below[parentIDs[i]]
-		if loop := chains[i].loopTo(child.Issue.ID); len(loop) > 0 {
-			return nil, storage.ParentCycleError{Cycle: loop}
-		}
-	}
-	hydrated, err := s.hydrateBelow(ctx, childRows, chains)
-	if err != nil {
-		return nil, err
-	}
-	for i, issue := range hydrated {
-		out[parentIDs[i]] = append(out[parentIDs[i]], issue)
-	}
-	return out, nil
-}
-
-// scanLifecycleChildRows runs the children query and reads its rows, returning
-// each child beside the epic it hangs from.
-func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issueRow, []model.ID, error) {
-	epicRows, arg := epics.rows("epics")
-	// [LAW:one-source-of-truth] Active containers derive progress from active children; archived/deleted containers keep a full child snapshot so their lifecycle state does not collapse to empty/open.
-	// Children-of-epic visibility truth table:
-	//   parent live, child live -> include
-	//   parent live, child dead -> exclude (active container shows only active children)
-	//   parent dead, child live -> include (snapshot semantics: container's state at archive)
-	//   parent dead, child dead -> include (snapshot semantics)
-	// The WHERE clause encodes "include if parent is dead OR child is live."
-	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, `+issueColumnsQualified+`
-		FROM `+epicRows+`
-		JOIN relations r ON r.dst_id = epics.id
-		JOIN issues i ON i.id = r.src_id
-		JOIN issues p ON p.id = r.dst_id
-		WHERE r.type = 'parent-child'
-			AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
-		ORDER BY r.dst_id ASC, i.item_rank ASC`, arg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load lifecycle children: %w", err)
-	}
-	defer rows.Close()
-	childRows := make([]issueRow, 0, len(epics.ids))
-	parentIDs := make([]model.ID, 0, len(epics.ids))
-	for rows.Next() {
-		parentID, child, err := scanIssueWithParent(rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		childRows = append(childRows, child)
-		parentIDs = append(parentIDs, parentID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return childRows, parentIDs, nil
 }
 
 // loadLabelsByIssueIDs reads the labels of every issue in issueIDs, each

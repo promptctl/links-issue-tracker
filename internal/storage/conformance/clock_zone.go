@@ -82,7 +82,7 @@ func aRankMoveLeavesUpdatedAtAlone(t *testing.T, ctx context.Context, st storage
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	frame := map[model.ID]struct{}{a.ID: {}, b.ID: {}, c.ID: {}}
 	before := map[model.ID]time.Time{}
-	for _, issue := range mustList(t, ctx, st, storage.ListIssuesFilter{}) {
+	for _, issue := range mustList(t, ctx, st, storage.Listing{}) {
 		before[issue.ID] = issue.UpdatedAt
 	}
 
@@ -102,10 +102,10 @@ func aRankMoveLeavesUpdatedAtAlone(t *testing.T, ctx context.Context, st storage
 		if err := move.run(); err != nil {
 			t.Fatalf("%s error = %v", move.name, err)
 		}
-		assertIssueIDs(t, "the epic's children after "+move.name, childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), move.want)
+		assertIssueIDs(t, "the epic's children after "+move.name, childrenOf(mustList(t, ctx, st, storage.Listing{}), frame), move.want)
 	}
 
-	for _, issue := range mustList(t, ctx, st, storage.ListIssuesFilter{}) {
+	for _, issue := range mustList(t, ctx, st, storage.Listing{}) {
 		if !issue.UpdatedAt.Equal(before[issue.ID]) {
 			t.Errorf("%s updated_at = %v after the rank moves, want the %v it held: a rank move is not work on the ticket", issue.Title, issue.UpdatedAt, before[issue.ID])
 		}

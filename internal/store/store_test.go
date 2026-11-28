@@ -142,7 +142,7 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 	if progress.Open != 1 || progress.Closed != 1 || progress.Total != 2 {
 		t.Fatalf("epic Progress() = %#v, want open=1 closed=1 total=2", progress)
 	}
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -273,7 +273,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{Statuses: tc.statuses, IssueTypes: []model.IssueType{model.TypeEpic}})
+			issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.And(storage.IssueStatus.Is(tc.statuses...), storage.IssueType.Is(model.TypeEpic))}})
 			if err != nil {
 				t.Fatalf("ListIssues(%v) error = %v", tc.statuses, err)
 			}
@@ -824,7 +824,7 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 		t.Fatalf("Apply prompt = %q, want %q", updated.Issue.Prompt, newPrompt)
 	}
 
-	matches, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"headless"}})
+	matches, err := st.ListIssues(ctx, selecting(t, "text~headless"))
 	if err != nil {
 		t.Fatalf("ListIssues(search) error = %v", err)
 	}
@@ -1073,21 +1073,10 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 		t.Fatalf("AddComment() error = %v", err)
 	}
 
-	now := time.Now().UTC()
-	before := now.Add(-time.Hour)
-	after := now.Add(time.Hour)
-	hasComments := true
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{
-		Statuses:      []model.State{model.StateOpen},
-		IssueTypes:    []model.IssueType{model.TypeTask},
-		Assignees:     []string{"bmf"},
-		SearchTerms:   []string{"renderer", "draw prep"},
-		IDs:           []model.ID{issueA.ID, issueB.ID},
-		LabelsAll:     []string{"renderer"},
-		HasComments:   &hasComments,
-		UpdatedAfter:  &before,
-		UpdatedBefore: &after,
-	})
+	// Every atom binds its own values, so a selector of many atoms is where a
+	// statement whose text and values drifted apart would answer wrongly.
+	issues, err := st.ListIssues(ctx, selecting(t, `status=open type=task assignee=bmf text~renderer text~"draw prep" id=`+
+		string(issueA.ID)+","+string(issueB.ID)+` labels=renderer comments updated_at>=now-1h updated_at<=now+1h`))
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1123,7 +1112,7 @@ func TestCreateIssuePlacement(t *testing.T) {
 
 	// The three share one frame, the epic, so the epic's children are the
 	// order a placement lands in.
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(epic.ID)}})
 	if err != nil {
 		t.Fatalf("ListIssues(epic) error = %v", err)
 	}
@@ -1151,7 +1140,7 @@ func TestStoreListByParentDefaultsToRankOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
-	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{parent.ID}})
+	children, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(parent.ID)}})
 	if err != nil {
 		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
@@ -1431,7 +1420,7 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 
 	// The archived leaf leaves the default listing; its epic, still live, is
 	// all that remains.
-	activeIssues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	activeIssues, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -1439,7 +1428,7 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 		t.Fatalf("activeIssues = %#v, want only the epic %s", issueIDs(activeIssues), epic.ID)
 	}
 
-	allIssues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true})
+	allIssues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true}})
 	if err != nil {
 		t.Fatalf("ListIssues(include archived) error = %v", err)
 	}
@@ -1754,7 +1743,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("done = %#v, want closed with ClosedAt", done.Issue)
 	}
 
-	openIssues, err := st.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen}})
+	openIssues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueStatus.Is(model.StateOpen)}})
 	if err != nil {
 		t.Fatalf("ListIssues(open) error = %v", err)
 	}
@@ -1764,7 +1753,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 
 	// The epic's state derives from its one child, so closing the child
 	// closes the epic too.
-	closedIssues, err := st.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateClosed}})
+	closedIssues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueStatus.Is(model.StateClosed)}})
 	if err != nil {
 		t.Fatalf("ListIssues(closed) error = %v", err)
 	}
@@ -1862,7 +1851,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
-	if _, err := readStore.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := readStore.ListIssues(ctx, storage.Listing{}); err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
 	if err := readStore.Close(); err != nil {
@@ -1967,7 +1956,7 @@ func TestListByParentReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
 
-	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{root.ID}})
+	children, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{Selector: storage.IssueParent.Is(root.ID)}})
 	if err != nil {
 		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
@@ -2870,7 +2859,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 	if _, err := st.RankSet(ctx, []model.ID{c.ID, a.ID, b.ID}); err != nil {
 		t.Fatalf("RankSet() error = %v", err)
 	}
-	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0})
+	all, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

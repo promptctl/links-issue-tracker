@@ -70,6 +70,12 @@ func PhaseOf(issue Issue, events []IssueEvent) (Phase, bool) {
 	if caps.Status == nil || caps.Status.Value != PhasedState {
 		return "", false
 	}
+	return PhaseFrom(events), true
+}
+
+// PhaseFrom is the phase an in-progress leaf's history puts it in, by the rule
+// PhaseOf states: the newest phase-setting event's, and plan when none set one.
+func PhaseFrom(events []IssueEvent) Phase {
 	phase := PhasePlan
 	var latest IssueEvent
 	found := false
@@ -79,7 +85,7 @@ func PhaseOf(issue Issue, events []IssueEvent) (Phase, bool) {
 			latest, phase, found = event, set, true
 		}
 	}
-	return phase, true
+	return phase
 }
 
 // phaseSetBy is the phase an event puts its issue in, if it sets one: a start

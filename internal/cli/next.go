@@ -34,11 +34,11 @@ func nextLeaf() appLeaf {
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
 	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		filter, err := filterFlags.parse()
+		filter, err := filterFlags.parse(time.Now())
 		if err != nil {
 			return err
 		}
-		asked, err := filter.criteria()
+		asked, err := filter.selected(ctx, ap.Store)
 		if err != nil {
 			return err
 		}

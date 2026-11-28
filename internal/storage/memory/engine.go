@@ -329,7 +329,11 @@ func (e *Engine) hydrate(rec *record, pos map[model.ID]int) (model.Issue, error)
 	if err != nil {
 		return model.Issue{}, err
 	}
-	return model.HydrateRow(issue, rec.status, children)
+	leaves, err := model.ProgressOf(children)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	return model.HydrateRow(issue, rec.status, leaves)
 }
 
 // hydrateAll composes the issues for a list of records, preserving input

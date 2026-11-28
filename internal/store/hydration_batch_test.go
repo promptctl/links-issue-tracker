@@ -74,7 +74,7 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 		t.Fatalf("CreateIssue(childless) error = %v", err)
 	}
 
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := st.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

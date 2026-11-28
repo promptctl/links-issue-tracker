@@ -8,7 +8,7 @@ Day-to-day reads and writes are only half of what the store does; the other half
 
 | # | Data | Query semantics | Order |
 |---|---|---|---|
-| 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | tree order, then `id` — `ListIssues`'s default (`storage.IssueOrdering`) |
+| 1 | issues | `ListIssues` over a `Selection` with no selector and `IncludeArchived` and `IncludeDeleted` both true, uncapped — every row, so **archived and soft-deleted issues are exported** | tree order, then `id` — `ListIssues`'s default (`storage.IssueOrdering`) |
 | 2 | relations | `queryRelations(ctx, s.db, "relations")` | none in SQL; `storage.RelationOrdering` in Go: the `created_at` instant, then `src_id`, `dst_id`, `type` |
 | 3 | comments | `queryComments(ctx, s.db, "comments")` | none in SQL; `storage.CommentOrdering` in Go: the `created_at` instant, then `id` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |

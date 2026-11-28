@@ -13,9 +13,7 @@ import (
 // rejected. Empty and whitespace-only expressions yield no specs.
 //
 // [LAW:one-source-of-truth] This is THE parser from sort expression to
-// []SortSpec. Both the `--sort` flag and the `--query sort:` token route through
-// here, so the two surfaces cannot drift on direction syntax or field naming.
-// It lives beside SortSpec because the query package cannot import cli.
+// []SortSpec, beside the type it builds.
 func ParseSortSpecs(input string) ([]SortSpec, error) {
 	out := make([]SortSpec, 0)
 	for _, part := range strings.Split(input, ",") {

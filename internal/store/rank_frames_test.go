@@ -32,7 +32,7 @@ func blockOrFatal(t *testing.T, ctx context.Context, st *Store, dependent, depen
 // repair's own loader, so a loader that dropped an issue cannot hide it here.
 func storedRanks(t *testing.T, ctx context.Context, st *Store) map[model.ID]string {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true})
+	issues, err := st.ListIssues(ctx, storage.Listing{Selection: storage.Selection{IncludeArchived: true}})
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}

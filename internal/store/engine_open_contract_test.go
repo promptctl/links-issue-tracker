@@ -283,7 +283,7 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 		_ = reader.Close()
 		t.Fatalf("LocalIssueCount() = %d, %v; want 2, nil", count, err)
 	}
-	if _, err := reader.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+	if _, err := reader.ListIssues(ctx, storage.Listing{}); err != nil {
 		_ = reader.Close()
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -481,7 +481,7 @@ func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
 		t.Fatalf("writer Close() error = %v", err)
 	}
 
-	issues, err := reader.ListIssues(ctx, storage.ListIssuesFilter{})
+	issues, err := reader.ListIssues(ctx, storage.Listing{})
 	if err != nil {
 		t.Fatalf("reader ListIssues() after a full compaction beside it error = %v", err)
 	}
