@@ -12,17 +12,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
-// prefixed is the facts under one namespace.
-func prefixed(facts map[string]any, prefix string) map[string]any {
-	out := map[string]any{}
-	for key, value := range facts {
-		if strings.HasPrefix(key, prefix) {
-			out[key] = value
-		}
-	}
-	return out
-}
-
 // phaseFacts is what the last invocation's event says its phase move did.
 func phaseFacts(t *testing.T) map[string]any {
 	t.Helper()

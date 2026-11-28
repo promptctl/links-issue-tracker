@@ -58,13 +58,7 @@ func commentBodies(t *testing.T, dir string) []string {
 // long-text fields came from.
 func sourceFacts(t *testing.T) map[string]any {
 	t.Helper()
-	facts := map[string]any{}
-	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasPrefix(key, "text_source.") {
-			facts[key] = value
-		}
-	}
-	return facts
+	return prefixed(writtenFacts(t, lastEvent(t)), "text_source.")
 }
 
 // A comment body arrives inline, from a file, or from stdin, lands exactly as

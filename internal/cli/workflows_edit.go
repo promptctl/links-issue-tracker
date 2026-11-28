@@ -20,7 +20,7 @@ import (
 // definition is already its own file — open it directly. A global or embedded
 // one is copied verbatim into a new project-layer file at its own relative
 // path, the override, ready to edit. An id nothing loaded holds is refused,
-// naming the flags that scaffold a new definition (editFreshDefinition).
+// naming the command that scaffolds a new definition (newDefinition).
 //
 // Scaffolding never overwrites an existing file — it writes only under the
 // project's `.lit/workflows/`, never into the global or embedded layers, and
@@ -28,7 +28,7 @@ import (
 func runWorkflowsEdit(inv Invocation, ws workspace.Info, id string) error {
 	def, ok := workflows.Load(inv.Env, ws.RootDir).Lookup(id)
 	if !ok {
-		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows edit --when \"enter closed\"`, `--label needs-design`, or both", id)}
+		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows new --when \"enter closed\"`, `--label needs-design`, or both", id)}
 	}
 	return editExistingDefinition(inv, ws, def)
 }
@@ -54,7 +54,7 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
-// editFreshDefinition is `lit workflows edit --when <moment> --label <name>`:
+// newDefinition is `lit workflows new --when <moment> --label <name>`:
 // scaffold a new project-layer definition firing on the keys the flags name,
 // read as a definition's own keys are (readKeyFlags), in a file named after
 // them.
@@ -65,7 +65,7 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 // done). [LAW:single-enforcer] Definitions resolve by id across every layer,
 // so the loaded set judges whether the id is free: a held id would make the new
 // file replace the definition holding it, or lose to it, rather than add one.
-func editFreshDefinition(inv Invocation, ws workspace.Info, whenTexts, labelTexts []string) error {
+func newDefinition(inv Invocation, ws workspace.Info, whenTexts, labelTexts []string) error {
 	when, labels, err := readKeyFlags(whenTexts, labelTexts)
 	if err != nil {
 		return err
@@ -97,7 +97,7 @@ func projectWorkflowPath(ws workspace.Info, relPath string) string {
 // put it there. It gives a quick, friendly rejection for the common
 // (non-racing) case; writeWorkflowScaffold's O_EXCL open is the actual
 // enforcer, since a stat-then-write here would leave a TOCTOU gap a
-// concurrent `lit workflows edit` could win. [LAW:single-enforcer]
+// concurrent scaffold could win. [LAW:single-enforcer]
 func refuseExistingFile(path string, subject string) error {
 	if _, err := os.Stat(path); err == nil {
 		return conflictError(subject, path)

@@ -99,7 +99,9 @@ func phaseSetBy(event IssueEvent) (Phase, bool) {
 // ConfigurationOf is every state node issue's row and history put it in,
 // outermost first within each region: its status, then the phase PhaseOf
 // reads while it has one, then its retention. A transition's crossings are
-// the difference between the configurations on either side of its write.
+// the difference between the configurations on either side of its write, and
+// they read this order as the nesting: walked backward it is innermost first,
+// the order a statechart exits in. [LAW:one-source-of-truth]
 func ConfigurationOf(issue Issue, events []IssueEvent) []StateNode {
 	nodes := []StateNode{lifecycle.StatusNode(issue.State())}
 	if phase, ok := PhaseOf(issue, events); ok {

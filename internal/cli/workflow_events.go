@@ -11,10 +11,11 @@ import (
 // builders of what each command fires — one for a ticket a command read or
 // changed, one for the backlog, one for a created ticket, one for every
 // transition — so the payload a command fires is unit-testable with no store,
-// no app, no mocks. [LAW:effects-at-boundaries] A read or a single write fires
-// through dispatchOccasion; a transition or a comment, which a bulk run makes
-// once per ticket, fires through its command's loadedWorkflows.fire, which
-// dispatchOccasion also calls. [LAW:one-source-of-truth]
+// no app, no mocks. [LAW:effects-at-boundaries] A read, `lit update` and a
+// creation fire through dispatchOccasion; a transition or a comment, which a
+// bulk run makes once per ticket, fires through its command's
+// loadedWorkflows.fire, which dispatchOccasion also calls.
+// [LAW:one-source-of-truth]
 
 // ticketOccasion is what a command fires for the one ticket it acted on: the
 // event it fires, and the ticket's id and labels. `lit show` fires
@@ -38,7 +39,9 @@ func backlogOccasion() workflows.Occasion {
 // createdOccasion is what `lit new` and `lit followup` fire once the ticket
 // exists: ticket_created, then the entries into every state it starts in, as
 // a statechart's initial transition enters its initial configuration — so a
-// ticket created open enters open and live.
+// ticket created open enters open and live. [LAW:one-source-of-truth] the
+// entries are crossings from nothing to the ticket's configuration, so a new
+// ticket enters exactly the states a later transition reads it as leaving.
 func createdOccasion(issue model.Issue) workflows.Occasion {
 	occasion := ticketOccasion(workflows.EventTicketCreated, issue)
 	occasion.Moments = append(occasion.Moments, crossings(nil, model.ConfigurationOf(issue, nil))...)
@@ -93,9 +96,9 @@ func transitionOccasion(before, after ticketState) workflows.Occasion {
 // crossings are the moves from one configuration to another in the order a
 // statechart makes them: the exits of every node from has and to lacks,
 // innermost first, then the entries of every node to has and from lacks,
-// outermost first. Each region's nodes run outermost first
-// (model.ConfigurationOf), so a done from review exits review, then
-// in_progress, then enters closed.
+// outermost first. [LAW:one-source-of-truth] the nesting is
+// model.ConfigurationOf's order, which lists each region outermost first, so a
+// done from review exits review, then in_progress, then enters closed.
 func crossings(from, to []model.StateNode) []workflows.Moment {
 	var out []workflows.Moment
 	for _, node := range slices.Backward(from) {

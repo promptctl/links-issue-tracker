@@ -218,12 +218,12 @@ func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 	}
 }
 
-// `lit workflows edit --when <moment> --label <name>` scaffolds a fresh
+// `lit workflows new --when <moment> --label <name>` scaffolds a fresh
 // project file firing on exactly the keys the flags name, each entry live in
 // the spelling it reads back as and a key left out shown commented, in a file
 // named after what it binds; it loads with no warning. A label that reads
 // like a moment is a label, because --label says so.
-func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
+func TestWorkflowsNewScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		args         []string
@@ -244,13 +244,13 @@ func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()
 			root := tempRepo(t)
-			output, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.args...)...)
+			output, err := runLit(t, root, append([]string{"workflows", "new"}, tc.args...)...)
 			if err != nil {
-				t.Fatalf("Run(workflows edit %v) error = %v", tc.args, err)
+				t.Fatalf("Run(workflows new %v) error = %v", tc.args, err)
 			}
 			path := filepath.Join(root, ".lit", "workflows", tc.file)
 			if !strings.Contains(output, "scaffolded a new definition at ") || !strings.Contains(output, tc.file) {
-				t.Fatalf("workflows edit output = %q, want it to name the scaffold %s", output, path)
+				t.Fatalf("workflows new output = %q, want it to name the scaffold %s", output, path)
 			}
 			content, readErr := os.ReadFile(path)
 			if readErr != nil {
@@ -267,8 +267,7 @@ func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 			if !ok {
 				t.Fatalf("workflows.Load(%s) has no definition for %s; loaded: %+v", root, tc.file, set.Definitions)
 			}
-			keys, fires := def.Activation.Keys()
-			if !fires || !slices.Equal(workflows.Spellings(keys.When.Entries()), tc.when) || !slices.Equal(keys.Labels.Entries(), tc.labels) {
+			if !slices.Equal(workflows.Spellings(def.Activation.When.Entries()), tc.when) || !slices.Equal(def.Activation.Labels.Entries(), tc.labels) {
 				t.Fatalf("definition = %+v, want when %v and labels %v", def, tc.when, tc.labels)
 			}
 			if len(set.Warnings) != 0 {
@@ -281,7 +280,7 @@ func TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames(t *testing.T) {
 // A binding is a set of entries, so every spelling and every ordering of one
 // binding names one file, and scaffolding it again is refused as the conflict
 // it is rather than written as a second definition firing beside the first.
-func TestWorkflowsEditScaffoldsOneFilePerBinding(t *testing.T) {
+func TestWorkflowsNewScaffoldsOneFilePerBinding(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ first, again []string }{
 		{[]string{"--when", "enter in_progress"}, []string{"--when", "Enter In-Progress"}},
@@ -291,13 +290,13 @@ func TestWorkflowsEditScaffoldsOneFilePerBinding(t *testing.T) {
 		t.Run(strings.Join(tc.again, " "), func(t *testing.T) {
 			t.Parallel()
 			root := tempRepo(t)
-			if _, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.first...)...); err != nil {
-				t.Fatalf("Run(workflows edit %v) error = %v", tc.first, err)
+			if _, err := runLit(t, root, append([]string{"workflows", "new"}, tc.first...)...); err != nil {
+				t.Fatalf("Run(workflows new %v) error = %v", tc.first, err)
 			}
-			_, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.again...)...)
+			_, err := runLit(t, root, append([]string{"workflows", "new"}, tc.again...)...)
 			var conflict MergeConflictError
 			if !errors.As(err, &conflict) {
-				t.Fatalf("Run(workflows edit %v) error = %v (%T), want MergeConflictError", tc.again, err, err)
+				t.Fatalf("Run(workflows new %v) error = %v (%T), want MergeConflictError", tc.again, err, err)
 			}
 			if entries, readErr := os.ReadDir(filepath.Join(root, ".lit", "workflows")); readErr != nil || len(entries) != 1 {
 				t.Fatalf("ReadDir(.lit/workflows) = %v, %v; want the one file the first scaffold wrote", entries, readErr)
@@ -310,7 +309,7 @@ func TestWorkflowsEditScaffoldsOneFilePerBinding(t *testing.T) {
 // already holds is refused, naming that definition: written, the file would
 // silently replace a shipped default (`--label done` and the post-close
 // reminder) or lose to a project file declaring that id.
-func TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds(t *testing.T) {
+func TestWorkflowsNewRefusesAnIDALoadedDefinitionHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		args    []string
@@ -327,10 +326,10 @@ func TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds(t *testing.T) {
 			for rel, content := range tc.project {
 				writeCLIWorkflow(t, root, rel, content)
 			}
-			_, err := runLit(t, root, append([]string{"workflows", "edit"}, tc.args...)...)
+			_, err := runLit(t, root, append([]string{"workflows", "new"}, tc.args...)...)
 			var conflict MergeConflictError
 			if !errors.As(err, &conflict) || !strings.Contains(err.Error(), tc.holder+" already holds that id") {
-				t.Fatalf("Run(workflows edit %v) error = %v (%T), want a MergeConflictError naming the %s", tc.args, err, err, tc.holder)
+				t.Fatalf("Run(workflows new %v) error = %v (%T), want a MergeConflictError naming the %s", tc.args, err, err, tc.holder)
 			}
 			entries, _ := os.ReadDir(filepath.Join(root, ".lit", "workflows"))
 			if len(entries) != len(tc.project) {
@@ -343,7 +342,7 @@ func TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds(t *testing.T) {
 // A --when naming no moment lit fires, or a --label no ticket can carry, is
 // refused, and nothing is scaffolded for it: a file bound to it could never
 // fire.
-func TestWorkflowsEditRefusesWhatNoKeyReads(t *testing.T) {
+func TestWorkflowsNewRefusesWhatNoKeyReads(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{
 		{"--when", "enter reveiw"},
@@ -353,10 +352,10 @@ func TestWorkflowsEditRefusesWhatNoKeyReads(t *testing.T) {
 		{"--label", "  "},
 	} {
 		root := tempRepo(t)
-		_, err := runLit(t, root, append([]string{"workflows", "edit"}, args...)...)
+		_, err := runLit(t, root, append([]string{"workflows", "new"}, args...)...)
 		var validation model.ValidationError
 		if !errors.As(err, &validation) {
-			t.Fatalf("Run(workflows edit %v) error = %v (%T), want a ValidationError", args, err, err)
+			t.Fatalf("Run(workflows new %v) error = %v (%T), want a ValidationError", args, err, err)
 		}
 		if _, statErr := os.Stat(filepath.Join(root, ".lit", "workflows")); !os.IsNotExist(statErr) {
 			t.Fatalf("Stat(.lit/workflows) error = %v, want nothing scaffolded for %v", statErr, args)
@@ -364,15 +363,16 @@ func TestWorkflowsEditRefusesWhatNoKeyReads(t *testing.T) {
 	}
 }
 
-// A positional only ever names a definition: one nothing loaded holds is
-// refused, naming the flags that scaffold a new one, and nothing is written.
+// edit's positional only ever names a definition: one nothing loaded holds
+// is refused, naming the command that scaffolds a new one, and nothing is
+// written.
 func TestWorkflowsEditRefusesAnIDNothingHolds(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	_, err := runLit(t, root, "workflows", "edit", "enter closed")
 	var validation model.ValidationError
-	if !errors.As(err, &validation) || !strings.Contains(err.Error(), `no workflow definition with id "enter closed"`) || !strings.Contains(err.Error(), "--when") || !strings.Contains(err.Error(), "--label") {
-		t.Fatalf("Run(workflows edit \"enter closed\") error = %v (%T), want a ValidationError naming --when and --label", err, err)
+	if !errors.As(err, &validation) || !strings.Contains(err.Error(), `no workflow definition with id "enter closed"`) || !strings.Contains(err.Error(), "lit workflows new --when") || !strings.Contains(err.Error(), "--label") {
+		t.Fatalf("Run(workflows edit \"enter closed\") error = %v (%T), want a ValidationError naming lit workflows new and its flags", err, err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, ".lit", "workflows")); !os.IsNotExist(statErr) {
 		t.Fatalf("Stat(.lit/workflows) error = %v, want nothing scaffolded", statErr)
@@ -435,18 +435,18 @@ func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testi
 	}
 }
 
-// TestWorkflowsEditRefusesToClobberAnExistingFile is the never-silently-
+// TestWorkflowsNewRefusesToClobberAnExistingFile is the never-silently-
 // overwrite guard: a fresh scaffold whose target filename is already
 // occupied (by an unrelated definition) fails loudly instead of clobbering it.
-func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
+func TestWorkflowsNewRefusesToClobberAnExistingFile(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "blocked.md", "---\nid: something-else\nlabels: [other]\n---\nunrelated body")
 
-	_, err := runLit(t, root, "workflows", "edit", "--label", "blocked")
+	_, err := runLit(t, root, "workflows", "new", "--label", "blocked")
 	var conflict MergeConflictError
 	if !errors.As(err, &conflict) {
-		t.Fatalf("Run(workflows edit --label blocked) error = %v (%T), want MergeConflictError", err, err)
+		t.Fatalf("Run(workflows new --label blocked) error = %v (%T), want MergeConflictError", err, err)
 	}
 	content, readErr := os.ReadFile(filepath.Join(root, ".lit", "workflows", "blocked.md"))
 	if readErr != nil {
@@ -629,21 +629,23 @@ func TestWorkflowsDryRunReadsLabelsAsATicketCarriesThem(t *testing.T) {
 	}
 }
 
-// TestWorkflowsEditRejectsOversuppliedArguments guards the same silent-
-// swallow shape TestWorkflowsRejectsOversuppliedArguments pins for `show`, and
-// edit's own: an id and keys at once, or neither.
-func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
+// TestWorkflowsEditAndNewRejectWhatTheirShapeLacks guards the same silent-
+// swallow shape TestWorkflowsRejectsOversuppliedArguments pins for `show`:
+// edit takes one id and no keys, and new takes keys and no id.
+func TestWorkflowsEditAndNewRejectWhatTheirShapeLacks(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 
 	for _, args := range [][]string{
-		{"done", "extra"},
-		{"done", "--when", "enter closed"},
-		{},
+		{"edit", "done", "extra"},
+		{"edit", "done", "--when", "enter closed"},
+		{"edit"},
+		{"new"},
+		{"new", "done", "--when", "enter closed"},
 	} {
-		_, err := runLit(t, root, append([]string{"workflows", "edit"}, args...)...)
+		_, err := runLit(t, root, append([]string{"workflows"}, args...)...)
 		if _, ok := err.(UsageError); !ok {
-			t.Fatalf("Run(workflows edit %v) error = %v (%T), want UsageError", args, err, err)
+			t.Fatalf("Run(workflows %v) error = %v (%T), want UsageError", args, err, err)
 		}
 	}
 }

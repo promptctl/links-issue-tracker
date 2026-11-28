@@ -42,11 +42,12 @@ func RawDefault(env environ.Env, source templates.Source, relPath string) ([]byt
 }
 
 // ScaffoldFresh builds a fresh definition file's content for `lit workflows
-// edit --when <moment> --label <label>`: each key the edit names is written
+// new --when <moment> --label <label>`: each key the command names is written
 // live with its entries, a key it leaves out is written commented as a
 // reference, and a placeholder body follows.
-// [LAW:dataflow-not-control-flow] the same lines are written every time;
-// whether each key is live is the value that varies.
+// [LAW:dataflow-not-control-flow] every scaffold writes the same lines in the
+// same order, each key once; whether a key is live with its entries or
+// commented with an example is the value that varies.
 // [LAW:comments-carry-meaning] the comments exist to teach the format inline,
 // at the moment a user is about to author their first line of it.
 func ScaffoldFresh(when []Moment, labels []string) []byte {

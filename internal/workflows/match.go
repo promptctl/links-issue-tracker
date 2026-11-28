@@ -20,7 +20,7 @@ type Occasion struct {
 	Moments []Moment
 	// IssueID identifies the acted-on ticket, empty when the moment has no
 	// single acted-on ticket (e.g. a backlog-wide view). Matching never reads
-	// it — Matches keys only on Moments and Labels — it exists so display and
+	// it — it keys only on Moments and Labels — it exists so display and
 	// tracing consumers can name which ticket fired without re-deriving it
 	// from context. [LAW:one-source-of-truth] one Occasion carries everything
 	// a dispatch site knows about the moment, rather than a second payload
@@ -33,50 +33,48 @@ type Occasion struct {
 	Labels []string
 }
 
-// Matches reports whether the definition fires on the occasion: whether its
-// activation gives a reason to. [LAW:single-enforcer] firing and its reasons
-// are one computation, so the trace and dry-run can never explain a firing
-// that did not happen or miss one that did.
-func (d Definition) Matches(o Occasion) bool {
-	return len(d.MatchReasons(o)) > 0
+// Match is a definition that fires on an occasion, and why: which entry of
+// each key it writes the occasion carried.
+type Match struct {
+	Definition Definition
+	Reasons    []string
 }
 
-// Matching returns the definitions that fire on the occasion, in the Set's
-// stable ID order.
-func (s Set) Matching(o Occasion) []Definition {
-	var out []Definition
+// Matching returns the definitions that fire on the occasion, each with its
+// reasons, in the Set's stable ID order. [LAW:single-enforcer] a definition
+// fires exactly when it has a reason to, and the reasons it fired for travel
+// with it, so the trace and dry-run can never explain a firing that did not
+// happen or miss one that did.
+func (s Set) Matching(o Occasion) []Match {
+	var out []Match
 	for _, def := range s.Definitions {
-		if def.Matches(o) {
-			out = append(out, def)
+		if reasons := def.MatchReasons(o); len(reasons) > 0 {
+			out = append(out, Match{Definition: def, Reasons: reasons})
 		}
 	}
 	return out
 }
 
 // MatchReasons returns, for a definition that fires on the occasion, which
-// specific value in each declared key satisfied it — "when:enter closed",
-// "label:needs-design" — the shared "why" computation behind both the firing
-// trace (a real occasion) and `lit workflows dry-run` (a hypothetical one).
-// Nil when the definition does not fire, which a definition that never fires
-// never does.
+// specific value in each written key satisfied it — "when:enter closed",
+// "label:needs-design". Nil when the definition does not fire, which a
+// definition writing no key never does.
 func (d Definition) MatchReasons(o Occasion) []string {
-	keys, fires := d.Activation.Keys()
-	if !fires {
-		return nil
-	}
-	return keys.reasons(o)
+	return d.Activation.reasons(o)
 }
 
 // reasons composes the two keys: OR within a key (any listed value the
 // occasion carries satisfies it) and AND across them (each written key must
-// be satisfied). [LAW:dataflow-not-control-flow] the same steps run for every
+// be satisfied). A key's reasons are the entries the occasion carried, so an
+// activation writing no key has none to give and fires on nothing.
+// [LAW:dataflow-not-control-flow] the same steps run for every
 // definition on every occasion; which keys bite is decided by what they list.
 // [LAW:one-type-per-behavior] moments and labels are both compared by
 // equality — a crossing is its side and state, an event its name — so one
 // test serves both keys.
-func (k Keys) reasons(o Occasion) []string {
-	when, whenHolds := k.When.carried(o.Moments)
-	labels, labelsHolds := k.Labels.carried(o.Labels)
+func (a Activation) reasons(o Occasion) []string {
+	when, whenHolds := a.When.carried(o.Moments)
+	labels, labelsHolds := a.Labels.carried(o.Labels)
 	if !whenHolds || !labelsHolds {
 		return nil
 	}

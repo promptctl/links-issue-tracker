@@ -42,18 +42,18 @@ type FiringRecord struct {
 // recordFiring writes one FiringRecord for an occasion that matched at least
 // one definition, reusing the collision-safe writer every trace kind in this
 // codebase shares (internal/trace). [LAW:one-source-of-truth]
-func recordFiring(ws workspace.Info, o Occasion, matched []Definition) (string, error) {
+func recordFiring(ws workspace.Info, o Occasion, matched []Match) error {
 	fired := make([]FiredDefinition, len(matched))
-	for i, def := range matched {
+	for i, match := range matched {
 		fired[i] = FiredDefinition{
-			ID:      def.ID,
-			Source:  string(def.Source),
-			Path:    def.Path,
-			Reasons: def.MatchReasons(o),
+			ID:      match.Definition.ID,
+			Source:  string(match.Definition.Source),
+			Path:    match.Definition.Path,
+			Reasons: match.Reasons,
 		}
 	}
 	when := Spellings(o.Moments)
-	_, path, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(strings.Join(when, " ")), func(id string, recordedAt time.Time) ([]byte, error) {
+	_, _, err := trace.Write(ws.StorageDir, firingTraceKind, trace.Slug(strings.Join(when, " ")), func(id string, recordedAt time.Time) ([]byte, error) {
 		record := FiringRecord{
 			ID:          id,
 			RecordedAt:  recordedAt.Format(time.RFC3339Nano),
@@ -69,5 +69,5 @@ func recordFiring(ws workspace.Info, o Occasion, matched []Definition) (string, 
 		}
 		return append(payload, '\n'), nil
 	})
-	return path, err
+	return err
 }

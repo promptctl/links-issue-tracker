@@ -11,9 +11,9 @@ import (
 // retention (a region of its own, beside the status). A ticket is in one node
 // of each region at once, plus its phase while it has one, and a change of
 // the ticket exits the nodes it left and enters the ones it reached.
-// [LAW:types-are-the-program] the name is unexported, so a node is built only
-// here, from a status, a phase or a retention, and a parsed node is always
-// one of StateNodes.
+// [LAW:types-are-the-program] the name is unexported, so every node but the
+// zero value, which nothing produces, is built here from a status, a phase or
+// a retention, and a parsed node is always one of StateNodes.
 type StateNode struct{ name string }
 
 // String is the node's name: its status, phase or retention as that axis
@@ -56,13 +56,14 @@ func StateNodes() []StateNode {
 // ignored, and in-progress for in_progress.
 // [LAW:single-enforcer] The only string-to-StateNode gate.
 func ParseStateNode(value string) (StateNode, error) {
+	nodes := StateNodes()
 	node := StateNode{stateName(value)}
-	if slices.Contains(StateNodes(), node) {
+	if slices.Contains(nodes, node) {
 		return node, nil
 	}
-	names := make([]string, 0, len(StateNodes()))
-	for _, known := range StateNodes() {
-		names = append(names, known.name)
+	names := make([]string, len(nodes))
+	for i, known := range nodes {
+		names[i] = known.name
 	}
 	return StateNode{}, fmt.Errorf("unknown state %q: a ticket's states are %s", value, strings.Join(names, ", "))
 }

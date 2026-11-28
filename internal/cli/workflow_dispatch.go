@@ -13,6 +13,8 @@ import (
 // loadedWorkflows is the workflow Set one command fires its occasions
 // against, loaded once for the whole command — a bulk run fires every item's
 // occasion against the one load — with where its firings trace and complain.
+// [LAW:one-source-of-truth] one load per command, so every occasion it fires
+// matches the same definitions and the load's warnings print once.
 type loadedWorkflows struct {
 	set    workflows.Set
 	ws     workspace.Info
@@ -51,8 +53,8 @@ func loadWorkflows(ctx context.Context, inv Invocation, ws workspace.Info) loade
 func (l loadedWorkflows) fire(ctx context.Context, o workflows.Occasion) string {
 	firing := workflows.Fire(l.set, l.ws, o)
 	ids := make([]string, len(firing.Fired))
-	for i, def := range firing.Fired {
-		ids[i] = def.ID
+	for i, match := range firing.Fired {
+		ids[i] = match.Definition.ID
 	}
 	if firing.Untraced != nil {
 		fmt.Fprintf(l.stderr, "lit: workflow firing trace could not be recorded (%v)\n", firing.Untraced)

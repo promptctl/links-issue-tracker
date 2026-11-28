@@ -42,6 +42,17 @@ func writtenFacts(t *testing.T, ev telemetry.Event) map[string]any {
 	return writtenEvent(t, ev).Facts
 }
 
+// prefixed is the facts under one namespace.
+func prefixed(facts map[string]any, prefix string) map[string]any {
+	out := map[string]any{}
+	for key, value := range facts {
+		if strings.HasPrefix(key, prefix) {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // writtenEvent is ev as its line reads back: what a reader of the events file
 // gets, nulls and empty lists as written.
 func writtenEvent(t *testing.T, ev telemetry.Event) telemetry.Event {

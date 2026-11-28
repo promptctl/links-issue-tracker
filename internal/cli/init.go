@@ -234,7 +234,7 @@ func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) erro
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, "  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id>` to customize, `lit workflows edit --when <moment>` to add one)\n"); err != nil {
+	if _, err := fmt.Fprintf(w, "  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id>` to customize, `lit workflows new --when <moment>` to add one)\n"); err != nil {
 		return err
 	}
 	return nil

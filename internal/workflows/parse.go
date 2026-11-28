@@ -16,9 +16,9 @@ import (
 )
 
 // frontmatter is the YAML shape of a definition file's header: the keys this
-// lit reads, and every other key in Unread. [LAW:one-source-of-truth] the
-// fields are the one list of keys lit reads; Unread is whatever they do not
-// declare, so no second list can drift from them.
+// lit reads, and every other key in Unread. [LAW:one-source-of-truth] Unread
+// is whatever these fields do not declare, so what lit reads and what it
+// reports unread can never disagree.
 //
 // The two keys stay yaml nodes until readKey reads them: a node is zero only
 // for a key left out, so a key written empty (`labels: []`, a bare `when:`)
@@ -33,7 +33,7 @@ type frontmatter struct {
 
 // ParseMoment reads one `when:` entry into the moment it names, the one reader
 // of that spelling for the frontmatter, `lit workflows dry-run --when` and
-// `lit workflows edit --when`: `enter <state>` or `exit <state>` is a Crossing
+// `lit workflows new --when`: `enter <state>` or `exit <state>` is a Crossing
 // of one of the lifecycle's state nodes, read through its own gate
 // (model.ParseStateNode, so `in-progress` is in_progress), and any other text
 // is an event of the Catalog. Case and runs
@@ -101,10 +101,11 @@ func splitFrontmatter(content string) (header string, body string, found bool, e
 }
 
 // parseDefinition turns one file's raw content into a Definition and the
-// warnings reading it produced. Every file yields a definition, and one lit
-// cannot fire on its keys is never, holding its id all the same: dropping it
-// would fire a farther layer's definition of that id in its place. What fires
-// for an id is what its nearest author wrote, or nothing.
+// warnings reading it produced. Every file yields a definition under the id
+// its header declares, or the id its path gives when the header cannot be
+// read that far, and one lit cannot fire on its keys never fires, holding
+// that id all the same: dropping it would fire a farther layer's definition
+// of that id in its place.
 // [LAW:no-silent-failure] every reason a file fires less than it says is a
 // warning, and a broken file never breaks a lit invocation.
 //
@@ -137,13 +138,15 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 		return fmt.Sprintf("label %q can never match: %v", entry, err)
 	}, warn)
 	warnings = append(warnings, labelWarnings...)
+	// [LAW:nothing-unseen] the unread-keys case comes first, so a file carrying
+	// only `events:` is told the spelling lit reads, not that it has no keys.
 	switch {
 	case len(meta.Unread) > 0:
 		warnings = append(warnings, warn(unreadKeysMessage(slices.Sorted(maps.Keys(meta.Unread)))))
 	case meta.When.IsZero() && meta.Labels.IsZero():
 		warnings = append(warnings, warn("no activation keys (when/labels): the definition never fires"))
 	case whenHolds && labelsHold:
-		def.Activation = Activation{keys: &Keys{When: when, Labels: labels}}
+		def.Activation = Activation{When: when, Labels: labels}
 	}
 	return def, warnings
 }
@@ -154,6 +157,8 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 // refused; when none is left — `[]`, a bare key, every entry refused, or no
 // list at all — the key can never hold, and holds is false.
 func readKey[T comparable](name string, node yaml.Node, read func(string) (T, error), refused func(entry string, err error) string, warn func(string) Warning) (key Key[T], holds bool, warnings []Warning) {
+	// [LAW:types-are-the-program] a zero node is a key left out; a key written
+	// empty is a node with no entries, so the two never read alike.
 	if node.IsZero() {
 		return Key[T]{}, true, nil
 	}
@@ -179,7 +184,7 @@ type Refusal struct {
 
 // Entries reads one key's entries, wherever they are written — a definition's
 // `when:` or `labels:`, or the same key's flags on `lit workflows dry-run` and
-// `edit` — each text through read, each value kept once in the order first
+// `new` — each text through read, each value kept once in the order first
 // written, and each text read refuses as a Refusal. A repeat names nothing
 // the key lacks, so `labels: [x, X]` is one label and one reason.
 // [LAW:single-enforcer] every surface reads a key's entries here, so they all
@@ -202,8 +207,9 @@ func Entries[T comparable](texts []string, read func(string) (T, error)) ([]T, [
 
 // readFrontmatter is a file's header decoded as far as it decodes, its body,
 // and the error that stopped the read, if one did. A yaml type error still
-// decodes the rest, so a file whose `when:` is a scalar keeps the id it
-// declares.
+// decodes the rest, so a file whose `name:` is a list keeps the id it
+// declares. [LAW:no-silent-failure] the file holds its author's id, so a
+// farther layer's definition of that id does not fire in its place.
 func readFrontmatter(content string) (frontmatter, string, error) {
 	var meta frontmatter
 	header, body, _, err := splitFrontmatter(content)

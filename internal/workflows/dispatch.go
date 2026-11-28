@@ -12,7 +12,7 @@ import (
 // stable ID order, the guidance they inject, and why the firing trace was not
 // recorded, nil when it was or when nothing fired.
 type Firing struct {
-	Fired    []Definition
+	Fired    []Match
 	Guidance string
 	Untraced error
 }
@@ -29,7 +29,7 @@ type Firing struct {
 // guidance are values; Fire's one effect is the firing trace.
 //
 // When at least one definition fires, Fire records a firing trace (trace.go)
-// — which definitions fired and why (Definition.MatchReasons) — under the
+// — which definitions fired and why (Match.Reasons) — under the
 // workspace's shared trace storage, so `lit workflows dry-run` and a real
 // invocation explain "why did this fire" through the same mechanism. An
 // occasion nothing matches leaves no trace: the directory stays proportional
@@ -40,12 +40,15 @@ type Firing struct {
 func Fire(set Set, ws workspace.Info, o Occasion) Firing {
 	firing := Firing{Fired: set.Matching(o)}
 	var guidance strings.Builder
-	for _, def := range firing.Fired {
-		guidance.WriteString(Interpolate(def.Body, o.IssueID) + "\n")
+	for _, match := range firing.Fired {
+		guidance.WriteString(Interpolate(match.Definition.Body, o.IssueID) + "\n")
 	}
 	firing.Guidance = guidance.String()
+	// [LAW:dataflow-not-control-flow] exception: the trace is skipped when
+	// nothing fired, so the trace directory grows with guidance fired, not
+	// with every lit invocation.
 	if len(firing.Fired) > 0 {
-		_, firing.Untraced = recordFiring(ws, o, firing.Fired)
+		firing.Untraced = recordFiring(ws, o, firing.Fired)
 	}
 	return firing
 }

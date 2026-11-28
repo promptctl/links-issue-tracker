@@ -119,26 +119,20 @@ type Definition struct {
 	Path   string
 }
 
-// Activation is when a definition fires: on the occasions its Keys select,
-// or never. [LAW:types-are-the-program] its zero value is never, so a
-// Definition no parse built (Set.Lookup's miss) fires on nothing, and only
-// the key reader builds one that fires.
-type Activation struct{ keys *Keys }
-
-// Keys is the keys a definition fires on, and false for one that never
-// fires; why it never fires is in the load's warnings for its file
-// (Set.WarningsFor).
-func (a Activation) Keys() (Keys, bool) {
-	if a.keys == nil {
-		return Keys{}, false
-	}
-	return *a.keys, true
-}
-
-// Keys is a definition's activation keys, at least one of them written.
-type Keys struct {
+// Activation is when a definition fires: its two keys. A key left out
+// constrains nothing, and a definition fires on an occasion when every key it
+// writes holds. [LAW:types-are-the-program] so the zero Activation, writing
+// neither key, is the one way to say never: it is what a file lit cannot fire
+// on reads as (why is in the load's warnings for its file, Set.WarningsFor),
+// and what a Definition no parse built (Set.Lookup's miss) holds.
+type Activation struct {
 	When   Key[Moment]
 	Labels Key[string]
+}
+
+// Never reports whether the activation writes no key, so fires on nothing.
+func (a Activation) Never() bool {
+	return len(a.When.entries) == 0 && len(a.Labels.entries) == 0
 }
 
 // Key is one activation key's entries: alternatives, any one of which the
@@ -149,8 +143,9 @@ type Keys struct {
 type Key[T comparable] struct{ entries []T }
 
 // Entries is what the key lists, each once, in the order first written; none
-// for a key left out.
-func (k Key[T]) Entries() []T { return k.entries }
+// for a key left out. It is a copy, so no caller can reorder a loaded
+// definition's key.
+func (k Key[T]) Entries() []T { return slices.Clone(k.entries) }
 
 // Warning is a non-fatal problem found while loading definitions. Loading
 // never fails a lit invocation; every problem becomes a warning for the
@@ -199,26 +194,29 @@ func layerRank(source templates.Source) int {
 	panic(fmt.Sprintf("workflows: no specificity rank for layer %q", source))
 }
 
+// byLayer is items least specific first, by the layer source names, each
+// layer keeping the order items gave it. [LAW:one-source-of-truth] definitions
+// and warnings are read in one layer order, so the two views cannot disagree.
+func byLayer[T any](items []T, source func(T) templates.Source) []T {
+	out := slices.Clone(items)
+	slices.SortStableFunc(out, func(a, b T) int {
+		return cmp.Compare(layerRank(source(a)), layerRank(source(b)))
+	})
+	return out
+}
+
 // DefinitionsByLayer returns the definitions least specific first: embedded
 // defaults, then global, then project, each layer in ID order. It is a display
 // view; Matching keeps the Set's ID order, so what fires and in what order is
 // unchanged.
 func (s Set) DefinitionsByLayer() []Definition {
-	out := slices.Clone(s.Definitions)
-	slices.SortStableFunc(out, func(a, b Definition) int {
-		return cmp.Compare(layerRank(a.Source), layerRank(b.Source))
-	})
-	return out
+	return byLayer(s.Definitions, func(def Definition) templates.Source { return def.Source })
 }
 
-// WarningsByLayer returns the warnings in the same least-specific-first order
-// as DefinitionsByLayer, keeping load order within each layer.
+// WarningsByLayer returns the warnings least specific first, as
+// DefinitionsByLayer orders definitions, keeping load order within each layer.
 func (s Set) WarningsByLayer() []Warning {
-	out := slices.Clone(s.Warnings)
-	slices.SortStableFunc(out, func(a, b Warning) int {
-		return cmp.Compare(layerRank(a.Source), layerRank(b.Source))
-	})
-	return out
+	return byLayer(s.Warnings, func(warning Warning) templates.Source { return warning.Source })
 }
 
 // WarningsFor is the load's warnings about the file the definition was read

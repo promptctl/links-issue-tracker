@@ -116,8 +116,8 @@ func TestMatchesSingleKeys(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.def.Matches(tc.occasion); got != tc.want {
-				t.Fatalf("Matches(%+v) = %v, want %v", tc.occasion, got, tc.want)
+			if got := fires(tc.def, tc.occasion); got != tc.want {
+				t.Fatalf("fires on %+v = %v, want %v", tc.occasion, got, tc.want)
 			}
 		})
 	}
@@ -141,8 +141,8 @@ func TestMatchesAndAcrossKeys(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := def.Matches(tc.occasion); got != tc.want {
-				t.Fatalf("Matches(%+v) = %v, want %v", tc.occasion, got, tc.want)
+			if got := fires(def, tc.occasion); got != tc.want {
+				t.Fatalf("fires on %+v = %v, want %v", tc.occasion, got, tc.want)
 			}
 		})
 	}
@@ -155,7 +155,7 @@ func TestSetMatchingKeepsIDOrder(t *testing.T) {
 		{ID: "c", Activation: firesOn([]Moment{EventShowTicket}, nil)},
 	}}
 	got := set.Matching(Occasion{Moments: []Moment{EventShowTicket}})
-	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "c" {
+	if len(got) != 2 || got[0].Definition.ID != "a" || got[1].Definition.ID != "c" {
 		t.Fatalf("Matching() = %+v, want [a c]", got)
 	}
 }

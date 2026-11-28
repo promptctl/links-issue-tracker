@@ -10,7 +10,7 @@ verbatim to the calling command's stdout** when a matching lifecycle moment occu
 lifecycle is enforced or gated — this package only answers 'which guidance is in place, and does it
 apply to this moment'." There is no execution environment, no subprocess, no env vars passed to a
 workflow, and no timeouts, because nothing is ever run. The only subprocess anywhere in this
-subsystem is `$EDITOR`, launched by `lit workflows edit` (`internal/cli/workflows_edit.go`).
+subsystem is `$EDITOR`, launched by `lit workflows edit` and `new` (`internal/cli/workflows_edit.go`).
 
 ---
 
@@ -145,7 +145,7 @@ Each `when:` entry is one **moment**. The types (`internal/workflows/workflows.g
   and event fact shares.
 
 `ParseMoment(text) (Moment, error)` (`internal/workflows/parse.go`) is the one reader of the
-spelling, for the frontmatter, `lit workflows dry-run --when` and `lit workflows edit --when`. It
+spelling, for the frontmatter, `lit workflows dry-run --when` and `lit workflows new --when`. It
 admits only moments this lit fires, and refuses anything else with an error saying why:
 
 - The text is lowercased and split with `strings.Fields`. Blank text is the error
@@ -200,7 +200,7 @@ calls it for `when:` (read by `ParseMoment`) and `labels:` (read by `model.Norma
 
 `Entries[T](texts, read) ([]T, []Refusal)` (`internal/workflows/parse.go`) is the one reader of a
 key's entries wherever they are written — a definition's `when:` or `labels:`, and the same key's
-flags on `lit workflows dry-run` and `edit` (`readKeyFlags`, §7.3, §8.2): each text through
+flags on `lit workflows dry-run` and `new` (`readKeyFlags`, §7.3, §8.2): each text through
 `read`, each value kept once in the order first written, and each text `read` refuses returned as
 `Refusal{Text, Err}`. Pinned `TestParseDefinitionKeyWithNoReadableEntryNeverWidens` (`labels: []`,
 a bare `when:` and `when: []` beside the other key each never fire) and
@@ -227,13 +227,13 @@ never fires** (`internal/workflows/parse.go`, `parseDefinition`; pinned
 
 ### 1.8 Never firing
 
-A definition's `Activation` (`internal/workflows/workflows.go`) is a struct,
-`Activation{keys *Keys}`, whose zero value never fires. `Activation.Keys() (Keys, bool)` is the
-keys a definition fires on and true, or false for one that never fires, why being in the load's
-warnings for its file (`Set.WarningsFor`); the surfaces that list definitions by moment and label
-read it. `Keys{When Key[Moment]; Labels Key[string]}` has at least one key written. `Key[T]`'s
-zero value is a key left out, which constrains nothing, and `Key.Entries()` is what a key lists,
-each once, in the order first written — none for a key left out. Only `parseDefinition`
+A definition's `Activation` (`internal/workflows/workflows.go`) is its two keys,
+`Activation{When Key[Moment]; Labels Key[string]}`. `Key[T]`'s zero value is a key left out,
+which constrains nothing, and `Key.Entries()` is a copy of what a key lists, each once, in the
+order first written — none for a key left out. The zero `Activation`, writing neither key, is the
+one way to say never: `Activation.Never()` reports it, why being in the load's warnings for the
+file (`Set.WarningsFor`), and since a key's match reasons are the entries the occasion carried, an
+activation writing no key has none to give and fires on nothing (§4). Only `parseDefinition`
 (`internal/workflows/parse.go`) builds an `Activation` that fires, when both keys hold as read
 (§1.6a), so a `Definition{}` no parse built — `Set.Lookup`'s miss — fires on nothing. The
 definition keeps the zero `Activation` when the file:
@@ -406,7 +406,9 @@ head of its When section in (`internal/cli/workflows.go`, `Moments()` in
 `ParseMoment` admits an event only when it is in `Catalog()` (`internal/workflows/parse.go`).
 Catalog names are contractually lowercase snake_case, unique, and each reads back through `ParseMoment` as the
 event, never as a crossing — enforced by `internal/workflows/events_test.go`
-(`TestCatalogNamesAreStableContractShaped`).
+(`TestCatalogNamesAreStableContractShaped`). Every `Event` the package's source declares is in
+`Catalog()`, so a when: entry can name each one; Go cannot enumerate a type's constants, so
+`TestCatalogListsEveryDeclaredEvent` reads the declarations from the source.
 
 Events are a **stable contract deliberately decoupled from command names** — commands may be
 renamed freely, the event name is what user definitions bind to
@@ -495,13 +497,13 @@ a bulk command.
 
 ## 4. Matching semantics
 
-`Definition.Matches(Occasion)` (`internal/workflows/match.go`) is `len(d.MatchReasons(o)) > 0`,
-and `MatchReasons` asks the definition's `Activation`, so firing and its reasons are one
-computation:
+`Set.Matching(Occasion) []Match` (`internal/workflows/match.go`) returns, in the set's ID order, a
+`Match{Definition, Reasons}` for each definition whose `MatchReasons(o)` is non-empty, so firing
+and its reasons are one computation and the reasons travel with the definition they fired:
 
 ```
-Activation.Keys() false → nil (never fires)
-Activation.Keys() true  → keys.reasons(o): k.When.carried(o.Moments) holds AND k.Labels.carried(o.Labels) holds
+MatchReasons(o) = Activation.reasons(o): When.carried(o.Moments) holds AND Labels.carried(o.Labels) holds,
+                  each carried entry a reason; nil otherwise, and nil for an activation writing no key
 ```
 
 - **OR within a key, AND across keys.** A key left out constrains nothing
@@ -558,8 +560,8 @@ This is the single shared "why" computation behind both the real firing trace an
 
 `workflows.Fire(set Set, ws workspace.Info, o Occasion) Firing`
 (`internal/workflows/dispatch.go`). It matches the occasion against a `Set` the command already
-loaded and returns `Firing{Fired []Definition; Guidance string; Untraced error}`: the definitions
-that fired, in `Set.Matching`'s ID order; the guidance they inject, each body `Interpolate`d with
+loaded and returns `Firing{Fired []Match; Guidance string; Untraced error}`: the matches that
+fired, each a definition and its reasons, in `Set.Matching`'s ID order; the guidance they inject, each body `Interpolate`d with
 the occasion's `IssueID`, followed by a newline, one after another; and why the firing trace was
 not recorded, nil when it was or when nothing fired. The command prints the guidance where its own
 output puts it (§3.3). Its one effect is the firing trace (§6).
@@ -712,9 +714,9 @@ reads apart from one missing the field (`internal/workflows/trace.go`). `recorde
 Registered as a workspace-only command (no store access) at `internal/cli/register.go`:
 
 - Summary: *"See the work lifecycle and the guidance active at each point (`workflows show <id>`
-  resolved, `edit <id>` to customize, `edit --when <moment>` to add one, `dry-run` to explain a
+  resolved, `edit <id>` to customize, `new --when <moment>` to add one, `dry-run` to explain a
   hypothetical)"*
-- GroupID `guidance`; declared subcommands for completion: `show`, `edit`, `dry-run`.
+- GroupID `guidance`; declared subcommands for completion: `show`, `edit`, `new`, `dry-run`.
 - Run via `r.wsCmdPipeline(withWDAcquire(workflowsDispatch))` (`internal/cli/register.go`), i.e. it resolves a workspace from
   the working directory but never opens the store (`internal/cli/register.go`,
   `internal/cli/cli.go`).
@@ -722,7 +724,7 @@ Registered as a workspace-only command (no store access) at `internal/cli/regist
 Usage string (`internal/cli/workflows.go`):
 
 ```
-usage: lit workflows [show <id> | edit <id> | edit [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
+usage: lit workflows [show <id> | edit <id> | new [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
 ```
 
 Routing (`internal/cli/workflows.go`): a help flag gives the family usage;
@@ -735,11 +737,13 @@ arity:
 |---|---|
 | 0 positionals | overview, `positionals: 0` (`internal/cli/workflows.go`) |
 | `show <id>` | one definition resolved, `positionals: 1` (`internal/cli/workflows.go`) |
-| `edit <id>`, or `edit` with `--when`/`--label` | open/override, or scaffold a new definition, `positionals: 1` (`internal/cli/workflows.go`) |
+| `edit <id>` | open or override a loaded definition, `positionals: 1` (`internal/cli/workflows.go`) |
+| `new` with `--when`/`--label` | scaffold a new definition, `positionals: 0` (`internal/cli/workflows.go`) |
 | `dry-run` | hypothetical, `positionals: 0` (`internal/cli/workflows_dryrun.go`) |
 
-All four set `usage: workflowsUsage`. Overview and show register no flags beyond the implicit
-`--help`; edit registers the repeatable `--when` and `--label` (§8), and dry-run its own (§7.3).
+All five set `usage: workflowsUsage`. Overview, show and edit register no flags beyond the
+implicit `--help`; new registers the repeatable `--when` and `--label` (§8), and dry-run its own
+(§7.3).
 
 ### 7.1 Bare `lit workflows` — the overview
 
@@ -750,7 +754,7 @@ All four set `usage: workflowsUsage`. Overview and show register no flags beyond
 2. Blank line + `When` (`internal/cli/workflows.go`), then one line per moment of
    `workflows.Moments()`, spelled by its `String()` and indented 2 spaces
    (`internal/cli/workflows.go`). A definition is listed at a moment when `boundAt` finds it: its
-   `Activation.Keys()` fires and its `When.Entries()` contain the moment; one that never fires is
+   `Activation.When.Entries()` contain the moment; one that never fires writes no key, so is
    bound nowhere.
 3. Blank line + `Labels` (`internal/cli/workflows.go`). If no definition binds any label, prints
    `  (none bound)` (`internal/cli/workflows.go`). Otherwise one line per label.
@@ -806,7 +810,7 @@ labels: <keys.Labels.Entries() comma-space joined, or ->
 
 `orDash` renders `-` for an empty value (`internal/cli/workflows.go`); `when:` lists each entry
 in its canonical spelling via `workflows.Spellings` (`internal/cli/workflows.go`), and a key left
-out shows `-`. A definition that never fires (`Activation.Keys()` false) prints the one line
+out shows `-`. A definition that never fires (`Activation.Never()`) prints the one line
 `fires: never` in place of the `when:` and `labels:` lines. Then
 `printWorkflowWarnings(w, set.WarningsFor(def))` prints the load's warnings about that
 definition's file (`Set.WarningsFor` matches a warning's source and path), under the heading the
@@ -833,7 +837,7 @@ Any stray positional after `dry-run` is a `UsageError` with `workflowsUsage`
 
 `readKeyFlags(whenTexts, labelTexts)` (`internal/cli/workflows.go`) reads the flags as a
 definition's own keys read their entries, through `workflows.Entries` (§1.6a), for `dry-run` and
-`edit` alike; the occasion is `Occasion{Moments, IssueID: --issue, Labels}` from what it returns.
+`new` alike; the occasion is `Occasion{Moments, IssueID: --issue, Labels}` from what it returns.
 A repeated value counts once: `--label Foo --label foo --when show_ticket --when SHOW_TICKET`
 gives `occasion: when=show_ticket labels=foo issue=-` (pinned
 `TestWorkflowsDryRunReadsARepeatedFlagOnce`). Every `--when` value goes through
@@ -910,34 +914,36 @@ exactly one line. Pinned `internal/cli/workflows_test.go`
 
 ---
 
-## 8. `lit workflows edit` — overriding and scaffolding
+## 8. `lit workflows edit` and `new` — overriding and scaffolding
 
-`workflowsEditLeaf` (`internal/cli/workflows.go`) takes a definition's id, to open or override it,
-or the keys of a new one, to scaffold it — one or the other, never both: the positional only ever
-names a definition, so no text is read two ways. It registers two repeatable string-array flags:
+`workflowsEditLeaf` (`internal/cli/workflows.go`) takes one loaded definition's id and no flag, to
+open or override it (§8.1). `workflowsNewLeaf` takes the keys of a new definition and no
+positional, to scaffold it (§8.2); the family table tells the two apart, so no text is read two
+ways. `new` registers two repeatable string-array flags:
 
 | Flag | Help text |
 |---|---|
-| `--when <moment>` | `Scaffold a new definition firing at this moment, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable)` |
-| `--label <name>` | `Scaffold a new definition firing on tickets carrying this label (repeatable)` |
+| `--when <moment>` | `A moment the new definition fires at, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable)` |
+| `--label <name>` | `A label the new definition's tickets carry (repeatable)` |
 
 Which path runs:
 
 | Arguments | Path |
 |---|---|
-| one positional, no `--when`/`--label` | `runWorkflowsEdit(inv, ws, id)` (§8.1) |
-| no positional, at least one `--when` or `--label` | `editFreshDefinition(inv, ws, when, labels)` (§8.2) |
-| an id and flags, or neither | `UsageError` with `workflowsUsage` (exit 2) |
+| `edit` and one positional | `runWorkflowsEdit(inv, ws, id)` (§8.1) |
+| `new` and at least one `--when` or `--label` | `newDefinition(inv, ws, when, labels)` (§8.2) |
+| `edit` with no id, an extra positional or a flag; `new` with no flag or a positional | `UsageError` with `workflowsUsage` (exit 2) |
 
-Pinned `internal/cli/workflows_test.go`, `TestWorkflowsEditRejectsOversuppliedArguments`
-(`done extra`, `done --when "enter closed"`, and no arguments).
+Pinned `internal/cli/workflows_test.go`, `TestWorkflowsEditAndNewRejectWhatTheirShapeLacks`
+(`edit done extra`, `edit done --when "enter closed"`, bare `edit`, bare `new`, and
+`new done --when "enter closed"`).
 
 ### 8.1 `edit <id>` — an existing definition
 
 `runWorkflowsEdit` (`internal/cli/workflows_edit.go`) loads the Set and looks the id up. An id
-nothing loaded holds is a `model.ValidationError` (exit 3) naming the flags that scaffold a new
+nothing loaded holds is a `model.ValidationError` (exit 3) naming the command that scaffolds a new
 definition, and nothing is written:
-``no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows edit --when "enter closed"`, `--label needs-design`, or both``
+``no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows new --when "enter closed"`, `--label needs-design`, or both``
 (pinned `TestWorkflowsEditRefusesAnIDNothingHolds`: `lit workflows edit "enter closed"` is that
 refusal). A loaded id goes to `editExistingDefinition` (`internal/cli/workflows_edit.go`):
 
@@ -962,9 +968,9 @@ refusal). A loaded id goes to `editExistingDefinition` (`internal/cli/workflows_
   `workflows: no raw default for the %s layer (it is the override target, not a source to copy from)`
   (`internal/workflows/scaffold.go`; pinned `internal/workflows/scaffold_test.go`).
 
-### 8.2 `edit --when <moment>... --label <name>...` — a new definition
+### 8.2 `new --when <moment>... --label <name>...` — a new definition
 
-`editFreshDefinition` (`internal/cli/workflows_edit.go`) scaffolds a new project-layer
+`newDefinition` (`internal/cli/workflows_edit.go`) scaffolds a new project-layer
 definition firing on exactly the keys the flags name:
 
 1. `readKeyFlags` (`internal/cli/workflows.go`, §7.3) reads the flags as a definition's own keys
@@ -972,7 +978,7 @@ definition firing on exactly the keys the flags name:
    `model.NormalizeLabel`, each value once. The first value naming no moment lit fires or no label
    a ticket can carry is a `model.ValidationError` (exit 3), `--when %q is not a moment lit fires: %v`
    or `--label %q is not a label a ticket can carry: %v`, and nothing is written (pinned
-   `TestWorkflowsEditRefusesWhatNoKeyReads`: `--when "enter reveiw"`, `--when work_finished`,
+   `TestWorkflowsNewRefusesWhatNoKeyReads`: `--when "enter reveiw"`, `--when work_finished`,
    `--when "exit in progress"`, `--when "enter closed" --label a,b`, and `--label "  "`).
    A `--label` is a label whatever it reads like: `--label "exit plan"` binds the label
    `exit plan`.
@@ -982,7 +988,7 @@ definition firing on exactly the keys the flags name:
    (`workflows.DefaultID`), so the loaded set is asked for it first, and an id a loaded
    definition holds is a `MergeConflictError` (exit 5) naming it:
    ``cannot scaffold %q: the %s definition %s already holds that id, and two definitions of one id never both fire (run `lit workflows edit %s` to change that one)``
-   (pinned `TestWorkflowsEditRefusesAnIDALoadedDefinitionHolds`: `--label done` and
+   (pinned `TestWorkflowsNewRefusesAnIDALoadedDefinitionHolds`: `--label done` and
    `--label Phase-Impl` name the embedded default, and `--when "enter closed"` names a project
    `notes.md` declaring `id: enter-closed`). Then `refuseExistingFile` refuses an existing file
    (§8.4), with the name as its subject.
@@ -1001,10 +1007,10 @@ Filename:
   one file: after `--when "enter in_progress"`, `--when "Enter In-Progress"` is refused as a
   `MergeConflictError` (exit 5), as is `--when show_ticket --when "enter closed"` after
   `--when "enter closed" --when show_ticket`, and `--label a --label b` after
-  `--label b --label a` (pinned `TestWorkflowsEditScaffoldsOneFilePerBinding`). A slug is lossy,
+  `--label b --label a` (pinned `TestWorkflowsNewScaffoldsOneFilePerBinding`). A slug is lossy,
   so distinct bindings can share a name (`--label "needs design"`, `--label needs-design`); the
   second is refused naming the first.
-- Worked examples (pinned `TestWorkflowsEditScaffoldsADefinitionOnTheKeysItNames`, each loading
+- Worked examples (pinned `TestWorkflowsNewScaffoldsADefinitionOnTheKeysItNames`, each loading
   with no warning and binding exactly its keys): `--when show_ticket` → `show_ticket.md`;
   `--when "enter review"` → `enter-review.md`; `--when "Enter  In_Progress"` →
   `enter-in_progress.md`; `--when "exit in-progress"` → `exit-in_progress.md`;
@@ -1039,7 +1045,7 @@ double-quoted by `strconv.Quote` — `when: ["enter closed"]`, `when: ["exit pla
 The `<when line>`'s example is
 `[enter review, exit plan, show_ticket]  # entering or exiting a state, or an event` and the
 `<labels line>`'s `[needs-design, blocked]`, each commented out after its key's name when the
-edit leaves that key out. The same lines are written every time; whether each key is live is the value that varies.
+flags leave that key out. The same lines are written every time; whether each key is live is the value that varies.
 
 Line-by-line: `internal/workflows/scaffold.go` (`---`) (the four comment lines) (when line, live
 or commented) (labels line, live or commented) (id comment) (name comment) (closing `---`) (body

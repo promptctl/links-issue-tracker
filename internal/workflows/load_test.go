@@ -184,7 +184,7 @@ func TestLoadMalformedFileWarnsWithoutBreakingOthers(t *testing.T) {
 	if _, ok := findDefinition(set, "good"); !ok {
 		t.Fatalf("Definitions = %+v, want \"good\" to have loaded", set.Definitions)
 	}
-	if broken, ok := findDefinition(set, "broken"); !ok || broken.Activation != (Activation{}) {
+	if broken, ok := findDefinition(set, "broken"); !ok || !broken.Activation.Never() {
 		t.Fatalf("Definitions = %+v, want \"broken\" loaded, never firing", set.Definitions)
 	}
 	if len(set.Warnings) != 1 || set.Warnings[0].Path != "broken.md" {
@@ -218,10 +218,10 @@ func TestLoadUnreadableOverrideHoldsItsID(t *testing.T) {
 
 			set := Load(testEnv(), workspaceRoot)
 			done, ok := findDefinition(set, "done")
-			if !ok || done.Source != templates.SourceProject || done.Activation != (Activation{}) {
+			if !ok || done.Source != templates.SourceProject || !done.Activation.Never() {
 				t.Fatalf("done = %+v, want the project's file holding the id, never firing", done)
 			}
-			if fired := set.Matching(Occasion{Moments: []Moment{entering("closed")}}); slices.ContainsFunc(fired, func(d Definition) bool { return d.ID == "done" }) {
+			if fired := set.Matching(Occasion{Moments: []Moment{entering("closed")}}); slices.ContainsFunc(fired, func(m Match) bool { return m.Definition.ID == "done" }) {
 				t.Fatalf("Matching(enter closed) = %+v, want the shipped done held off", fired)
 			}
 			if len(set.Warnings) != 1 || set.Warnings[0].Source != templates.SourceProject {
@@ -238,7 +238,7 @@ func TestLoadKeylessFileLoadsWithWarningAndNeverFires(t *testing.T) {
 
 	set := Load(testEnv(), workspaceRoot)
 	readme, ok := findDefinition(set, "readme")
-	if !ok || readme.Activation != (Activation{}) {
+	if !ok || !readme.Activation.Never() {
 		t.Fatalf("Definitions = %+v, want the definition loaded, never firing", set.Definitions)
 	}
 	if len(set.Warnings) != 1 || !strings.Contains(set.Warnings[0].Message, "never fires") {
@@ -251,7 +251,7 @@ func TestLoadKeylessFileLoadsWithWarningAndNeverFires(t *testing.T) {
 		everything.Moments = append(everything.Moments, event)
 	}
 	for _, matched := range set.Matching(everything) {
-		if matched.ID == "readme" {
+		if matched.Definition.ID == "readme" {
 			t.Fatalf("Matching(%+v) matched the keyless definition, want it to fire nowhere", everything)
 		}
 	}

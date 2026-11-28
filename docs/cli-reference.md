@@ -1305,7 +1305,7 @@ Mutation commands point back here at the moment of need: the text success output
 ### `lit workflows`
 
 ```text
-lit workflows [show <id> | edit <id> | edit [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
+lit workflows [show <id> | edit <id> | new [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
 ```
 
 See [Workflows](workflows.md) for what the feature is, and run `lit workflows --help`
@@ -1317,7 +1317,7 @@ any bound labels, annotated with the definitions active at each and their source
 `show <id>` resolves one definition fully, with the warnings for its file, and says
 `fires: never` for one lit cannot fire. `edit <id>` opens a project-layer definition, or
 copies a global or embedded one into the project as its override.
-`edit --when <moment> --label <name>` scaffolds a fresh definition firing on the keys
+`new --when <moment> --label <name>` scaffolds a fresh definition firing on the keys
 it names, each flag repeatable and refused where a definition's entry would be, in a
 file named after what it binds, whatever order the flags came in. That name is the new
 definition's id, so a name a loaded definition already holds is refused, naming that

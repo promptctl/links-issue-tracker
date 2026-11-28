@@ -126,8 +126,9 @@ func loadLayer(fsys fs.FS, source templates.Source) ([]Definition, []Warning) {
 }
 
 // readDefinition is one *.md file as a definition. A file that cannot be read
-// never fires, under the id its path gives, like any file lit cannot fire on, so
-// a farther layer's definition of that id does not fire in its place.
+// never fires, under the id its path gives, like any file lit cannot fire on.
+// [LAW:no-silent-failure] it still holds that id, so a farther layer's
+// definition of that id does not fire in its place.
 func readDefinition(fsys fs.FS, path string, source templates.Source) (Definition, []Warning) {
 	raw, err := fs.ReadFile(fsys, path)
 	if err != nil {

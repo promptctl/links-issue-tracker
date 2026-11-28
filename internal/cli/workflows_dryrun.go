@@ -58,7 +58,7 @@ func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
 	return err
 }
 
-func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows.Occasion) error {
+func printDryRunMatches(w io.Writer, matched []workflows.Match, o workflows.Occasion) error {
 	if _, err := fmt.Fprintf(w, "Fired (%d)\n", len(matched)); err != nil {
 		return err
 	}
@@ -66,12 +66,11 @@ func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows
 		_, err := fmt.Fprintln(w, "  (none)")
 		return err
 	}
-	for _, def := range matched {
-		reasons := def.MatchReasons(o)
-		if _, err := fmt.Fprintf(w, "  %s  [%s]\n", formatDefinitionRef(def), strings.Join(reasons, ", ")); err != nil {
+	for _, match := range matched {
+		if _, err := fmt.Fprintf(w, "  %s  [%s]\n", formatDefinitionRef(match.Definition), strings.Join(match.Reasons, ", ")); err != nil {
 			return err
 		}
-		body := workflows.Interpolate(def.Body, o.IssueID)
+		body := workflows.Interpolate(match.Definition.Body, o.IssueID)
 		for _, line := range strings.Split(body, "\n") {
 			if _, err := fmt.Fprintf(w, "    %s\n", line); err != nil {
 				return err
