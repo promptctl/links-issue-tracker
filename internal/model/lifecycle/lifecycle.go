@@ -142,11 +142,19 @@ func Walk(l Lifecycle, visit func(Lifecycle) bool) {
 	}
 }
 
-func ParseState(value string) (State, error) {
+// stateName is a state's name as every state parser reads it: any case,
+// surrounding space ignored, and in-progress for in_progress.
+// [LAW:one-source-of-truth] ParseState and ParseStateNode spell names alike.
+func stateName(value string) string {
 	normalized := strings.TrimSpace(strings.ToLower(value))
 	if normalized == "in-progress" {
-		normalized = "in_progress"
+		return string(InProgress)
 	}
+	return normalized
+}
+
+func ParseState(value string) (State, error) {
+	normalized := stateName(value)
 	if slices.Contains(States(), State(normalized)) {
 		return State(normalized), nil
 	}

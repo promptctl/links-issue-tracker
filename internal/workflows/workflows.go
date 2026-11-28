@@ -17,9 +17,9 @@
 // Within a key the listed values are alternatives (OR); a definition with
 // both requires both (AND). A key left out constrains nothing. A file lit
 // cannot fire on its keys — it declares neither, or a key lit does not read,
-// or a key none of whose entries lit can read, or its frontmatter is
-// malformed — loads as a definition that never fires: it is visible, it holds
-// its id, and the load warns why.
+// or a key written with no entry lit reads, or its frontmatter is malformed —
+// loads as a definition that never fires: it is visible, it holds its id, and
+// the load warns why.
 //
 // Workflow bodies are injected text, never executed, and no lifecycle is
 // enforced or gated — this package only answers "which guidance is in place,
@@ -50,9 +50,9 @@ type Moment interface {
 	moment()
 }
 
-// Side is which way a crossing goes through its state. A transition between
-// two states is exit-of-one plus enter-of-the-other; there is no separate
-// transition concept.
+// Side is which way a crossing goes through its state. A transition exits
+// the states the ticket leaves and enters the ones it reaches, so what it
+// fires is those crossings, never a name for the transition.
 type Side string
 
 const (
@@ -60,41 +60,27 @@ const (
 	Exit  Side = "exit"
 )
 
-// Crossing is a ticket's state changing into or out of one of States.
-// [LAW:one-type-per-behavior] a status and a phase are crossed the same way.
+// Crossing is a ticket entering or leaving one of the lifecycle's state
+// nodes (model.StateNodes). [LAW:one-type-per-behavior] a status, a phase and
+// a retention are crossed the same way.
 type Crossing struct {
 	Side  Side
-	State string
+	State model.StateNode
 }
 
-func (c Crossing) String() string { return string(c.Side) + " " + c.State }
+func (c Crossing) String() string { return string(c.Side) + " " + c.State.String() }
 func (Crossing) moment()          {}
 
-// States is every state a ticket can be in, in the order the work passes
-// through them: the statuses, with the phases inside in_progress after it.
-// [LAW:one-source-of-truth] both come from the lifecycle, so a state it adds
-// is crossable here with no edit.
-func States() []string {
-	var states []string
-	for _, status := range model.States() {
-		states = append(states, string(status))
-		if status == model.StateInProgress {
-			for _, phase := range model.Phases() {
-				states = append(states, string(phase))
-			}
-		}
-	}
-	return states
-}
-
 // Moments is every moment this lit fires, in display order: each event in the
-// catalog, then entering and exiting each of States.
+// catalog, then entering and exiting each of the lifecycle's state nodes.
+// [LAW:one-source-of-truth] the nodes are the lifecycle's own, so a state it
+// adds is a moment here with no edit.
 func Moments() []Moment {
 	var moments []Moment
 	for _, event := range Catalog() {
 		moments = append(moments, event)
 	}
-	for _, state := range States() {
+	for _, state := range model.StateNodes() {
 		moments = append(moments, Crossing{Side: Enter, State: state}, Crossing{Side: Exit, State: state})
 	}
 	return moments
@@ -134,37 +120,37 @@ type Definition struct {
 }
 
 // Activation is when a definition fires: on the occasions its Keys select,
-// or Never. [LAW:types-are-the-program] the union is sealed, so "holds its id
-// but cannot fire" is a value a definition carries, not a shape some fields
-// happen to take.
-type Activation interface {
-	// reasons is the definition's entries the occasion carries, spelled
-	// when:<moment> and label:<name>, when the definition fires on it; nil
-	// when it does not.
-	reasons(o Occasion) []string
+// or never. [LAW:types-are-the-program] its zero value is never, so a
+// Definition no parse built (Set.Lookup's miss) fires on nothing, and only
+// the key reader builds one that fires.
+type Activation struct{ keys *Keys }
+
+// Keys is the keys a definition fires on, and false for one that never
+// fires; why it never fires is in the load's warnings for its file
+// (Set.WarningsFor).
+func (a Activation) Keys() (Keys, bool) {
+	if a.keys == nil {
+		return Keys{}, false
+	}
+	return *a.keys, true
 }
 
-// Keys is a definition that fires on its keys. Parsing builds it only with at
-// least one key listing an entry, and a key that lists none constrains
-// nothing.
+// Keys is a definition's activation keys, at least one of them written.
 type Keys struct {
-	When   []Moment
-	Labels []string
+	When   Key[Moment]
+	Labels Key[string]
 }
 
-// Never is a definition lit never fires. Why is in the load's warnings for
-// its file (Set.WarningsFor).
-type Never struct{}
+// Key is one activation key's entries: alternatives, any one of which the
+// occasion carrying satisfies the key. Its zero value is a key left out,
+// which constrains nothing. The key reader builds a written key only with an
+// entry lit reads, so a key written with none is no Key: its definition is
+// never.
+type Key[T comparable] struct{ entries []T }
 
-func (Never) reasons(Occasion) []string { return nil }
-
-// Keys is the entries the definition fires at, for the surfaces that list
-// definitions by moment and label: its Keys, and none for one that never
-// fires.
-func (d Definition) Keys() Keys {
-	keys, _ := d.Activation.(Keys)
-	return keys
-}
+// Entries is what the key lists, each once, in the order first written; none
+// for a key left out.
+func (k Key[T]) Entries() []T { return k.entries }
 
 // Warning is a non-fatal problem found while loading definitions. Loading
 // never fails a lit invocation; every problem becomes a warning for the

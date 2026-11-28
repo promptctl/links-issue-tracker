@@ -7,20 +7,22 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
-// This file is the command surface's half of the occasion layer: one pure
-// occasion-builder function per read moment, and one for every transition,
-// so the payload a command hands to workflows.Fire is unit-testable with
-// no store, no app, no mocks. [LAW:effects-at-boundaries] The commands
-// themselves (cli.go, workable.go, next.go) call these and dispatch the
-// result, through dispatchOccasion, at the point their mutation or read
-// already succeeded — a rename of the command touches only its registration,
-// never the moment it fires. [LAW:one-source-of-truth]
+// This file is the command surface's half of the occasion layer: the pure
+// builders of what each command fires — one for a ticket a command read or
+// changed, one for the backlog, one for a created ticket, one for every
+// transition — so the payload a command fires is unit-testable with no store,
+// no app, no mocks. [LAW:effects-at-boundaries] A read or a single write fires
+// through dispatchOccasion; a transition or a comment, which a bulk run makes
+// once per ticket, fires through its command's loadedWorkflows.fire, which
+// dispatchOccasion also calls. [LAW:one-source-of-truth]
 
-// showTicketOccasion is what `lit show` fires: it always names one ticket, so
-// labels travel with it, and viewing carries no state transition of its own.
-func showTicketOccasion(issue model.Issue) workflows.Occasion {
+// ticketOccasion is what a command fires for the one ticket it acted on: the
+// event it fires, and the ticket's id and labels. `lit show` fires
+// show_ticket, `lit next` next_pulled, `lit update` ticket_updated (status
+// never moves through update) and `lit comment add` comment_added.
+func ticketOccasion(event workflows.Event, issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
-		Moments: []workflows.Moment{workflows.EventShowTicket},
+		Moments: []workflows.Moment{event},
 		IssueID: issue.ID,
 		Labels:  model.RawTexts(issue.Labels),
 	}
@@ -33,65 +35,29 @@ func backlogOccasion() workflows.Occasion {
 	return workflows.Occasion{Moments: []workflows.Moment{workflows.EventShowBacklog}}
 }
 
-// nextPulledOccasion is what `lit next` fires when it has a ticket to hand
-// back — the only case it is ever called, since the empty-selection path
-// returns an error before any occasion is built.
-func nextPulledOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Moments: []workflows.Moment{workflows.EventNextPulled},
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// ticketCreatedOccasion is what `lit new` and `lit followup` fire once the
-// issue exists, carrying whatever labels it was created with.
-func ticketCreatedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Moments: []workflows.Moment{workflows.EventTicketCreated},
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// ticketUpdatedOccasion is what `lit update` fires. Status never moves
-// through update (runUpdate rejects --status), so this never carries a
-// crossing.
-func ticketUpdatedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Moments: []workflows.Moment{workflows.EventTicketUpdated},
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
-// commentAddedOccasion is what `lit comment add` fires, naming the ticket the
-// comment landed on.
-func commentAddedOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Moments: []workflows.Moment{workflows.EventCommentAdded},
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
+// createdOccasion is what `lit new` and `lit followup` fire once the ticket
+// exists: ticket_created, then the entries into every state it starts in, as
+// a statechart's initial transition enters its initial configuration — so a
+// ticket created open enters open and live.
+func createdOccasion(issue model.Issue) workflows.Occasion {
+	occasion := ticketOccasion(workflows.EventTicketCreated, issue)
+	occasion.Moments = append(occasion.Moments, crossings(nil, model.ConfigurationOf(issue, nil))...)
+	return occasion
 }
 
 // ticketState is where a ticket stands at one moment: its row, which carries
-// its status, the history read beside it, and the phase that history puts it
-// in — empty when it has none, which is every ticket not in progress.
+// its status and retention, the history read beside it, and the phase that
+// history puts it in — empty when it has none, which is every ticket not in
+// progress.
 type ticketState struct {
 	issue  model.Issue
 	events []model.IssueEvent
 	phase  model.Phase
 }
 
-// states is every state the ticket is in, outermost first: its status, then
-// the phase inside it.
-func (t ticketState) states() []string {
-	states := []string{string(t.issue.State())}
-	if t.phase != "" {
-		states = append(states, string(t.phase))
-	}
-	return states
+// configuration is every state node the ticket is in (model.ConfigurationOf).
+func (t ticketState) configuration() []model.StateNode {
+	return model.ConfigurationOf(t.issue, t.events)
 }
 
 // transitionOccasion is the single builder every transition routes through —
@@ -102,33 +68,38 @@ func (t ticketState) states() []string {
 //
 // What a transition fires is the crossings it made, never a name for the
 // command: `lit done` and `lit close` both enter closed, and a definition
-// bound to `enter closed` cannot tell them apart. The states are read as a
-// statechart reads nested states, a phase being a state inside in_progress:
-// a transition exits the states the ticket was in and no longer is, and
-// enters the ones it is in now and was not — exits first, then entries, each
-// outermost first. So a start from open exits open and enters in_progress and
-// plan, a done from review exits in_progress and review and enters closed,
-// and a phase move exits and enters one phase each, never leaving
-// in_progress. A transition that leaves the ticket's state where it was — a
-// reclaim, a move to the phase it is in, an archive or delete or their
-// undoing — crosses nothing, so only a definition bound by labels alone fires
-// on it. [LAW:dataflow-not-control-flow] every transition builds its occasion
-// the same way; what it crossed is the value that varies.
+// bound to `enter closed` cannot tell them apart. So a start from open exits
+// open and enters in_progress and plan, a done from review exits review and
+// in_progress and enters closed, a phase move exits and enters one phase each,
+// never leaving in_progress, and an archive exits live and enters archived. A
+// transition that leaves the ticket where it was — a reclaim, a move to the
+// phase it is in — crosses nothing, so only a definition bound by labels alone
+// fires on it. [LAW:dataflow-not-control-flow] every transition builds its
+// occasion the same way; what it crossed is the value that varies.
 func transitionOccasion(before, after ticketState) workflows.Occasion {
 	return workflows.Occasion{
-		Moments: append(crossings(workflows.Exit, before.states(), after.states()), crossings(workflows.Enter, after.states(), before.states())...),
+		Moments: crossings(before.configuration(), after.configuration()),
 		IssueID: after.issue.ID,
 		Labels:  model.RawTexts(after.issue.Labels),
 	}
 }
 
-// crossings are the side's crossings of every state in from that is not in
-// to, kept in from's order.
-func crossings(side workflows.Side, from, to []string) []workflows.Moment {
+// crossings are the moves from one configuration to another in the order a
+// statechart makes them: the exits of every node from has and to lacks,
+// innermost first, then the entries of every node to has and from lacks,
+// outermost first. Each region's nodes run outermost first
+// (model.ConfigurationOf), so a done from review exits review, then
+// in_progress, then enters closed.
+func crossings(from, to []model.StateNode) []workflows.Moment {
 	var out []workflows.Moment
-	for _, state := range from {
-		if !slices.Contains(to, state) {
-			out = append(out, workflows.Crossing{Side: side, State: state})
+	for _, node := range slices.Backward(from) {
+		if !slices.Contains(to, node) {
+			out = append(out, workflows.Crossing{Side: workflows.Exit, State: node})
+		}
+	}
+	for _, node := range to {
+		if !slices.Contains(from, node) {
+			out = append(out, workflows.Crossing{Side: workflows.Enter, State: node})
 		}
 	}
 	return out

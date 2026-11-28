@@ -28,8 +28,9 @@ Run `lit workflows --help` for the rest: the frontmatter keys and what a minimal
 definition looks like, how `when:` and `labels:` combine (alternatives within one key,
 all-of across them), the built-in states and the events with the command that fires
 each one today, and what the `show`, `edit` and `dry-run` subcommands do.
-`lit workflows edit <id-or-point>` is how you start a new definition or override a
-shipped one; it scaffolds the file and prints its path.
+`lit workflows edit <id>` overrides a shipped definition, and
+`lit workflows edit --when <moment> --label <name>` starts a new one; each scaffolds
+the file and prints its path.
 
 Run `lit workflows` with no arguments to see the lifecycle spine of the repository
 you're in: every moment a `when:` entry can name and every label anything is bound to,

@@ -45,64 +45,53 @@ func TestRawDefaultRejectsProjectLayer(t *testing.T) {
 	}
 }
 
-func TestScaffoldFreshOmitsTheLiveKeysCommentedExample(t *testing.T) {
-	raw, live, err := ScaffoldFresh("enter closed")
-	content := string(raw)
-	if err != nil || live != `when: ["enter closed"]` {
-		t.Fatalf("ScaffoldFresh(enter closed) live = %q, err = %v; want the when line", live, err)
+// A key the scaffold binds is written live and a key it leaves out is written
+// commented, as a reference to the format.
+func TestScaffoldFreshWritesEachKeyLiveOrCommented(t *testing.T) {
+	cases := map[string]struct {
+		when          []Moment
+		labels        []string
+		live, comment []string
+	}{
+		"a moment":  {[]Moment{entering("closed")}, nil, []string{`when: ["enter closed"]`}, []string{"# labels: [needs-design, blocked]"}},
+		"a label":   {nil, []string{"needs-design"}, []string{`labels: ["needs-design"]`}, []string{"# when: [enter review, exit plan, show_ticket]  # entering or exiting a state, or an event"}},
+		"both keys": {[]Moment{exiting("plan"), EventShowTicket}, []string{"a", "b"}, []string{`when: ["exit plan", "show_ticket"]`, `labels: ["a", "b"]`}, nil},
 	}
-	if !strings.Contains(content, "\n"+live+"\n") {
-		t.Fatalf("ScaffoldFresh() = %q, want the live when line uncommented", content)
-	}
-	if strings.Contains(content, "# when: [") {
-		t.Fatalf("ScaffoldFresh() = %q, want no redundant commented when example", content)
-	}
-	if !strings.Contains(content, "# labels: [needs-design, blocked]") {
-		t.Fatalf("ScaffoldFresh() = %q, want the labels key shown commented as reference", content)
-	}
-
-	raw, live, err = ScaffoldFresh("Needs-Design")
-	content = string(raw)
-	if err != nil || live != `labels: ["needs-design"]` {
-		t.Fatalf("ScaffoldFresh(Needs-Design) live = %q, err = %v; want the canonical labels line", live, err)
-	}
-	if !strings.Contains(content, "# when: [enter review, exit plan, show_ticket]") {
-		t.Fatalf("ScaffoldFresh() = %q, want the when key shown commented as reference", content)
-	}
-	if strings.Contains(content, "# labels: [") {
-		t.Fatalf("ScaffoldFresh() = %q, want no redundant commented labels example", content)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			content := string(ScaffoldFresh(tc.when, tc.labels))
+			for _, line := range append(tc.live, tc.comment...) {
+				if !strings.Contains(content, "\n"+line+"\n") {
+					t.Fatalf("ScaffoldFresh() = %q, want the line %q", content, line)
+				}
+			}
+			if len(tc.when) > 0 && strings.Contains(content, "\n# when: [") || len(tc.labels) > 0 && strings.Contains(content, "\n# labels: [") {
+				t.Fatalf("ScaffoldFresh() = %q, want no commented example beside a live key", content)
+			}
+		})
 	}
 }
 
-// A fresh scaffold parses, once it is filled in, to the definition its live
-// line names and loads with no warning: its commented reference is the
-// format this lit reads, and the point is written in the spelling it reads
-// back as.
+// A fresh scaffold parses to the definition its keys name and loads with no
+// warning: its commented reference is the format this lit reads, and each
+// entry is written in the spelling it reads back as.
 func TestScaffoldFreshParsesCleanly(t *testing.T) {
-	cases := map[string]Keys{
-		"enter closed":      {When: []Moment{Crossing{Side: Enter, State: "closed"}}},
-		"Exit  In-Progress": {When: []Moment{Crossing{Side: Exit, State: "in_progress"}}},
-		"show_ticket":       {When: []Moment{EventShowTicket}},
-		"Needs-Design":      {Labels: []string{"needs-design"}},
+	cases := map[string]struct {
+		when   []Moment
+		labels []string
+	}{
+		"a crossing": {[]Moment{entering("closed")}, nil},
+		"a phase":    {[]Moment{exiting("in_progress"), entering("review")}, nil},
+		"an event":   {[]Moment{EventShowTicket}, nil},
+		"a label":    {nil, []string{"needs-design"}},
+		"both keys":  {[]Moment{entering("archived")}, []string{"needs-design", "exit plan"}},
 	}
-	for point, want := range cases {
-		raw, _, err := ScaffoldFresh(point)
-		if err != nil {
-			t.Fatalf("ScaffoldFresh(%q) error = %v", point, err)
-		}
-		def, warnings := parseDefinition(string(raw), "fresh.md", templates.SourceProject)
-		if len(warnings) != 0 || !reflect.DeepEqual(def.Activation, want) {
-			t.Fatalf("parseDefinition(ScaffoldFresh(%q)) = %+v, warnings %v; want %+v and a clean load", point, def.Activation, warnings, want)
-		}
-	}
-}
-
-// A point that is neither a when: entry nor a label is refused rather than
-// scaffolded into a file that could never fire.
-func TestScaffoldFreshRefusesAPointThatIsNeither(t *testing.T) {
-	for _, point := range []string{"  ", "a,b"} {
-		if raw, live, err := ScaffoldFresh(point); err == nil {
-			t.Fatalf("ScaffoldFresh(%q) = %q, %q; want a refusal", point, raw, live)
-		}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			def, warnings := parseDefinition(string(ScaffoldFresh(tc.when, tc.labels)), "fresh.md", templates.SourceProject)
+			if want := firesOn(tc.when, tc.labels); len(warnings) != 0 || !reflect.DeepEqual(def.Activation, want) {
+				t.Fatalf("parseDefinition(ScaffoldFresh()) = %+v, warnings %v; want %+v and a clean load", def.Activation, warnings, want)
+			}
+		})
 	}
 }

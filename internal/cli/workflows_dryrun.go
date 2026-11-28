@@ -19,56 +19,37 @@ import (
 // trace uses (internal/workflows/trace.go), so a hypothetical here and a real
 // firing explain themselves identically. [LAW:single-enforcer]
 //
-// Each flag is read through the gate a definition's own entry is: --when by
-// workflows.ParseMoment, --label by model.NormalizeLabel, so a dry-run is
-// asked in the spelling a definition is written in and compared in the form
-// a real occasion carries. A value naming no moment lit fires, or no label a
-// ticket can carry, is refused rather than explained: no real occasion
-// carries it, so a match on it would describe nothing that can happen.
-// [LAW:parse-dont-validate]
+// Each flag is read as a definition's own key reads its entries
+// (readKeyFlags), so a dry-run is asked in the spelling a definition is
+// written in and compared in the form a real occasion carries. A value naming
+// no moment lit fires, or no label a ticket can carry, is refused rather than
+// explained: no real occasion carries it, so a match on it would describe
+// nothing that can happen. [LAW:parse-dont-validate]
 //
-// Never writes a firing trace itself — nothing actually fired, there is
-// nothing to record — and needs no store access, only the loaded definition
-// Set, so it stays a wsCmd like the rest of `lit workflows`.
+// It loads the definitions as a firing command does (loadWorkflows), so the
+// load's warnings reach stderr and the event here too: the surface that
+// explains why something fires names what can never fire.
+// [LAW:nothing-unseen] It never writes a firing trace — nothing actually
+// fired, there is nothing to record — and needs no store access, so it stays
+// a wsCmd like the rest of `lit workflows`.
 func workflowsDryRunLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows dry-run")
 	when := fs.StringArray("when", "A moment the hypothetical occasion carries, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable: a start from open is exit open, enter in_progress, enter plan)")
 	labels := fs.StringArray("label", "Label the hypothetical ticket carries (repeatable)")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
-	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
-		occasion, err := dryRunOccasion(*when, *labels, model.ID(*issue))
+	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
+		moments, carried, err := readKeyFlags(*when, *labels)
 		if err != nil {
 			return err
 		}
-		set := workflows.Load(inv.Env, ws.RootDir)
-		matched := set.Matching(occasion)
+		occasion := workflows.Occasion{Moments: moments, IssueID: model.ID(*issue), Labels: carried}
+		matched := loadWorkflows(ctx, inv, ws).set.Matching(occasion)
 
 		if err := printDryRunOccasion(inv.Stdout, occasion); err != nil {
 			return err
 		}
 		return printDryRunMatches(inv.Stdout, matched, occasion)
 	}}
-}
-
-// dryRunOccasion is the hypothetical occasion the flags describe, or the
-// first flag value that names nothing a real occasion can carry.
-func dryRunOccasion(when, labels []string, issueID model.ID) (workflows.Occasion, error) {
-	occasion := workflows.Occasion{IssueID: issueID}
-	for _, value := range when {
-		moment, err := workflows.ParseMoment(value)
-		if err != nil {
-			return workflows.Occasion{}, model.ValidationError{Message: fmt.Sprintf("--when %q is not a moment lit fires: %v", value, err)}
-		}
-		occasion.Moments = append(occasion.Moments, moment)
-	}
-	for _, value := range labels {
-		label, err := model.NormalizeLabel(value)
-		if err != nil {
-			return workflows.Occasion{}, model.ValidationError{Message: fmt.Sprintf("--label %q is not a label a ticket can carry: %v", value, err)}
-		}
-		occasion.Labels = append(occasion.Labels, label)
-	}
-	return occasion, nil
 }
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {

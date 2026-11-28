@@ -602,18 +602,20 @@ A command that fires a [workflow](workflows.md) occasion records it:
 `lit new`, `lit followup`, `lit show`, `lit update`, `lit comment add`,
 `lit next` when it hands back a ticket, `lit backlog`, the lifecycle
 transitions `lit start`, `lit done`, `lit close`, `lit open` and `lit phase`,
-and `lit archive`, `lit unarchive`, `lit delete` and `lit restore`, which cross
-no state. A `lit bulk` transition and `lit bulk comment` record `workflows.when`
-and `workflows.fired` on each item, under `bulk.item.facts`, and
-`workflows.warnings` once, on the command. A command that failed before the
-occasion fired, such as a refused transition, has no `workflows.when` or
-`workflows.fired`.
+and the retention moves `lit archive`, `lit unarchive`, `lit delete` and
+`lit restore`. `lit workflows dry-run` records `workflows.warnings`. A
+`lit bulk` transition and `lit bulk comment` record `workflows.when`,
+`workflows.fired` and `workflows.trace_error` on each item, under
+`bulk.item.facts`, and `workflows.warnings` once, on the command. A command
+that failed before the occasion fired, such as a refused transition, has no
+`workflows.when`, `workflows.fired` or `workflows.trace_error`.
 
 | Key | Meaning |
 | --- | --- |
-| `workflows.when` | The moments the occasion carried, each spelled as a `when:` entry: `["show_ticket"]` for `lit show`; for a transition, every state it left and then every state it entered, each outermost first — `["exit open", "enter in_progress", "enter plan"]` for a start from `open`, `["exit in_progress", "exit review", "enter closed"]` for a `lit done` from `review`. `[]` when a transition moved no state, as an archive or delete never does. |
+| `workflows.when` | The moments the occasion carried, each spelled as a `when:` entry: `["show_ticket"]` for `lit show`; `["ticket_created", "enter open", "enter live"]` for `lit new`; for a transition, every state it left, innermost first, then every state it entered, outermost first — `["exit open", "enter in_progress", "enter plan"]` for a start from `open`, `["exit review", "exit in_progress", "enter closed"]` for a `lit done` from `review`, `["exit live", "enter archived"]` for `lit archive`. `[]` when a transition moved no state, as a takeover never does. |
 | `workflows.fired` | The ids of the definitions that fired, in the order their guidance was printed; `[]` when none did. |
-| `workflows.warnings` | Every warning loading the definitions produced, one line each as the command printed it on stderr: a file lit could not read, a key it does not read, an entry naming nothing lit fires. `[]` when there were none. |
+| `workflows.trace_error` | Why the firing trace of the definitions that fired could not be written, as the command printed it on stderr; `null` when it was written or nothing fired. |
+| `workflows.warnings` | Every warning loading the definitions produced, one line each as the command printed it on stderr: a file lit could not read, a key it does not read, a key written with no entry, an entry naming nothing lit fires. `[]` when there were none. |
 
 ## What `lit upgrade` records
 

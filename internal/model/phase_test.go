@@ -2,9 +2,11 @@ package model
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/model/stamp"
 )
 
@@ -92,6 +94,49 @@ func TestPhaseOf(t *testing.T) {
 			got, has := PhaseOf(tc.issue(t), tc.events)
 			if got != tc.want || has != tc.wantHas {
 				t.Errorf("PhaseOf() = (%q, %v), want (%q, %v)", got, has, tc.want, tc.wantHas)
+			}
+		})
+	}
+}
+
+// TestConfigurationOf: a ticket is in its status, the phase its history puts
+// it at while it has one, and its retention, each region outermost first.
+func TestConfigurationOf(t *testing.T) {
+	leaf := func(state State) func(t *testing.T) Issue {
+		return func(t *testing.T) Issue { return hydratedIssue(t, Issue{ID: "T", IssueType: "task"}, state) }
+	}
+	cases := []struct {
+		name   string
+		issue  func(t *testing.T) Issue
+		events []IssueEvent
+		want   []string
+	}{
+		{"an open leaf", leaf(StateOpen), nil, []string{"open", "live"}},
+		{"an in-progress leaf at its phase", leaf(StateInProgress),
+			[]IssueEvent{startEvent("e1", 1), phaseEvent("e2", 2, PhasePlan, PhaseReview)}, []string{"in_progress", "review", "live"}},
+		{"a phase a newer lit named, as recorded", leaf(StateInProgress),
+			[]IssueEvent{startEvent("e1", 1), phaseEvent("e2", 2, PhasePlan, "design")}, []string{"in_progress", "design", "live"}},
+		{"an in-progress epic has no phase", func(t *testing.T) Issue {
+			epic, err := HydrateAllOf(Issue{ID: "E", IssueType: "epic"}, []Issue{hydratedIssue(t, Issue{ID: "c", IssueType: "task"}, StateInProgress)})
+			if err != nil {
+				t.Fatalf("HydrateAllOf() error = %v", err)
+			}
+			return epic
+		}, nil, []string{"in_progress", "live"}},
+		{"an archived closed leaf", func(t *testing.T) Issue {
+			issue := hydratedIssue(t, Issue{ID: "T", IssueType: "task"}, StateClosed)
+			issue.SetRetention(lifecycle.Archived{At: phaseClock})
+			return issue
+		}, nil, []string{"closed", "archived"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, node := range ConfigurationOf(tc.issue(t), tc.events) {
+				got = append(got, node.String())
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ConfigurationOf() = %v, want %v", got, tc.want)
 			}
 		})
 	}

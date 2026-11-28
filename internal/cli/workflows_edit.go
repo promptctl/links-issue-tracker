@@ -7,37 +7,28 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// runWorkflowsEdit is `lit workflows edit <id-or-point>`'s whole job:
-// scaffold a project-layer file to customize guidance, then hand it to the
-// user. Two shapes, chosen by whether target resolves against an already-
-// loaded definition: [LAW:dataflow-not-control-flow] both run the same
-// scaffold-then-open pipeline; only which content gets scaffolded varies.
+// runWorkflowsEdit is `lit workflows edit <id>`: hand the user the
+// project-layer file of the definition with that id. A project-layer
+// definition is already its own file — open it directly. A global or embedded
+// one is copied verbatim into a new project-layer file at its own relative
+// path, the override, ready to edit. An id nothing loaded holds is refused,
+// naming the flags that scaffold a new definition (editFreshDefinition).
 //
-//   - An existing id: override it. A project-layer definition is already the
-//     override — open it directly. A global/embedded one gets copied
-//     verbatim into a new project-layer file at its own relative path, ready
-//     to edit.
-//   - Anything else: treated as a lifecycle point (a moment spelled as a
-//     `when:` entry — `enter <state>`, `exit <state>`, an event — or, falling
-//     through, a label) with no definition bound there yet. A fresh file is
-//     scaffolded under `.lit/workflows/`, commented to show each activation
-//     key, with the requested one live.
-//
-// Neither shape ever overwrites an existing file — scaffolding always writes
-// only under the project's `.lit/workflows/`, never into the global or
-// embedded layers, and never clobbers unrelated project content silently.
-// [LAW:no-silent-failure]
-func runWorkflowsEdit(inv Invocation, ws workspace.Info, target string) error {
-	set := workflows.Load(inv.Env, ws.RootDir)
-	if def, ok := set.Lookup(target); ok {
-		return editExistingDefinition(inv, ws, def)
+// Scaffolding never overwrites an existing file — it writes only under the
+// project's `.lit/workflows/`, never into the global or embedded layers, and
+// never clobbers unrelated project content silently. [LAW:no-silent-failure]
+func runWorkflowsEdit(inv Invocation, ws workspace.Info, id string) error {
+	def, ok := workflows.Load(inv.Env, ws.RootDir).Lookup(id)
+	if !ok {
+		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids); to scaffold a new one, name when it fires: `lit workflows edit --when \"enter closed\"`, `--label needs-design`, or both", id)}
 	}
-	return editFreshDefinition(inv, ws, target)
+	return editExistingDefinition(inv, ws, def)
 }
 
 func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Definition) error {
@@ -61,22 +52,24 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
-// editFreshDefinition scaffolds a definition for a point nothing is bound to
-// yet, and says which key it bound the point under, so a point read as a
-// label rather than the moment it was meant to name shows as one.
-func editFreshDefinition(inv Invocation, ws workspace.Info, point string) error {
-	content, live, err := workflows.ScaffoldFresh(point)
+// editFreshDefinition is `lit workflows edit --when <moment> --label <name>`:
+// scaffold a new project-layer definition firing on the keys the flags name,
+// read as a definition's own keys are (readKeyFlags), in a file named after
+// them.
+func editFreshDefinition(inv Invocation, ws workspace.Info, whenTexts, labelTexts []string) error {
+	when, labels, err := readKeyFlags(whenTexts, labelTexts)
 	if err != nil {
 		return err
 	}
-	projectPath := projectWorkflowPath(ws, scaffoldFilenameSlug(point)+".md")
-	if err := refuseExistingFile(projectPath, point); err != nil {
+	name := scaffoldName(when, labels)
+	projectPath := projectWorkflowPath(ws, name+".md")
+	if err := refuseExistingFile(projectPath, name); err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, point, content); err != nil {
+	if err := writeWorkflowScaffold(projectPath, name, workflows.ScaffoldFresh(when, labels)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition (%s) at %s\n", live, projectPath); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
 		return err
 	}
 	return openOrPrintWorkflowFile(inv, projectPath)
@@ -166,12 +159,23 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 // and "enter in_progress" to "enter-in_progress.md".
 var unsafeScaffoldFilenameChars = regexp.MustCompile(`[^a-z0-9_-]+`)
 
-func scaffoldFilenameSlug(input string) string {
-	slug := strings.ToLower(strings.TrimSpace(input))
-	slug = unsafeScaffoldFilenameChars.ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
+// scaffoldName is a fresh scaffold's file name, without its .md: each entry
+// it binds, as the file spells it, made filename-safe, joined by "+".
+// [LAW:one-source-of-truth] the name comes from what the file binds, so two
+// spellings of one binding (`enter in-progress`, `Enter In_Progress`) name one
+// file, and the second scaffold is refused as the conflict it is.
+func scaffoldName(when []workflows.Moment, labels []string) string {
+	parts := append(workflows.Spellings(when), labels...)
+	for i, part := range parts {
+		parts[i] = scaffoldFilenameSlug(part)
+	}
+	return strings.Join(parts, "+")
+}
+
+func scaffoldFilenameSlug(entry string) string {
+	slug := strings.Trim(unsafeScaffoldFilenameChars.ReplaceAllString(entry, "-"), "-")
 	if slug == "" {
-		return "point"
+		return "definition"
 	}
 	return slug
 }

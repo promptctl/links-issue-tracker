@@ -10,7 +10,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
-	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
 // prefixed is the facts under one namespace.
@@ -50,22 +49,25 @@ func bulkItemWorkflowFacts(t *testing.T) map[string]any {
 
 // A definition bound to `enter <state>` or `exit <state>` fires on every
 // transition that makes that crossing, through every command that makes one,
-// single or bulk, and on nothing else: lit start exits open and enters plan
-// inside in_progress, a phase move exits one phase and enters the next
-// without leaving in_progress, a move to the phase the ticket is in crosses
-// nothing, lit done and lit close both enter closed — so both print the
-// shipped done guidance — and lit open exits it. The command's event names the
-// crossings and what fired on them, the shipped defaults among them.
+// single or bulk, and on nothing else. The crossings run as a statechart takes
+// them, exits innermost first and entries outermost first: lit new enters
+// open and live, lit start exits open and enters in_progress and the plan
+// inside it, a phase move exits one phase and enters the next without leaving
+// in_progress, a move to the phase the ticket is in crosses nothing, lit done
+// and lit close both enter closed — so both print the shipped done guidance —
+// lit open exits it, and the retention verbs move the ticket between live,
+// archived and deleted. The command's event names the crossings and what
+// fired on them, the shipped defaults among them.
 func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	var bound []string
-	for _, state := range workflows.States() {
+	for _, state := range model.StateNodes() {
 		for _, side := range []string{"enter", "exit"} {
-			id := side + "-" + state
+			id := side + "-" + state.String()
 			bound = append(bound, id)
-			writeCLIWorkflow(t, dir, id+".md", "---\nwhen: ["+side+" "+state+"]\n---\nFIRED "+id+" on <id>")
+			writeCLIWorkflow(t, dir, id+".md", "---\nwhen: ["+side+" "+state.String()+"]\n---\nFIRED "+id+" on <id>")
 		}
 	}
 	for _, step := range []struct {
@@ -75,6 +77,10 @@ func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 		when   []any
 		fired  []any
 	}{
+		// The new ticket's id is not known ahead, so its guidance is matched
+		// up to the id.
+		{[]string{"new", "--title", "Third", "--topic", "demo", "--type", "epic"}, "", workflowFacts,
+			[]any{"ticket_created", "enter open", "enter live"}, []any{"enter-live", "enter-open"}},
 		{[]string{"start", first, "--by", "agent"}, first, workflowFacts,
 			[]any{"exit open", "enter in_progress", "enter plan"}, []any{"enter-in_progress", "enter-plan", "exit-open", "phase-plan"}},
 		{[]string{"phase", first, "--to", "impl"}, first, workflowFacts,
@@ -86,15 +92,23 @@ func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 		{[]string{"phase", first, "--to", "merge"}, first, workflowFacts,
 			[]any{}, []any{}},
 		{[]string{"done", first}, first, workflowFacts,
-			[]any{"exit in_progress", "exit merge", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-merge"}},
+			[]any{"exit merge", "exit in_progress", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-merge"}},
 		{[]string{"open", first}, first, workflowFacts,
 			[]any{"exit closed", "enter open"}, []any{"enter-open", "exit-closed"}},
 		{[]string{"close", first, "--resolution", "wontfix"}, first, workflowFacts,
 			[]any{"exit open", "enter closed"}, []any{"done", "enter-closed", "exit-open"}},
+		{[]string{"archive", first}, first, workflowFacts,
+			[]any{"exit live", "enter archived"}, []any{"enter-archived", "exit-live"}},
+		{[]string{"unarchive", first}, first, workflowFacts,
+			[]any{"exit archived", "enter live"}, []any{"enter-live", "exit-archived"}},
+		{[]string{"delete", first}, first, workflowFacts,
+			[]any{"exit live", "enter deleted"}, []any{"enter-deleted", "exit-live"}},
+		{[]string{"restore", first}, first, workflowFacts,
+			[]any{"exit deleted", "enter live"}, []any{"enter-live", "exit-deleted"}},
 		{[]string{"bulk", "start", "--ids", second, "--by", "agent"}, second, bulkItemWorkflowFacts,
 			[]any{"exit open", "enter in_progress", "enter plan"}, []any{"enter-in_progress", "enter-plan", "exit-open", "phase-plan"}},
 		{[]string{"bulk", "done", "--ids", second}, second, bulkItemWorkflowFacts,
-			[]any{"exit in_progress", "exit plan", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-plan"}},
+			[]any{"exit plan", "exit in_progress", "enter closed"}, []any{"done", "enter-closed", "exit-in_progress", "exit-plan"}},
 	} {
 		out := runCLIInDir(t, dir, step.args...)
 		for _, id := range bound {
@@ -116,7 +130,7 @@ func TestEveryCrossingFiresOnTheTransitionThatMakesIt(t *testing.T) {
 		if got := workflowFacts(t)["workflows.warnings"]; !reflect.DeepEqual(got, []any{}) {
 			t.Errorf("lit %v workflows.warnings = %v, want none", step.args, got)
 		}
-		want := map[string]any{"workflows.when": step.when, "workflows.fired": step.fired}
+		want := map[string]any{"workflows.when": step.when, "workflows.fired": step.fired, "workflows.trace_error": nil}
 		got := step.facts(t)
 		if step.args[0] != "bulk" {
 			delete(got, "workflows.warnings")

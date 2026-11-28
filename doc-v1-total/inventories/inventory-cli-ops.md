@@ -156,7 +156,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
   - `  Up to date: <entries>` for `unchanged` (`init.go`)
   - `  Skipped: <entries>` for `skipped` (`init.go`)
   - Entry labels: `pre-push hook` (`init.go`).
-- Final line, always: ``  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id-or-point>` to customize)`` (`init.go`).
+- Final line, always: ``  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id>` to customize, `lit workflows edit --when <moment>` to add one)`` (`init.go`).
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
 

@@ -24,6 +24,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -423,7 +424,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, createdOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -537,7 +538,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, createdOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -1337,7 +1338,7 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := dispatchOccasion(ctx, inv, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketOccasion(workflows.EventShowTicket, detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
@@ -1523,7 +1524,7 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv, ap.Workspace, ticketOccasion(workflows.EventTicketUpdated, applied.Issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, applied.Issue); err != nil {
@@ -2226,7 +2227,7 @@ func addComment(ctx context.Context, ap *app.App, flows loadedWorkflows, issueID
 		return model.Comment{}, "", err
 	}
 	telemetry.Set(ctx, "comment.id", comment.ID.Raw())
-	return comment, flows.fire(ctx, commentAddedOccasion(issue)), nil
+	return comment, flows.fire(ctx, ticketOccasion(workflows.EventCommentAdded, issue)), nil
 }
 
 func commentRmLeaf() appLeaf {

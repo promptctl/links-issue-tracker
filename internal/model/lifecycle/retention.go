@@ -64,6 +64,13 @@ func Thaw(r Retention) (RetentionAction, bool) {
 	}
 }
 
+// Retentions lists every retention variant in the order a ticket leaves the
+// flow: live, archived, deleted. [LAW:one-source-of-truth] every listing of
+// the retentions derives from it.
+func Retentions() []Retention {
+	return []Retention{Live{}, Archived{}, Deleted{}}
+}
+
 // RetentionName is the one rendering of a retention variant as a word. Display
 // surfaces name the state an issue is in; without a single namer each surface
 // would match the variants itself and they would drift the day a fourth variant

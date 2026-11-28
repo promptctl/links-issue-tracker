@@ -347,6 +347,44 @@ anything else **panics** `illegal Retention value %T` (`retention.go`).
 Round trip pinned by `TestRetentionTimestampsRoundTrip` (`retention_test.go`);
 impostor refusal by `TestRetentionTimestampsRefusesImpostors`.
 
+### `Retentions() []Retention` — `retention.go`
+Every retention variant, in the order a ticket leaves the flow: `Live{}`, `Archived{}`,
+`Deleted{}`. Every listing of the retentions derives from it, the state nodes among them (§1.11).
+
+## 1.11 State nodes — `state_node.go`
+
+`type StateNode struct{ name string }` — `state_node.go`. One state of a ticket's lifecycle, as a
+statechart names its states: a status, a phase (nested inside `PhasedState`), or a retention (a
+region of its own, beside the status). A ticket is in one node of each region at once, plus its
+phase while it has one. The name is unexported, so a node is built only by these, and a parsed
+node is always one of `StateNodes()`:
+
+- `StatusNode(s State) StateNode` — the status's name.
+- `PhaseNode(p Phase) StateNode` — the phase as given, so a phase read back from history under a
+  name a newer lit wrote is that phase's node.
+- `RetentionNode(r Retention) StateNode` — the retention's `RetentionName`.
+
+`(StateNode).String()` is the node's name.
+
+`PhasedState` (`phase.go`) is `InProgress`, the status the phases nest inside: a move into it
+enters `plan`, and leaving it ends the phase.
+
+### `StateNodes() []StateNode` — `state_node.go`
+Every node, in the order the work passes through them: each of `States()`, with each of `Phases()`
+after `PhasedState`, then each of `Retentions()` — `open`, `in_progress`, `plan`, `impl`, `review`,
+`merge`, `closed`, `live`, `archived`, `deleted`. Each axis lists itself, so a state the lifecycle
+adds is a node with no edit here. Pinned by `TestStateNodesNestThePhasesInsideThePhasedState`
+(`state_node_test.go`).
+
+### `ParseStateNode(value string) (StateNode, error)` — `state_node.go`
+The only string-to-`StateNode` gate. Reads the name as `ParseState` does, through the shared
+`stateName` (`lifecycle.go`): `strings.TrimSpace`, `strings.ToLower`, and `in-progress` read as
+`in_progress`. A name that is one of `StateNodes()` is that node; otherwise the error
+`unknown state %q: a ticket's states are %s`, where `%q` is the original input and `%s` every
+node's name joined by `, `. Pinned by `TestParseStateNode` (`state_node_test.go`): every node reads
+back from its own name upper-cased and space-padded, `in-progress` reads as `in_progress`, and a
+blank, `in progress`, `reveiw` and `frozen` are refused naming every state.
+
 ---
 
 # 2. `internal/model`
@@ -919,6 +957,21 @@ and reason `workspace_schema_ahead` (`error_output.go`).
 Implementers: `store.UnsupportedSchemaVersionError` (`migration_runner.go`) and
 `store.DowngradeSpanUnsupportedError` (`downgrade.go`), each with a
 compile-time `var _ model.SchemaAhead` assertion.
+
+## 2.12 State configuration — `phase.go`
+
+Re-exports (`phase.go`): type `StateNode`; constant `PhasedState`; functions `StateNodes` and
+`ParseStateNode` (§1.11).
+
+`ConfigurationOf(issue Issue, events []IssueEvent) []StateNode` — `phase.go`. Every state node the
+issue's row and history put it in, outermost first within each region: its status
+(`StatusNode(issue.State())`), then the phase `PhaseOf` reads while it has one (`PhaseNode`), then
+its retention (`RetentionNode(issue.Retention())`). A transition's crossings are the difference
+between the configurations on either side of its write. Pinned by `TestConfigurationOf`
+(`phase_test.go`): an open leaf is `open, live`; an in-progress leaf whose history moved it to
+`review` is `in_progress, review, live`; a phase a newer lit named reads as recorded
+(`in_progress, design, live`); an in-progress epic has no phase (`in_progress, live`); an archived
+closed leaf is `closed, archived`.
 
 ---
 

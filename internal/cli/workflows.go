@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -20,11 +19,12 @@ import (
 // definitions itself — that stays match.go/load.go's job — so this file is
 // pure presentation over an already-resolved Set. [LAW:single-enforcer]
 
-const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]"
+const workflowsUsage = "usage: lit workflows [show <id> | edit <id> | edit [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]"
 
 // workflowsFamily is the named surface under `workflows`: one definition
-// resolved (`show <id>`), an override scaffolded or opened (`edit
-// <id-or-point>`), and a hypothetical occasion explained (`dry-run`). The
+// resolved (`show <id>`), a definition opened or scaffolded (`edit <id>`,
+// `edit --when <moment> --label <name>`), and a hypothetical occasion
+// explained (`dry-run`). The
 // legal-name set comes from this table like every other family's, and each
 // shape's flag surface is its own leaf's declaration. [LAW:one-source-of-truth]
 var workflowsFamily = commandFamily[wsSubcommand]{
@@ -78,33 +78,71 @@ func workflowsShowLeaf() wsLeaf {
 	}}
 }
 
+// workflowsEditLeaf takes a definition's id, to open or override it, or the
+// keys of a new one, to scaffold it — one or the other, never both: the
+// positional only ever names a definition, so no text is read two ways.
+// [LAW:parse-dont-validate]
 func workflowsEditLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows edit")
+	when := fs.StringArray("when", "Scaffold a new definition firing at this moment, spelled as a when: entry: enter <state>, exit <state>, or an event (repeatable)")
+	labels := fs.StringArray("label", "Scaffold a new definition firing on tickets carrying this label (repeatable)")
 	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		if len(positional) != 1 {
-			return UsageError{Message: workflowsUsage}
+		keyed := len(*when)+len(*labels) > 0
+		switch {
+		case len(positional) == 1 && !keyed:
+			return runWorkflowsEdit(inv, ws, positional[0])
+		case len(positional) == 0 && keyed:
+			return editFreshDefinition(inv, ws, *when, *labels)
 		}
-		return runWorkflowsEdit(inv, ws, positional[0])
+		return UsageError{Message: workflowsUsage}
 	}}
+}
+
+// readKeyFlags reads --when and --label as a definition's own keys read their
+// entries (workflows.Entries): each moment and label once, in the form an
+// occasion carries, or the first value naming no moment lit fires or no
+// label a ticket can carry, refused. `dry-run` and `edit` both read their
+// flags here. [LAW:single-enforcer]
+func readKeyFlags(whenTexts, labelTexts []string) ([]workflows.Moment, []string, error) {
+	when, refused := workflows.Entries(whenTexts, workflows.ParseMoment)
+	if len(refused) > 0 {
+		return nil, nil, model.ValidationError{Message: fmt.Sprintf("--when %q is not a moment lit fires: %v", refused[0].Text, refused[0].Err)}
+	}
+	labels, refused := workflows.Entries(labelTexts, model.NormalizeLabel)
+	if len(refused) > 0 {
+		return nil, nil, model.ValidationError{Message: fmt.Sprintf("--label %q is not a label a ticket can carry: %v", refused[0].Text, refused[0].Err)}
+	}
+	return when, labels, nil
 }
 
 // spineLabels returns every label any loaded definition binds to, sorted, so
 // the overview's label section only shows labels actually in play rather than
 // every label ever used on a ticket.
 func spineLabels(set workflows.Set) []string {
-	seen := map[string]bool{}
 	var labels []string
 	for _, def := range set.Definitions {
-		for _, label := range def.Keys().Labels {
-			if !seen[label] {
-				seen[label] = true
-				labels = append(labels, label)
-			}
+		if keys, fires := def.Activation.Keys(); fires {
+			labels = append(labels, keys.Labels.Entries()...)
 		}
 	}
-	sort.Strings(labels)
-	return labels
+	slices.Sort(labels)
+	return slices.Compact(labels)
 }
+
+// boundAt is the definitions in defs whose key lists entry, in defs' order.
+// A definition that never fires is bound nowhere.
+func boundAt[T comparable](defs []workflows.Definition, key func(workflows.Keys) workflows.Key[T], entry T) []workflows.Definition {
+	var at []workflows.Definition
+	for _, def := range defs {
+		if keys, fires := def.Activation.Keys(); fires && slices.Contains(key(keys).Entries(), entry) {
+			at = append(at, def)
+		}
+	}
+	return at
+}
+
+func whenKey(keys workflows.Keys) workflows.Key[workflows.Moment] { return keys.When }
+func labelsKey(keys workflows.Keys) workflows.Key[string]         { return keys.Labels }
 
 // renderWorkflowsOverview prints the lifecycle spine annotated with the
 // definitions active at each point, then any loaded-but-never-fires files so
@@ -121,13 +159,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 		return err
 	}
 	for _, moment := range workflows.Moments() {
-		var at []workflows.Definition
-		for _, def := range defs {
-			if slices.Contains(def.Keys().When, moment) {
-				at = append(at, def)
-			}
-		}
-		if err := printSpinePoint(w, "  "+moment.String(), at); err != nil {
+		if err := printSpinePoint(w, "  "+moment.String(), boundAt(defs, whenKey, moment)); err != nil {
 			return err
 		}
 	}
@@ -142,13 +174,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 		}
 	}
 	for _, label := range labels {
-		var at []workflows.Definition
-		for _, def := range defs {
-			if slices.Contains(def.Keys().Labels, label) {
-				at = append(at, def)
-			}
-		}
-		if err := printSpinePoint(w, "  "+label, at); err != nil {
+		if err := printSpinePoint(w, "  "+label, boundAt(defs, labelsKey, label)); err != nil {
 			return err
 		}
 	}
@@ -205,29 +231,35 @@ func printWorkflowWarnings(w io.Writer, warnings []workflows.Warning) error {
 }
 
 // renderWorkflowDefinition prints one definition fully resolved: its
-// activation frontmatter, its source, and its body — `lit workflows show
-// <id>`'s whole job.
+// identity and source, when it fires — its keys, or `fires: never` — and its
+// body. `lit workflows show <id>`'s whole job.
 func renderWorkflowDefinition(w io.Writer, set workflows.Set, id string) error {
 	def, ok := set.Lookup(id)
 	if !ok {
 		return model.ValidationError{Message: fmt.Sprintf("no workflow definition with id %q (run `lit workflows` to see loaded ids)", id)}
 	}
-	keys := def.Keys()
-	fields := []struct{ key, value string }{
+	type field struct{ key, value string }
+	fields := []field{
 		{"id", def.ID},
 		{"name", orDash(def.Name)},
 		{"source", string(def.Source)},
 		{"path", def.Path},
-		{"when", orDash(strings.Join(workflows.Spellings(keys.When), ", "))},
-		{"labels", orDash(strings.Join(keys.Labels, ", "))},
 	}
+	activation := []field{{"fires", "never"}}
+	if keys, fires := def.Activation.Keys(); fires {
+		activation = []field{
+			{"when", orDash(strings.Join(workflows.Spellings(keys.When.Entries()), ", "))},
+			{"labels", orDash(strings.Join(keys.Labels.Entries(), ", "))},
+		}
+	}
+	fields = append(fields, activation...)
 	for _, f := range fields {
 		if _, err := fmt.Fprintf(w, "%s: %s\n", f.key, f.value); err != nil {
 			return err
 		}
 	}
 	// The load's warnings for this file, so a definition that fires less than
-	// it says — or never — shows why beside what it fires on.
+	// it says, or never, shows why beside when it fires.
 	if err := printWorkflowWarnings(w, set.WarningsFor(def)); err != nil {
 		return err
 	}

@@ -17,6 +17,11 @@ const (
 	PhaseMerge  Phase = "merge"
 )
 
+// PhasedState is the status the phases nest inside: a move into it enters
+// plan, and leaving it ends the phase. [LAW:one-source-of-truth] the phase
+// read from history and the lifecycle's state nodes nest the phases here.
+const PhasedState = InProgress
+
 // Phases lists every phase in work order. ParsePhase's admissible set and
 // every listing of the phases derive from it. [LAW:one-source-of-truth]
 func Phases() []Phase {

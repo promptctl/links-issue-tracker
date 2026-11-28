@@ -31,15 +31,15 @@ Remember to review the design doc first.
 	want := Definition{
 		ID:   "needs-design-review",
 		Name: "Design review reminder",
-		Activation: Keys{
-			When: []Moment{
-				Crossing{Side: Enter, State: "open"},
-				Crossing{Side: Enter, State: "in_progress"},
-				Crossing{Side: Exit, State: "in_progress"},
+		Activation: firesOn(
+			[]Moment{
+				entering("open"),
+				entering("in_progress"),
+				exiting("in_progress"),
 				EventShowTicket,
 			},
-			Labels: []string{"needs-design", "blocked"},
-		},
+			[]string{"needs-design", "blocked"},
+		),
 		Body:   "Remember to review the design doc first.",
 		Source: templates.SourceProject,
 		Path:   "review/design.md",
@@ -59,7 +59,7 @@ func TestParseDefinitionDefaultID(t *testing.T) {
 
 func TestParseDefinitionNoFrontmatterNeverFiresWithWarning(t *testing.T) {
 	def, warnings := parseDefinition("just some notes\n", "notes.md", templates.SourceProject)
-	if def.Activation != (Never{}) {
+	if def.Activation != (Activation{}) {
 		t.Fatalf("definition = %+v, want one that never fires", def)
 	}
 	if def.Body != "just some notes" {
@@ -85,7 +85,7 @@ func TestParseDefinitionMalformedNeverFiresAndHoldsItsID(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			def, warnings := parseDefinition(tc.content, "bad.md", templates.SourceProject)
-			if def.ID != tc.id || def.Activation != (Never{}) {
+			if def.ID != tc.id || def.Activation != (Activation{}) {
 				t.Fatalf("definition = %+v, want id %q held by one that never fires", def, tc.id)
 			}
 			if len(warnings) != 1 {
@@ -118,7 +118,7 @@ func TestParseDefinitionUnreadableWhenEntryWarnsAndNeverFires(t *testing.T) {
 	for entry, says := range cases {
 		t.Run(entry, func(t *testing.T) {
 			def, warnings := parseDefinition("---\nwhen: ['"+entry+"', enter closed]\n---\nbody", "old.md", templates.SourceProject)
-			want := Keys{When: []Moment{Crossing{Side: Enter, State: "closed"}}}
+			want := firesOn([]Moment{entering("closed")}, nil)
 			if !reflect.DeepEqual(def.Activation, want) {
 				t.Fatalf("Activation = %+v, want %+v: the readable entry still binds", def.Activation, want)
 			}
@@ -129,26 +129,42 @@ func TestParseDefinitionUnreadableWhenEntryWarnsAndNeverFires(t *testing.T) {
 	}
 }
 
-// A key whose every entry is unreadable can never hold, so the definition
+// A key written with no entry lit reads can never hold, so the definition
 // never fires: dropping the key instead would widen it to the other key
-// alone.
+// alone. That holds for a key written empty as much as for one whose every
+// entry is refused.
 func TestParseDefinitionKeyWithNoReadableEntryNeverWidens(t *testing.T) {
 	cases := map[string]string{
 		"when, beside labels": "---\nwhen: [work_finished]\nlabels: [needs-design]\n---\nbody",
 		"blank when":          "---\nwhen: ['']\nlabels: [needs-design]\n---\nbody",
 		"labels, beside when": "---\nwhen: [enter closed]\nlabels: ['a,b']\n---\nbody",
 		"blank labels":        "---\nwhen: [enter closed]\nlabels: ['  ']\n---\nbody",
+		"empty labels":        "---\nwhen: [enter closed]\nlabels: []\n---\nbody",
+		"bare when":           "---\nwhen:\nlabels: [needs-design]\n---\nbody",
+		"empty when":          "---\nwhen: []\nlabels: [needs-design]\n---\nbody",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
 			def, warnings := parseDefinition(content, "narrow.md", templates.SourceProject)
-			if def.Activation != (Never{}) {
+			if def.Activation != (Activation{}) {
 				t.Fatalf("Activation = %+v, want one that never fires", def.Activation)
 			}
 			if len(warnings) != 1 {
 				t.Fatalf("warnings = %v, want one for the unreadable entry", warnings)
 			}
 		})
+	}
+}
+
+// Two keys written empty are two keys that can never hold, each warned of —
+// not a file with no keys.
+func TestParseDefinitionBothKeysWrittenEmptyWarnEach(t *testing.T) {
+	def, warnings := parseDefinition("---\nwhen: []\nlabels: []\n---\nbody", "empty.md", templates.SourceProject)
+	if def.Activation != (Activation{}) {
+		t.Fatalf("Activation = %+v, want one that never fires", def.Activation)
+	}
+	if len(warnings) != 2 || !strings.HasPrefix(warnings[0].Message, "when: lists no entry") || !strings.HasPrefix(warnings[1].Message, "labels: lists no entry") {
+		t.Fatalf("warnings = %v, want one per key written empty", warnings)
 	}
 }
 
@@ -170,7 +186,7 @@ func TestParseDefinitionUnreadKeysNeverFire(t *testing.T) {
 				t.Fatalf("ID = %q, want the file's id held", def.ID)
 			}
 			everything := Occasion{
-				Moments: []Moment{EventShowTicket, Crossing{Side: Enter, State: "closed"}, Crossing{Side: Exit, State: "plan"}},
+				Moments: []Moment{EventShowTicket, entering("closed"), exiting("plan")},
 				Labels:  []string{"needs-design"},
 			}
 			if def.Matches(everything) {
@@ -192,10 +208,7 @@ func TestParseDefinitionNormalization(t *testing.T) {
 	if def.ID != "spaced" {
 		t.Fatalf("ID = %q, want trimmed explicit id", def.ID)
 	}
-	want := Keys{
-		When:   []Moment{EventShowTicket, Crossing{Side: Enter, State: "in_progress"}, Crossing{Side: Exit, State: "in_progress"}, Crossing{Side: Enter, State: "review"}},
-		Labels: []string{"a"},
-	}
+	want := firesOn([]Moment{EventShowTicket, entering("in_progress"), exiting("in_progress"), entering("review")}, []string{"a"})
 	if !reflect.DeepEqual(def.Activation, want) {
 		t.Fatalf("Activation = %+v, want %+v: lowercased, whitespace collapsed, aliases read as the lifecycle reads them, each moment once", def.Activation, want)
 	}
@@ -204,12 +217,24 @@ func TestParseDefinitionNormalization(t *testing.T) {
 	}
 }
 
+// Labels spelled apart that name one label are one entry, so a ticket
+// carrying it gives the definition one reason, not one per spelling.
+func TestParseDefinitionReadsARepeatedLabelOnce(t *testing.T) {
+	def, warnings := parseDefinition("---\nlabels: [x, X, ' x ']\n---\nbody", "x.md", templates.SourceProject)
+	if len(warnings) != 0 || !reflect.DeepEqual(keysOf(t, def).Labels.Entries(), []string{"x"}) {
+		t.Fatalf("Labels = %v, warnings %v; want [x] and no warning", keysOf(t, def).Labels.Entries(), warnings)
+	}
+	if got := def.MatchReasons(Occasion{Moments: []Moment{EventShowTicket}, Labels: []string{"x"}}); !reflect.DeepEqual(got, []string{"label:x"}) {
+		t.Fatalf("MatchReasons() = %v, want one label:x", got)
+	}
+}
+
 // Frontmatter labels are stamped into the store's canonical form at parse
 // time, so an authored "Needs-Design" matches the persisted "needs-design".
 func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
 	def, warnings := parseDefinition("---\nlabels: ['Needs-Design', 'has,comma']\n---\nbody", "l.md", templates.SourceProject)
-	if !reflect.DeepEqual(def.Keys().Labels, []string{"needs-design"}) {
-		t.Fatalf("Labels = %v, want lowercased canonical form", def.Keys().Labels)
+	if !reflect.DeepEqual(keysOf(t, def).Labels.Entries(), []string{"needs-design"}) {
+		t.Fatalf("Labels = %v, want lowercased canonical form", keysOf(t, def).Labels.Entries())
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "has,comma") {
 		t.Fatalf("warnings = %v, want one can-never-match warning for the comma label", warnings)
@@ -220,10 +245,12 @@ func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
 // names, and refuses, saying why, text naming no moment this lit fires.
 func TestParseMoment(t *testing.T) {
 	cases := map[string]Moment{
-		"enter closed":      Crossing{Side: Enter, State: "closed"},
-		"exit plan":         Crossing{Side: Exit, State: "plan"},
-		"Exit  Review":      Crossing{Side: Exit, State: "review"},
-		"enter in-progress": Crossing{Side: Enter, State: "in_progress"},
+		"enter closed":      entering("closed"),
+		"exit plan":         exiting("plan"),
+		"Exit  Review":      exiting("review"),
+		"enter in-progress": entering("in_progress"),
+		"exit live":         exiting("live"),
+		"enter Archived":    entering("archived"),
 		"show_ticket":       EventShowTicket,
 	}
 	for text, want := range cases {
@@ -260,8 +287,8 @@ func TestMomentsReadBackAsThemselves(t *testing.T) {
 
 func TestParseDefinitionCRLF(t *testing.T) {
 	def, _ := parseDefinition("---\r\nwhen: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
-	if !reflect.DeepEqual(def.Keys().When, []Moment{EventShowBacklog}) {
-		t.Fatalf("When = %v, want [show_backlog]", def.Keys().When)
+	if !reflect.DeepEqual(keysOf(t, def).When.Entries(), []Moment{EventShowBacklog}) {
+		t.Fatalf("When = %v, want [show_backlog]", keysOf(t, def).When.Entries())
 	}
 }
 
@@ -270,8 +297,8 @@ func TestParseDefinitionCRLF(t *testing.T) {
 // that never fires.
 func TestParseDefinitionDelimiterTrailingWhitespace(t *testing.T) {
 	def, warnings := parseDefinition("--- \nwhen: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
-	if !reflect.DeepEqual(def.Keys().When, []Moment{EventShowBacklog}) {
-		t.Fatalf("When = %v, want frontmatter recognized despite trailing whitespace", def.Keys().When)
+	if !reflect.DeepEqual(keysOf(t, def).When.Entries(), []Moment{EventShowBacklog}) {
+		t.Fatalf("When = %v, want frontmatter recognized despite trailing whitespace", keysOf(t, def).When.Entries())
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)

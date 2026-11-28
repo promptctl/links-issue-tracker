@@ -359,29 +359,35 @@ A firing command loads the workflow definitions once, `loadWorkflows(ctx, inv, w
 (`workflow_dispatch.go`): each load warning goes to stderr as one `lit: workflow <warning>`
 line and all of them to the command's event as `workflows.warnings`, once per command, bulk
 included. Each occasion fires through `(loadedWorkflows).fire(ctx, o)`, which calls
-`workflows.Fire(set, ws, stderr, o)`, records `workflows.when` and `workflows.fired` on the
-event, and returns the guidance. A read command runs `dispatchOccasion(ctx, inv, ws, o)` —
-load, fire, write the guidance to stdout; a transition returns its guidance from
+`workflows.Fire(set, ws, o)`, prints `lit: workflow firing trace could not be recorded (%v)` on
+stderr when the returned `Firing.Untraced` is set, records `workflows.when`, `workflows.fired`
+and `workflows.trace_error` (the trace failure's text, or null) on the event, and returns the
+guidance. A read, `update` and a creation run `dispatchOccasion(ctx, inv, ws, o)` — load, fire,
+write the guidance to stdout; a transition or a comment, which a bulk run makes once per ticket,
+fires through its command's `loadedWorkflows.fire`: a transition returns its guidance from
 `applyTransition` in `transitionDone.said`, and a comment from `addComment`.
 Occasion builders (`workflow_events.go`), each an `Occasion{Moments, IssueID, Labels}`:
-- `showTicketOccasion` → `[EventShowTicket]`, carries IssueID + Labels
-- `backlogOccasion` → `[EventShowBacklog]`, no IssueID/Labels
-- `nextPulledOccasion` → `[EventNextPulled]`
-- `ticketCreatedOccasion` → `[EventTicketCreated]`
-- `ticketUpdatedOccasion` → `[EventTicketUpdated]`; never carries a crossing
-  because `update` rejects `--status`
-- `commentAddedOccasion` → `[EventCommentAdded]`
-- `transitionOccasion(before, after)` → the crossings the transition
-  made, never an event, for every transition: `crossings(Exit, before.states(), after.states())` then
-  `crossings(Enter, after.states(), before.states())` — every state left, then
-  every state entered, each outermost first, a phase counting as a state inside
-  `in_progress`. A start from open is `exit open, enter in_progress, enter plan`;
-  `done` and `close` both end in `enter closed`; a call that leaves the ticket's
-  state where it was carries no moments.
+- `ticketOccasion(event, issue)` → `[event]`, carries IssueID + Labels — `show` fires it with
+  `EventShowTicket`, `next` with `EventNextPulled`, `update` with `EventTicketUpdated` (never a
+  crossing, because `update` rejects `--status`), and `comment add` and `bulk comment` with
+  `EventCommentAdded`
+- `backlogOccasion()` → `[EventShowBacklog]`, no IssueID/Labels
+- `createdOccasion(issue)` → `ticketOccasion(EventTicketCreated, issue)` followed by the entries
+  into the new ticket's configuration from nothing, `crossings(nil, model.ConfigurationOf(issue, nil))`:
+  a ticket created open fires `ticket_created`, `enter open`, `enter live` (`new`, `followup`)
+- `transitionOccasion(before, after)` → the crossings the transition made, never an event, for
+  every transition: `crossings(before.configuration(), after.configuration())`, each side
+  `model.ConfigurationOf` (its status, then the phase `PhaseOf` reads while it has one, then its
+  retention). The exits of every node left come first, innermost first, then the entries of every
+  node reached, outermost first. A start from open is `exit open, enter in_progress, enter plan`;
+  a done from `review` is `exit review, exit in_progress, enter closed`; `done` and `close` both
+  end in `enter closed`; `archive` is `exit live, enter archived`, `unarchive`
+  `exit archived, enter live`, `delete` `exit live, enter deleted` (from archived,
+  `exit archived, enter deleted`), and `restore` `exit deleted, enter live`; a call that leaves
+  the ticket where it was — a takeover or reclaim `start` of an in-progress ticket, a move to the
+  current phase — carries no moments, so only a definition bound by labels alone fires on it.
 
-Retention actions (archive/unarchive/delete/restore) cross no state, so their occasion
-carries no moments and only a definition bound by labels alone fires on them
-(`workflow_events.go`). `purge` fires no occasion (`purge.go`), nor does `verdict` (`verdict.go`).
+`purge` fires no occasion (`purge.go`), nor does `verdict` (`verdict.go`).
 
 ### 1.15 Prefix / ID resolution
 
@@ -668,8 +674,8 @@ else ready.
   (`internal/storage/containment.go`); a `--parent` id that does not exist → a
   not-found error (`store.go`). Labels are canonicalized, de-duplicated and
   sorted (`internal/store/labels.go`).
-- Side effects: creates the issue; dispatches `EventTicketCreated`
-  (`cli.go`); the store commit is Dolt-side.
+- Side effects: creates the issue; dispatches `createdOccasion` — `EventTicketCreated`, then
+  `enter open` and `enter live` (`cli.go`, `workflow_events.go`); the store commit is Dolt-side.
 - Output: `printIssueSummary` line then the `deeper guidance: lit quickstart new`
   breadcrumb (`cli.go`). Plus the mutation staleness banner from
   `runWithApp` (§1.13).
@@ -694,8 +700,8 @@ else ready.
   (`cli.go`).
 - Creates with `ParentID` = the trimmed `--parent`, or when blank the `--on`
   ticket's parent id (`""` when it has none), and `FollowsUp = origin.Issue.ID`
-  (`cli.go`), dispatches
-  `EventTicketCreated`, prints the summary line, emits breadcrumb `new`
+  (`cli.go`), dispatches `createdOccasion` — `EventTicketCreated`, then `enter open`
+  and `enter live` — prints the summary line, emits breadcrumb `new`
   (`cli.go`).
 - Surplus positionals refused by `refuseSurplusPositionals` (`register.go`),
   called from `parseLeaf` (`register.go`), before `followupLeaf` runs.
@@ -1219,9 +1225,9 @@ transition row runs per id — §2.21):
    (`cli.go`).
 6. Fire the transition occasion (`transitionOccasion`) against the workflows the
    command loaded before the pre-read (`loadWorkflows`, §1.14), for every action —
-   a retention action crosses no state, so only a definition bound by labels alone
-   fires on it — its guidance appended after the owed notice in
-   `transitionDone.said` (`applyTransition`, `cli.go`).
+   a status action crosses statuses and phases, a retention action retentions
+   (`archive` exits `live` and enters `archived`) — its guidance appended after the
+   owed notice in `transitionDone.said` (`applyTransition`, `cli.go`).
 7. Write `said` — the transfer notice, then the guidance — then
    `printIssueSummary` (`cli.go`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
@@ -1742,8 +1748,8 @@ spaces (`ready_state.go`, `columns.go`), then `printInlineDeps`
 (`ready_state.go`): `    epic: …`, `    blocked by: …`, the claim line,
 and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
 line never appears (`ready_state.go`). It then returns
-`nextPulledOccasion(row.Issue)` (`next.go`, `workflow_events.go`),
-dispatched as `EventNextPulled` (`next.go`).
+`ticketOccasion(workflows.EventNextPulled, row.Issue)` (`next.go`, `workflow_events.go`),
+which `next` dispatches (`next.go`).
 
 `renderNextOutcome(w, outcome, details, cc, actingAs, primaryClone)` first takes
 `place := placeFor(outcome, primaryClone)` (`next_place.go`); the leaf reads
@@ -2059,8 +2065,8 @@ before any id is acted on.
   id's `bulk.items` scope. The comments an issue already has are untouched.
 - The workflows are loaded once, before the first id (`loadWorkflows`, §1.14), and
   each id's `addComment` fires `EventCommentAdded` for the ticket it commented on,
-  its `workflows.when` and `workflows.fired` under the id's `bulk.item.facts` and
-  `workflows.warnings` once, on the command's event.
+  its `workflows.when`, `workflows.fired` and `workflows.trace_error` under the id's
+  `bulk.item.facts` and `workflows.warnings` once, on the command's event.
 - Each landed id's said text is the guidance its occasion fired, then `commentLine` →
   `"<issueID> <commentID>\n"` (`cli.go`), written before `"<id> ok\n"`.
 
@@ -2083,9 +2089,8 @@ before any id is acted on.
   `readTicketState` again, the owed notice and statusline facts, and the
   transition occasion, fired against the workflows the command loaded once
   before the first id (`loadWorkflows`, §1.14), so each item fires the crossings
-  it made as the single verb does — a retention verb none, so only a definition
-  bound by labels alone fires on it. Each item's `workflows.when` and
-  `workflows.fired` are under its `bulk.item.facts`; `workflows.warnings` is on
+  it made as the single verb does. Each item's `workflows.when`, `workflows.fired`
+  and `workflows.trace_error` are under its `bulk.item.facts`; `workflows.warnings` is on
   the command's event, once. Its notice and guidance are written to stdout
   before `"<id> ok\n"` (`bulk.go`).
 - **No summary, no close-adjacency block, no breadcrumb** on the bulk path.

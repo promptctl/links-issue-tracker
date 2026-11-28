@@ -42,18 +42,25 @@ func loadWorkflows(ctx context.Context, inv Invocation, ws workspace.Info) loade
 }
 
 // fire is the guidance the occasion fires, with ctx's event recording the
-// occasion's moments and which definitions fired on it, an empty list when
-// none did. [LAW:nothing-unseen] [LAW:single-enforcer] every firing goes
-// through here, so no command can fire guidance its event does not name.
+// occasion's moments, which definitions fired on it (an empty list when none
+// did), and why the firing trace was not recorded (null when it was). A trace
+// that could not be written is also a line on stderr, beside the command's
+// other diagnostics. [LAW:nothing-unseen] [LAW:single-enforcer] every firing
+// goes through here, so no command can fire guidance its event does not name,
+// or drop a trace its event does not report.
 func (l loadedWorkflows) fire(ctx context.Context, o workflows.Occasion) string {
-	fired, guidance := workflows.Fire(l.set, l.ws, l.stderr, o)
-	ids := make([]string, len(fired))
-	for i, def := range fired {
+	firing := workflows.Fire(l.set, l.ws, o)
+	ids := make([]string, len(firing.Fired))
+	for i, def := range firing.Fired {
 		ids[i] = def.ID
+	}
+	if firing.Untraced != nil {
+		fmt.Fprintf(l.stderr, "lit: workflow firing trace could not be recorded (%v)\n", firing.Untraced)
 	}
 	telemetry.Set(ctx, "workflows.when", workflows.Spellings(o.Moments))
 	telemetry.Set(ctx, "workflows.fired", ids)
-	return guidance
+	telemetry.Set(ctx, "workflows.trace_error", telemetry.ErrorText(firing.Untraced))
+	return firing.Guidance
 }
 
 // dispatchOccasion is a command that fires one occasion: it loads the

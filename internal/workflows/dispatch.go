@@ -2,12 +2,20 @@ package workflows
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
+
+// Firing is what one occasion fired: the definitions, in Set.Matching's
+// stable ID order, the guidance they inject, and why the firing trace was not
+// recorded, nil when it was or when nothing fired.
+type Firing struct {
+	Fired    []Definition
+	Guidance string
+	Untraced error
+}
 
 // Fire is the one seam every command fires an occasion through: synchronous,
 // in-process, called directly from the command path — no bus, no async queue,
@@ -15,12 +23,10 @@ import (
 // registry other packages add themselves to.
 //
 // It matches the occasion against set, which the command loaded once for its
-// whole run (Load), and returns the definitions that fired, in Set.Matching's
-// stable ID order, and the guidance they inject: each body with <id>
-// interpolated to the occasion's IssueID, one line after another. The command
-// prints that guidance where its own output puts it.
-// [LAW:effects-at-boundaries] matching and the guidance are values; Fire's one
-// effect is the firing trace.
+// whole run (Load). The guidance is each fired body with <id> interpolated to
+// the occasion's IssueID, one line after another, which the command prints
+// where its own output puts it. [LAW:effects-at-boundaries] matching and the
+// guidance are values; Fire's one effect is the firing trace.
 //
 // When at least one definition fires, Fire records a firing trace (trace.go)
 // — which definitions fired and why (Definition.MatchReasons) — under the
@@ -28,22 +34,20 @@ import (
 // invocation explain "why did this fire" through the same mechanism. An
 // occasion nothing matches leaves no trace: the directory stays proportional
 // to guidance actually fired, not to every lit invocation. A trace-write
-// failure never fails the command — the definitions fired all the same — it
-// goes to errOut instead, the same best-effort shape recordMirrorTraceError
-// uses for the sibling automation trace. [LAW:no-silent-failure] the failure
-// is never swallowed, only kept off the agent-facing stream.
-func Fire(set Set, ws workspace.Info, errOut io.Writer, o Occasion) ([]Definition, string) {
-	fired := set.Matching(o)
+// failure never fails the command — the definitions fired all the same — so
+// it comes back as Untraced, for the command to report beside the firing it
+// failed to trace. [LAW:no-silent-failure]
+func Fire(set Set, ws workspace.Info, o Occasion) Firing {
+	firing := Firing{Fired: set.Matching(o)}
 	var guidance strings.Builder
-	for _, def := range fired {
+	for _, def := range firing.Fired {
 		guidance.WriteString(Interpolate(def.Body, o.IssueID) + "\n")
 	}
-	if len(fired) > 0 {
-		if _, err := recordFiring(ws, o, fired); err != nil {
-			fmt.Fprintf(errOut, "lit: workflow firing trace could not be recorded (%v)\n", err)
-		}
+	firing.Guidance = guidance.String()
+	if len(firing.Fired) > 0 {
+		_, firing.Untraced = recordFiring(ws, o, firing.Fired)
 	}
-	return fired, guidance.String()
+	return firing
 }
 
 // Interpolate replaces the <id> placeholder in an injected body with the

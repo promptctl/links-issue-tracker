@@ -184,7 +184,7 @@ func TestLoadMalformedFileWarnsWithoutBreakingOthers(t *testing.T) {
 	if _, ok := findDefinition(set, "good"); !ok {
 		t.Fatalf("Definitions = %+v, want \"good\" to have loaded", set.Definitions)
 	}
-	if broken, ok := findDefinition(set, "broken"); !ok || broken.Activation != (Never{}) {
+	if broken, ok := findDefinition(set, "broken"); !ok || broken.Activation != (Activation{}) {
 		t.Fatalf("Definitions = %+v, want \"broken\" loaded, never firing", set.Definitions)
 	}
 	if len(set.Warnings) != 1 || set.Warnings[0].Path != "broken.md" {
@@ -218,10 +218,10 @@ func TestLoadUnreadableOverrideHoldsItsID(t *testing.T) {
 
 			set := Load(testEnv(), workspaceRoot)
 			done, ok := findDefinition(set, "done")
-			if !ok || done.Source != templates.SourceProject || done.Activation != (Never{}) {
+			if !ok || done.Source != templates.SourceProject || done.Activation != (Activation{}) {
 				t.Fatalf("done = %+v, want the project's file holding the id, never firing", done)
 			}
-			if fired := set.Matching(Occasion{Moments: []Moment{Crossing{Side: Enter, State: "closed"}}}); slices.ContainsFunc(fired, func(d Definition) bool { return d.ID == "done" }) {
+			if fired := set.Matching(Occasion{Moments: []Moment{entering("closed")}}); slices.ContainsFunc(fired, func(d Definition) bool { return d.ID == "done" }) {
 				t.Fatalf("Matching(enter closed) = %+v, want the shipped done held off", fired)
 			}
 			if len(set.Warnings) != 1 || set.Warnings[0].Source != templates.SourceProject {
@@ -238,7 +238,7 @@ func TestLoadKeylessFileLoadsWithWarningAndNeverFires(t *testing.T) {
 
 	set := Load(testEnv(), workspaceRoot)
 	readme, ok := findDefinition(set, "readme")
-	if !ok || readme.Activation != (Never{}) {
+	if !ok || readme.Activation != (Activation{}) {
 		t.Fatalf("Definitions = %+v, want the definition loaded, never firing", set.Definitions)
 	}
 	if len(set.Warnings) != 1 || !strings.Contains(set.Warnings[0].Message, "never fires") {
@@ -246,7 +246,7 @@ func TestLoadKeylessFileLoadsWithWarningAndNeverFires(t *testing.T) {
 	}
 	// The definition fires nowhere, whatever the embedded defaults
 	// legitimately match alongside it.
-	everything := Occasion{Moments: []Moment{Crossing{Side: Enter, State: "closed"}, Crossing{Side: Exit, State: "open"}}, Labels: []string{"needs-design"}}
+	everything := Occasion{Moments: []Moment{entering("closed"), exiting("open")}, Labels: []string{"needs-design"}}
 	for _, event := range Catalog() {
 		everything.Moments = append(everything.Moments, event)
 	}

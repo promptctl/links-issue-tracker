@@ -57,21 +57,27 @@ func (s Set) Matching(o Occasion) []Definition {
 // specific value in each declared key satisfied it — "when:enter closed",
 // "label:needs-design" — the shared "why" computation behind both the firing
 // trace (a real occasion) and `lit workflows dry-run` (a hypothetical one).
-// Nil when the definition does not fire.
+// Nil when the definition does not fire, which a definition that never fires
+// never does.
 func (d Definition) MatchReasons(o Occasion) []string {
-	return d.Activation.reasons(o)
+	keys, fires := d.Activation.Keys()
+	if !fires {
+		return nil
+	}
+	return keys.reasons(o)
 }
 
 // reasons composes the two keys: OR within a key (any listed value the
-// occasion carries satisfies it) and AND across them (each key that lists an
-// entry must be satisfied). [LAW:dataflow-not-control-flow] the same steps
-// run for every definition on every occasion; which keys bite is decided by
-// what they list. [LAW:one-type-per-behavior] moments and labels are both
-// compared by equality — a crossing is its side and state, an event its name
-// — so one test serves both keys.
+// occasion carries satisfies it) and AND across them (each written key must
+// be satisfied). [LAW:dataflow-not-control-flow] the same steps run for every
+// definition on every occasion; which keys bite is decided by what they list.
+// [LAW:one-type-per-behavior] moments and labels are both compared by
+// equality — a crossing is its side and state, an event its name — so one
+// test serves both keys.
 func (k Keys) reasons(o Occasion) []string {
-	when, labels := carried(k.When, o.Moments), carried(k.Labels, o.Labels)
-	if !holds(k.When, when) || !holds(k.Labels, labels) {
+	when, whenHolds := k.When.carried(o.Moments)
+	labels, labelsHolds := k.Labels.carried(o.Labels)
+	if !whenHolds || !labelsHolds {
 		return nil
 	}
 	var reasons []string
@@ -84,19 +90,15 @@ func (k Keys) reasons(o Occasion) []string {
 	return reasons
 }
 
-// carried is the listed values the occasion carries, in listed order.
-func carried[T comparable](listed, values []T) []T {
+// carried is the key's entries among the occasion's values, in listed order,
+// and whether the key holds: a key left out holds on anything, and a written
+// one when the occasion carries one of its entries.
+func (k Key[T]) carried(values []T) ([]T, bool) {
 	var out []T
-	for _, value := range listed {
-		if slices.Contains(values, value) {
-			out = append(out, value)
+	for _, entry := range k.entries {
+		if slices.Contains(values, entry) {
+			out = append(out, entry)
 		}
 	}
-	return out
-}
-
-// holds is one key's test: a key that lists nothing constrains nothing, and
-// one that lists entries holds when the occasion carries one of them.
-func holds[T any](listed, carried []T) bool {
-	return len(listed) == 0 || len(carried) > 0
+	return out, len(k.entries) == 0 || len(out) > 0
 }

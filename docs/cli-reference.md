@@ -1305,22 +1305,25 @@ Mutation commands point back here at the moment of need: the text success output
 ### `lit workflows`
 
 ```text
-lit workflows [show <id> | edit <id-or-point> | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
+lit workflows [show <id> | edit <id> | edit [--when <moment>]... [--label <name>]... | dry-run [--when <moment>]... [--label <name>]... [--issue <id>]]
 ```
 
 See [Workflows](workflows.md) for what the feature is, and run `lit workflows --help`
 for the definition format, the activation rules, and the events.
 Bare `lit workflows` prints every moment a `when:` entry can name, spelled as one
-(each event, then `enter` and `exit` of each built-in state with the phases inside
-`in_progress`), and any bound labels, annotated with the definitions active at each and
-their source layer; `show <id>` resolves one definition fully, with the warnings for its
-file. `edit <id-or-point>` scaffolds a project-layer override
-(an existing definition's id) or a fresh definition (a `when:` entry such as
-`enter review` or `show_ticket`, or — falling through — a label; a point that is neither
-is refused), prints the line it bound and the file's path,
-and additionally opens it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
+(each event, then `enter` and `exit` of each built-in state: the statuses with the
+phases inside `in_progress`, then the retentions `live`, `archived` and `deleted`), and
+any bound labels, annotated with the definitions active at each and their source layer;
+`show <id>` resolves one definition fully, with the warnings for its file, and says
+`fires: never` for one lit cannot fire. `edit <id>` opens a project-layer definition, or
+copies a global or embedded one into the project as its override.
+`edit --when <moment> --label <name>` scaffolds a fresh definition firing on the keys
+it names, each flag repeatable and refused where a definition's entry would be, in a
+file named after what it binds. Both print the file's path,
+and additionally open it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
-fire, why, and the body each would inject — without anything actually firing.
+fire, why, and the body each would inject — without anything actually firing — and
+prints the load's warnings on stderr, as a firing command does.
 `--when` takes an entry spelled as in a definition and repeats, because one transition
 makes several crossings: `lit start` from open is `--when "exit open" --when "enter in_progress" --when "enter plan"`.
 A `--when` naming no moment lit fires, or a `--label` no ticket could carry, is refused.
