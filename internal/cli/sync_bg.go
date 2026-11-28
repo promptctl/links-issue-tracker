@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -139,8 +140,8 @@ const (
 // separate process. The automation-trace env is set here so a push that runs
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
-func spawnBackgroundMirror(ctx context.Context, inv Invocation, ws workspace.Info, from spawner) error {
-	return spawnDetachedWorker(ctx, inv.withEnv(mirrorEnv(inv.Env)), ws, backgroundMirrorSubcommand, mirrorLogName, from)
+func spawnBackgroundMirror(ctx context.Context, inv Invocation, ws workspace.Info, project config.ProjectLayer, from spawner) error {
+	return spawnDetachedWorker(ctx, inv.withEnv(mirrorEnv(inv.Env)), ws, project, backgroundMirrorSubcommand, mirrorLogName, from)
 }
 
 // detachedWorkerLeaf is the worker side of spawnDetachedWorker, the one entry
@@ -201,9 +202,9 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 // holds the worker inherits, the log it writes, and the start, which
 // inv.Workers performs, so which program it runs as is the run's composition
 // root's to say. [LAW:effects-at-boundaries]
-func spawnDetachedWorker(ctx context.Context, inv Invocation, ws workspace.Info, subcommand, logName string, from spawner) error {
+func spawnDetachedWorker(ctx context.Context, inv Invocation, ws workspace.Info, project config.ProjectLayer, subcommand, logName string, from spawner) error {
 	stderr := inv.Stderr
-	handoff, err := handoffOf(ctx, ws, inv.Env)
+	handoff, err := handoffOf(ctx, ws, project, inv.Env)
 	if err != nil {
 		return err
 	}
@@ -300,7 +301,7 @@ func workerEnv(parent environ.Env, strip []string, set ...string) environ.Env {
 // file — the quiescence property test cleanups rely on.
 func backgroundMirrorLeaf() bareLeaf {
 	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) error {
-		ws := built.info()
+		ws, project := built.info(), built.project()
 		// A live mirror IS the coverage the claim protocol counts on, and its
 		// liveness is proven by the kernel: hold the beacon shared from entry —
 		// before the parent-exit wait, so mutations claiming during that wait read
@@ -316,7 +317,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			if ctx.Err() != nil {
 				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
-			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, project, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
 		}
 		var stopOnce sync.Once
 		stopAnswering = func() {
@@ -344,7 +345,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			if ctx.Err() != nil {
 				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
-			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf(
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, project, fmt.Errorf(
 				"spawning command (%s) still running after %s; skipping mirror to avoid racing its engine",
 				from, parentWait), stopAnswering)
 		}
@@ -353,7 +354,7 @@ func backgroundMirrorLeaf() bareLeaf {
 		// written while the spawning command may still be writing its own.
 		// [LAW:no-ambient-temporal-coupling]
 		if failed, ok := built.(failedWorker); ok {
-			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, failed.err, stopAnswering)
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, project, failed.err, stopAnswering)
 		}
 
 		// The loop ends on exactly six paths, each a return below: teardown
@@ -371,7 +372,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			}
 			release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
 			if err != nil {
-				return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
+				return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, project, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
 			}
 			if !acquired {
 				// Lost the single-flight race: the holder's post-release re-check
@@ -389,7 +390,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			// Replaced on the worker's one Info, so the cycle and everything after
 			// it read the same remotes. [LAW:one-source-of-truth]
 			ws.Remotes = ws.Remotes.Reread()
-			attempted := mirrorCycle(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, stopAnswering)
+			attempted := mirrorCycle(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, project, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
 			// drops the flock on process exit, so an unlock error cannot strand
@@ -749,13 +750,13 @@ func (p pushedHead) liveStoreStep() liveStoreStep {
 // push= too, under its own deadline; its share is history_bound.elapsed_ms.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
-func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
+func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, project config.ProjectLayer, stopAnswering func()) (attempted bool) {
 	deadlines := env.Deadlines()
 	start := time.Now()
 	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), deadlines.MirrorHold(), deadlines.MirrorPush())
 	clone, held, err := takeMirrorClone(ctx, stderr, env, ws)
 	if err != nil {
-		_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, err, stopAnswering)
+		_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, project, err, stopAnswering)
 		fmt.Fprintf(log, "%s mirror cycle end attempted=false push_deadline_cut=false hold=%s elapsed=%s\n",
 			time.Now().UTC().Format(time.RFC3339), held.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return false
@@ -779,16 +780,16 @@ func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.
 		openElapsed = time.Since(pushStart)
 		if err != nil {
 			ending = cutByPushDeadline(pushCtx, ctx, deadlines, fmt.Errorf("open sync store on the clone: %w", err))
-			_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, ending, stopAnswering)
+			_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, project, ending, stopAnswering)
 			return false
 		}
 		defer closeStore()
-		landed, ending = mirrorOnce(pushCtx, ctx, stderr, env, session, ws)
+		landed, ending = mirrorOnce(pushCtx, ctx, stderr, env, session, ws, project)
 		return true
 	}()
 	pushElapsed := time.Since(pushStart)
 
-	record, recordHeld := liveStoreLearns(ctx, stderr, env, log, ws, clone.liveClone, landed)
+	record, recordHeld := liveStoreLearns(ctx, stderr, env, log, ws, project, clone.liveClone, landed)
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, pushDeadlineCutOf(ending),
 		held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
@@ -806,12 +807,12 @@ func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.
 // so it lands the clone's fetch and follows the same re-root, which arrives
 // at the hashes the clone pushed. [LAW:one-source-of-truth] the tracking ref
 // still says where the remote is, through the receive's own landing.
-func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
+func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, project config.ProjectLayer, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
 	step := landed.liveStoreStep()
 	var stepErr error
 	switch step {
 	case liveStoreReceives:
-		stepErr = receivePushedReRoot(ctx, stderr, env, ws, clone, landed)
+		stepErr = receivePushedReRoot(ctx, stderr, env, ws, project, clone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), stepErr == nil, stepErr)
 	case liveStoreRecords:
 		recordStart := time.Now()
@@ -858,7 +859,7 @@ func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log
 // of post-fetch stops and leaves writing it to the automatic receive, which
 // fetches past the head this push moved and counts its own stop
 // (leaveUnsettledRun). The landing holds under the receive's own deadline.
-func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, landed pushedHead) error {
+func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
 	outcome, closeLive := performSyncReceive(ctx, stderr, env, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
 	if err := closeLive(); err != nil {
@@ -867,7 +868,7 @@ func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env,
 	if outcome.traceErr != nil {
 		fmt.Fprintf(stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
-	surfaceReceiveOutcome(ctx, stderr, env, ws, outcome, time.Now())
+	surfaceReceiveOutcome(ctx, stderr, env, ws, project, outcome, time.Now())
 	if outcome.err != nil {
 		return fmt.Errorf("receive the re-rooted push on the live store: stopped at %s: %w", outcome.stopped, outcome.err)
 	}
@@ -972,7 +973,7 @@ func pushDeadlineCutExplanation(deadline time.Duration) error {
 // commit that lands after the clone is a fresh mirror-pending claim, and the
 // caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info) (pushedHead, error) {
+func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, project config.ProjectLayer) (pushedHead, error) {
 	// The mirror pushes without compaction, from a clone: SyncPushFromClone,
 	// never the compact-and-push variant the explicit command uses. The clone
 	// variant is what makes a race with that explicit command safe — nothing
@@ -980,7 +981,7 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 	// this one is in flight, and the rejection that follows is judged by
 	// whether the remote carries the clone's head, not reported as a failure
 	// over a remote that is fully up to date.
-	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, "", syncPushCommand, false, false, session.syncer.SyncPushFromClone)
+	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, project, "", syncPushCommand, false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome, but no trace,
@@ -1042,10 +1043,10 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 // stop-before-effects ordering lives here and in teardownMirror, not at the
 // call sites, so every current and future pre-attempt death gets it by
 // construction.
-func completeMirrorWithoutAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, cause error, stopAnswering func()) error {
+func completeMirrorWithoutAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, cause error, stopAnswering func()) error {
 	stopAnswering()
 	clearMirrorPending(stderr, ws)
-	completePushAttempt(ctx, stderr, env, ws, syncPushOutcome{}, cause)
+	completePushAttempt(ctx, stderr, env, ws, project, syncPushOutcome{}, cause)
 	recordMirrorTraceError(stderr, env, ws, cause)
 	return nil
 }

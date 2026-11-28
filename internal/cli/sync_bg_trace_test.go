@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -20,6 +21,7 @@ import (
 // that fails is tied back to the write that caused it. [LAW:nothing-unseen]
 func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	workers := realWorkers(t)
 	isolateEvents(t)
 	dir, _ := litRepoForCadence(t)
@@ -34,7 +36,7 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 	// handed one that has exited, and waits out nothing.
 	inv := workerRun(t, stderr).withEnv(envInTrace(runEnv(t), spawner))
 	inv.Workers = workers
-	if err := spawnBackgroundMirror(ctx, inv, ws, exitedSpawner(t)); err != nil {
+	if err := spawnBackgroundMirror(ctx, inv, ws, project, exitedSpawner(t)); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	spawnerEvent := spawner.Finish(telemetry.End{})

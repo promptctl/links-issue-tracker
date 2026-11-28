@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -38,12 +40,12 @@ func shPath(path string) string {
 // TestMain disables all auto-sync side effects (which the hook is one of), and
 // the global-config layer is pointed at an empty temp file so the developer's
 // real config — possibly carrying a real notifier — can never leak into a test
-// run. It returns ws running under a project config whose owner hook is hook.
-func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) workspace.Info {
+// run. It returns the project config in force whose owner hook is hook.
+func enableOwnerNotify(t *testing.T, hook string) config.ProjectLayer {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	return workspacetest.WithProject(ws, ownerHookConfig(hook))
+	return configtest.Applied(ownerHookConfig(hook))
 }
 
 // ownerHookConfig is a project config whose one setting is the owner hook.
@@ -158,6 +160,7 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 // nothing about the remote's schema.
 func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	ws := notifyTestWorkspace(t)
 	notDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged}
 	aheadNotDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged, RemoteSchemaAhead: storage.RemoteSchemaAhead{RemoteSchema: 9, BinarySupportedMax: 8}}
@@ -171,14 +174,14 @@ func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
-	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged", storage.RemoteSchemaAhead{})
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
-	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, "lit sync reconcile", remoteName(t, "origin"), "master", aheadNotDiverged, false); err != nil {
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", aheadNotDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult(ahead): %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged against an ahead remote", aheadNotDiverged.RemoteSchemaAhead)
@@ -287,11 +290,11 @@ func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ev)
 
 	payload, err := os.ReadFile(sink)
 	if err != nil {
@@ -302,7 +305,7 @@ func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 	}
 
 	clearOwnerNotify(testStderr(t), ws, ownerNotifyPushFailed)
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ev)
 	payload, err = os.ReadFile(sink)
 	if err != nil {
 		t.Fatalf("read sink after clear: %v", err)
@@ -319,17 +322,17 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, "false")
+	project := enableOwnerNotify(t, "false")
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ev)
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a failed hook still wrote the sent marker (stat err=%v); the owner was never notified", err)
 	}
 
 	// The channel repaired: the very next detection sends.
-	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
+	project = enableOwnerNotify(t, `printf sent >> `+shPath(sink))
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ev)
 	if _, err := os.Stat(sink); err != nil {
 		t.Fatalf("the detection after a failed hook did not retry: %v", err)
 	}
@@ -342,10 +345,10 @@ func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf sent >> `+shPath(sink))
 	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
-	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, project, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
 	if _, err := os.Stat(sink); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the hook ran under the auto-sync kill switch (stat err=%v)", err)
 	}
@@ -361,13 +364,13 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 	// The failures here are no schema refusal, which is what the completion
 	// seam would have parsed; TestPushRefusedBySchemaPagesUnderItsClass pins
 	// that parse.
 	observe := func(rec pushOutcomeRecord) {
-		observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, rec, SyncFailure{}, false)
+		observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, project, rec, SyncFailure{}, false)
 	}
 
 	failed := pushOutcomeRecord{Decision: pushDecisionError, Reason: "remote unreachable", Remote: "origin", Branch: "master"}
@@ -425,12 +428,12 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf "%s %s %s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf "%s %s %s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 	// The completion seam lands the attempt on the invocation's event, so it
 	// runs under one, as every command does.
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
 	complete := func(pushErr error) {
-		completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: pushErr}, nil)
+		completePushAttempt(ctx, testStderr(t), runEnv(t), ws, project, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: pushErr}, nil)
 	}
 	ceiling := &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9}
 
@@ -468,7 +471,7 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	if !ok {
 		t.Fatal("the receive half did not classify the reconcile's refusal")
 	}
-	notifyOwnerForFailure(ctx, testStderr(t), runEnv(t), ws, ahead)
+	notifyOwnerForFailure(ctx, testStderr(t), runEnv(t), ws, project, ahead)
 	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "remote_schema_ahead origin master\n") {
 		t.Fatalf("the reconcile's refusal did not page remote_schema_ahead: %q", payload)
 	}
@@ -491,7 +494,7 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	// panic after a refused push is recorded as the panic), and the page
 	// follows the record: the refusal beside it is not consulted.
 	complete(nil)
-	completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: ceiling}, errors.New("sync push panicked: boom"))
+	completePushAttempt(ctx, testStderr(t), runEnv(t), ws, project, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: ceiling}, errors.New("sync push panicked: boom"))
 	payload, _ := os.ReadFile(sink)
 	if !strings.HasSuffix(string(payload), "push_failed  \n") || strings.Count(string(payload), "schema_ceiling") != 2 {
 		t.Fatalf("an attempt error beside a refused push did not page as the record's failure: %q", payload)
@@ -508,6 +511,7 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 // remote's own schema lands).
 func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	ws := notifyTestWorkspace(t)
 	standing := []ownerNotifyKind{ownerNotifyKind(syncFailureSchemaCeilingLift), ownerNotifyKind(syncFailureRemoteSchemaAhead)}
 	for _, kind := range append(kindsEndedBy(endedByPush), standing...) {
@@ -515,7 +519,7 @@ func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 			t.Fatalf("plant %s marker: %v", kind, err)
 		}
 	}
-	observePushOutcomeForOwner(context.Background(), testStderr(t), runEnv(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"}, SyncFailure{}, false)
+	observePushOutcomeForOwner(context.Background(), testStderr(t), runEnv(t), ws, project, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"}, SyncFailure{}, false)
 	for _, kind := range kindsEndedBy(endedByPush) {
 		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("a landed push left the %s episode standing (stat err=%v)", kind, err)
@@ -539,11 +543,11 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 
 	lift := &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}
-	err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, lift)
+	err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, project, lift)
 	var failure SyncFailureError
 	if !errors.As(err, &failure) || failure.Failure.Class != syncFailureSchemaCeilingLift {
 		t.Fatalf("surfaceSyncFailure(lift) = %v, want the schema_ceiling_lift contract", err)
@@ -557,7 +561,7 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 
 	diverged := storage.PushDivergedError{Remote: remoteName(t, "origin"), Branch: "master", Refusal: errors.New("rejected")}
 	var reported bytes.Buffer
-	err = surfaceSyncFailure(ctx, &reported, runEnv(t), ws, diverged)
+	err = surfaceSyncFailure(ctx, &reported, runEnv(t), ws, project, diverged)
 	if !errors.As(err, &failure) || failure.Failure.Class != syncFailurePushDiverged {
 		t.Fatalf("surfaceSyncFailure(diverged push) = %v, want the push_diverged contract", err)
 	}
@@ -569,7 +573,7 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	}
 
 	plain := errors.New("remote unreachable")
-	if err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, plain); err != plain {
+	if err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, project, plain); err != plain {
 		t.Fatalf("surfaceSyncFailure(plain) = %v, want the error itself", err)
 	}
 }

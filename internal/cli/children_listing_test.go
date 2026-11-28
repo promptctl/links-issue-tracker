@@ -43,7 +43,7 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 		if err := runChildren(t, f.ctx, &children, f.ap, append([]string{f.epicID.Raw()}, flags...)); err != nil {
 			t.Fatalf("children %s %v error = %v", f.epicID, flags, err)
 		}
-		if err := runListWithStore(t, f.ctx, &ls, f.ap.Store, projectReadyPolicy(runEnv(t), f.ap.Workspace.Project), append([]string{"--parent", f.epicID.Raw()}, flags...)); err != nil {
+		if err := runListWithStore(t, f.ctx, &ls, f.ap.Store, projectReadyPolicy(runEnv(t), f.ap.Project), append([]string{"--parent", f.epicID.Raw()}, flags...)); err != nil {
 			t.Fatalf("ls --parent %s %v error = %v", f.epicID, flags, err)
 		}
 		if children.String() != ls.String() {

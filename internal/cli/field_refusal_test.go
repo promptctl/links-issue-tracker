@@ -42,7 +42,7 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		t.Fatalf("dep add %s --blocked-by %s: %v", blocked.ID, task.ID, err)
 	}
 	runLs := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runListWithStore(t, ctx, stdout, ap.Store, projectReadyPolicy(runEnv(t), ap.Workspace.Project), args)
+		return runListWithStore(t, ctx, stdout, ap.Store, projectReadyPolicy(runEnv(t), ap.Project), args)
 	}
 	runBacklog := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runWorkable(t, ctx, stdout, ap, args, backlogView)

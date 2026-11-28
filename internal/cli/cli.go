@@ -211,12 +211,10 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 		}
 		return err
 	}
-	// From here on the workspace is the opened one, holding the store's applied
-	// config, which the automatic sync below reads after the engine closes.
-	ws = ap.Workspace
-	reportConfigLayers(ctx, inv.Stderr, inv.Env, ws.Project)
+	reportConfigLayers(ctx, inv.Stderr, inv.Env, ap.Project)
 	// The engine closes inside runThenMeasure (including on panic), so the close
-	// always precedes the automatic sync below, which needs only the workspace.
+	// always precedes the automatic sync below, which needs only the workspace
+	// and the config the open read.
 	runErr := runThenMeasure(ctx, ws.DatabasePath, ap.Close, func() error {
 		reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(ap.Store))
 		return run(ctx, ap)
@@ -255,7 +253,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// a worker's open on the path together, which embedded Dolt forbids. Command
 	// handlers stay unaware of any of this.
 	// [LAW:no-ambient-temporal-coupling]
-	maybeAutoSyncAfterCommand(ctx, inv, accessMode, ws)
+	maybeAutoSyncAfterCommand(ctx, inv, accessMode, ws, ap.Project)
 	return nil
 }
 
@@ -638,7 +636,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 		})
 	}
 	return runWithApp(ctx, inv, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return l.work(ctx, inv, listScope{store: ap.Store, policy: projectReadyPolicy(inv.Env, ap.Workspace.Project)}, positional)
+		return l.work(ctx, inv, listScope{store: ap.Store, policy: projectReadyPolicy(inv.Env, ap.Project)}, positional)
 	})
 }
 
@@ -1047,7 +1045,7 @@ func gatherWorkableAnnotated(ctx context.Context, env environ.Env, ap *app.App, 
 // its filter decides which rows it may serve, not which rows its walks may read,
 // so it needs the rows a filter would drop (see routeNext).
 func gatherWorkableQueue(ctx context.Context, env environ.Env, ap *app.App) (focusedQueue, error) {
-	requiredFields, err := readyRequiredFields(env, ap.Workspace.Project)
+	requiredFields, err := readyRequiredFields(env, ap.Project)
 	if err != nil {
 		return focusedQueue{}, err
 	}

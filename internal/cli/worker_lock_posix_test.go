@@ -73,7 +73,7 @@ func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	// runs the hook.
 	runGit(t, rig.root, "remote", "set-url", "origin", filepath.Join(rig.base, "gone", "nowhere.git"))
 
-	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
+	ws, project := workspacetest.Resolved(t, runEnv(t), rig.root), projectInForce(t, rig.root)
 	notifier := func() (int, error) {
 		pidText, err := os.ReadFile(notifierPIDFile)
 		if err != nil {
@@ -102,7 +102,7 @@ func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	mirror := workerRun(t, testStderr(t))
 	mirror = mirror.withEnv(mirror.Env.With(DisableAutoSyncEnvVar + "=0"))
 	mirror.Workers = LaunchWorkersAs(rig.lit)
-	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, exitedSpawner(t)); err != nil {
+	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, project, exitedSpawner(t)); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	if err := JoinDetachedWorkers(ws.StorageDir, suiteenv.StallBound); err != nil {

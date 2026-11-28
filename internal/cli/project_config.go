@@ -154,5 +154,5 @@ func readAppliedProject(ctx context.Context, env environ.Env, stderr io.Writer, 
 		// Run's dispatch trace, as runWithApp stamps app.Open.
 		return nil, markEngineOpenContention(err, ws)
 	}
-	return ap.Workspace.Project, ap.Close()
+	return ap.Project, ap.Close()
 }

@@ -88,7 +88,7 @@ func runOrphaned(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.Ap
 // runChildren drives `children` against the workspace store the test opened —
 // the listing leaf under its children surface, exactly as `lit children` runs it.
 func runChildren(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runListLeaf(t, ctx, stdout, childrenSurface, listScope{store: ap.Store, policy: projectReadyPolicy(runEnv(t), ap.Workspace.Project)}, args)
+	return runListLeaf(t, ctx, stdout, childrenSurface, listScope{store: ap.Store, policy: projectReadyPolicy(runEnv(t), ap.Project)}, args)
 }
 
 func runDoctor(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

@@ -18,6 +18,10 @@ import (
 type App struct {
 	Workspace workspace.Info
 	Store     storage.Store
+	// Project is the config in force on Store, read once as it opened: every
+	// config read of the command takes it, those after the store closes
+	// included. [LAW:one-source-of-truth]
+	Project config.ProjectLayer
 	// Stream is this checkout's opaque identity — the half of the attribution
 	// pair that distinguishes two worktrees of one repository, whose other half
 	// is Workspace.WorkspaceID. Under AccessWrite it is always present, minted
@@ -126,12 +130,11 @@ func Open(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.I
 	if err != nil {
 		return nil, errors.Join(err, errors.Join(storage.OpenMigration(st).Failures()...), st.Close())
 	}
-	ws.Project = project
 	// Every mode attributes, and the mode's own identity contract decides what
 	// that means: a write open has just minted a token, while a read open in a
 	// never-mutated checkout passes an empty one and its store stamps nothing.
 	// [LAW:dataflow-not-control-flow]
-	return New(ws, st, stream), nil
+	return New(ws, project, st, stream), nil
 }
 
 // ProjectOf is the project config layer of an opened store: the config
@@ -159,18 +162,18 @@ type StoreOpenError struct {
 func (e StoreOpenError) Error() string { return e.Err.Error() }
 func (e StoreOpenError) Unwrap() error { return e.Err }
 
-// New pairs an opened store with this checkout's stream: the store stamps
-// exactly the identity the App reports as Stream, so the attribution on this
-// checkout's writes and the "us" that claim routing compares against cannot
-// differ. [LAW:single-enforcer]
+// New pairs an opened store, and the config in force on it, with this
+// checkout's stream: the store stamps exactly the identity the App reports as
+// Stream, so the attribution on this checkout's writes and the "us" that claim
+// routing compares against cannot differ. [LAW:single-enforcer]
 //
 // New also has the store tell Statusline of every change it applies, so the
 // statusline file hears what each change says whichever command made it, a
 // lone update or one document of an import; changeStatuslineFacts says why a
 // start says nothing here. [LAW:single-enforcer]
-func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
+func New(ws workspace.Info, project config.ProjectLayer, st storage.Store, stream workspace.StreamID) *App {
 	st.AttributeTo(stream.Value())
-	a := &App{Workspace: ws, Store: st, Stream: stream}
+	a := &App{Workspace: ws, Store: st, Project: project, Stream: stream}
 	st.ObserveChanges(func(change storage.Change, issue model.Issue) {
 		a.Statusline.Record(changeStatuslineFacts(change.Action, issue)...)
 	})

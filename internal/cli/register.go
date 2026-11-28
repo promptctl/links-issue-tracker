@@ -784,7 +784,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(workspaceLeaf)},
-		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead, each under the project config in force on that store",GroupID: "maintenance",
+		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead, each under the project config in force on that store", GroupID: "maintenance",
 			Run: func(args []string) error { return runStores(ctx, inv, args) }},
 		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
 		// `lit stores --counts`. Both kept hidden+dispatchable for the documented

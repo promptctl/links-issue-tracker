@@ -29,7 +29,7 @@ import (
 func blockedCellFromLS(h readyTestHarness, id model.ID) string {
 	h.t.Helper()
 	var out bytes.Buffer
-	if err := runListWithStore(h.t, h.ctx, &out, h.ap.Store, projectReadyPolicy(runEnv(h.t), h.ap.Workspace.Project), []string{"--columns", "id,blocked"}); err != nil {
+	if err := runListWithStore(h.t, h.ctx, &out, h.ap.Store, projectReadyPolicy(runEnv(h.t), h.ap.Project), []string{"--columns", "id,blocked"}); err != nil {
 		h.t.Fatalf("ls --columns id,blocked: %v", err)
 	}
 	cells := fieldsOf(lineForID(h.t, out.String(), id))

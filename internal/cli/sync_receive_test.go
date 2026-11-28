@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
@@ -52,7 +53,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, workerRun(t, testStderr(t)), workspacetest.Resolved(t, runEnv(t), dir))
+	receiveOnce(ctx, workerRun(t, testStderr(t)), workspacetest.Resolved(t, runEnv(t), dir), configtest.Applied(""))
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -122,8 +123,9 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 // and without the wait for a parent that this test process never lets exit.
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
+	project := configtest.Applied("")
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws)
+	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws, project)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the
@@ -134,6 +136,7 @@ func receiveNow(t *testing.T, dir string) {
 // [LAW:behavior-not-structure] asserted through the file a command reads.
 func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	ws := workspacetest.New(t, runEnv(t))
 	now := time.Now()
 
@@ -142,7 +145,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		reconcile: &reconcileOutcome{},
 		stopped:   receiveStepReconcile, err: errors.New("reconcile backend unavailable"),
 	}
-	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, project, unconverged, now)
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {
 		t.Fatalf("an unconverged receive left no block for the next command: %v", err)
@@ -151,7 +154,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		t.Fatalf("pending block does not carry the receive's failure:\n%s", block)
 	}
 
-	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, project, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a receive that settled cleanly left the earlier block pending (stat err = %v)", err)
 	}
@@ -159,7 +162,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// Every other surface that converges a divergence — `lit sync pull`,
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
-	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, project, unconverged, now)
 	endSettleEndedEpisodes(testStderr(t), ws, storage.RemoteSchemaAhead{})
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)

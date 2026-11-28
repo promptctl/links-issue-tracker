@@ -262,18 +262,17 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
      (`internal/config/config.go`). `ConfigDir()` = `$XDG_CONFIG_HOME/links-issue-tracker`
      if `XDG_CONFIG_HOME` is set, else `$HOME/.config/links-issue-tracker`; empty string if the
      home directory cannot be determined (`internal/config/config.go`).
-  2. Project: the `ProjectLayer` the workspace carries (`internal/config/config.go`):
+  2. Project: the `ProjectLayer`, the config in force on a store, which every store open
+     returns and each config read takes as a value (`internal/config/config.go`); its
+     `Applies()` is what a launcher hands its worker — the apply in force, or none:
      - `Applied(applies)` — the content of `model.ConfigInForce(applies)`; `Source()`
        `applied:<digest>`, `String()` `the applied project config <short digest>`;
-       `NoProject()` when nothing has been applied. Set by `app.Open` through
-       `app.ProjectOf(ctx, st)` (`internal/app/app.go`), which wraps a read failure as
+       `NoProject()` when nothing has been applied. Returned as `App.Project` by `app.Open`
+       through `app.ProjectOf(ctx, st)` (`internal/app/app.go`), which wraps a read failure as
        `read the applied project config: %w`.
-     - `HandedProject(content)` — a detached worker's, `Source()` `handed`.
-     - `NoProject()` — sets nothing, `Source()` `none`, `String()` `no project config`.
-     - `Unread()` — what `workspace.ResolveWithPrefix` sets before the store opens
-       (`internal/workspace/workspace.go`); `Source()` `unread`; its `Content()` fails with
-       `the project config is read from the store, and this command read it before opening the store`.
-- `ProjectPath(env, workspaceRoot)` — `$LIT_CONFIG_PROJECT_PATH`, else
+     - `NoProject()` — sets nothing, `Source()` `none`, `String()` `no project config`; also
+       a worker's whose handoff could not be read.
+- `CheckoutProjectPath(env, workspaceRoot)` — `$LIT_CONFIG_PROJECT_PATH`, else
   `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`): the file `lit config apply`
   puts in force, not a layer.
 - A missing global file is not an error; a parse error is (`parse config %s: %w`) and a merge
@@ -282,8 +281,9 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
   `snapshot.retention_budget`, `sync.cadence`, `claims.freshness_window` and
   `sync.history_bound` checks; only a decode failure returns at once, joined with the merge
   errors (`internal/config/config.go`).
-- `CheckProject(content []byte) error` — `layers{HandedProject(content)}.load()`: the project
-  content alone over the defaults, refused for every fault it holds (`internal/config/config.go`).
+- `CheckProject(content []byte) error` — `load` over the one layer content would be once
+  applied: the project content alone over the defaults, refused for every fault it holds
+  (`internal/config/config.go`).
 - `internal/config/standing.go`: `FileVersion{Present bool; Content string}`;
   `ProjectFile{Path string; Working, Committed FileVersion}`; `Standing` with
   `StandingInForce` `in_force`, `StandingNotApplied` `not_applied`, `StandingUncommitted`

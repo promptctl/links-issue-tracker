@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -212,11 +213,11 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // typed result and never the raw error, and the record and the page cannot
 // name the attempt's failure differently. (The mirror's block print and the
 // foreground's returned contract parse the same error for their own surfaces.)
-func completePushAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
+func completePushAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, outcome syncPushOutcome, attemptErr error) {
 	rec, refusal, refused := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion(stderr))
 	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
 	recordPushOutcome(stderr, ws, rec)
-	observePushOutcomeForOwner(ctx, stderr, env, ws, rec, refusal, refused)
+	observePushOutcomeForOwner(ctx, stderr, env, ws, project, rec, refusal, refused)
 }
 
 // eventValue is the record as one value of the event's push.outcomes list.

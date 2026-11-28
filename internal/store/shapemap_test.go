@@ -331,6 +331,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 
 	wantIDs := map[model.ID]bool{}
 	var purgedID, soloID, reviewID model.ID
+	var inForce model.ConfigApply
 	withStore(t, ctx, src, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
@@ -367,6 +368,13 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("purge: %v", err)
 		}
 		purgedID = purged.ID
+		if _, _, err := st.ApplyConfig(ctx, "[ready]\nrequired_fields = [\"description\"]\n", "claude"); err != nil {
+			t.Fatalf("apply config: %v", err)
+		}
+		inForce, _, err = st.ApplyConfig(ctx, "[ready]\nrequired_fields = [\"prompt\"]\n", "claude")
+		if err != nil {
+			t.Fatalf("apply config: %v", err)
+		}
 		for _, id := range []model.ID{epic.ID, child.ID, solo.ID} {
 			wantIDs[id] = true
 		}
@@ -423,6 +431,16 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		}
 	}
 	assertSoloSurvives("map+apply", export.Issues, export.PlanReviews)
+	// A salvaged store runs on the config in force on the store it salvages:
+	// every apply crosses the lifeboat, and the newest is still the newest.
+	assertInForce := func(where string, applies []model.ConfigApply) {
+		t.Helper()
+		got, applied := model.ConfigInForce(applies)
+		if len(applies) != 2 || !applied || got.ID != inForce.ID || got.Content != inForce.Content || !got.CreatedAt.Equal(inForce.CreatedAt) {
+			t.Fatalf("%s: applies = %+v, want both, %s in force", where, applies, inForce.ID)
+		}
+	}
+	assertInForce("map+apply", export.ConfigApplies)
 
 	dst := filepath.Join(t.TempDir(), "dst")
 	withStore(t, ctx, dst, func(st *Store) {
@@ -451,6 +469,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("rebuilt purges = %+v, want the record of %s", rebuilt.Purges, purgedID)
 		}
 		assertSoloSurvives("rebuilt", rebuilt.Issues, rebuilt.PlanReviews)
+		assertInForce("rebuilt", rebuilt.ConfigApplies)
 	})
 }
 

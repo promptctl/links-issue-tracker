@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -128,9 +129,9 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	// Malformed TOML, so config.Load returns an error rather than defaults.
-	ws := workspacetest.WithProject(workspacetest.Handed(t, runEnv(t), t.TempDir()), "this is = = not toml\n")
+	ws := workspacetest.Handed(t, runEnv(t), t.TempDir())
 
-	maybeAutoSyncAfterCommand(underInvocation(t.Context()), workerRun(t, testStderr(t)), app.AccessWrite, ws)
+	maybeAutoSyncAfterCommand(underInvocation(t.Context()), workerRun(t, testStderr(t)), app.AccessWrite, ws, configtest.Applied("this is = = not toml\n"))
 
 	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)

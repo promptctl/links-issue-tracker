@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -268,9 +269,10 @@ func TestCollisionBlockRendersOrdinaryTicketReadably(t *testing.T) {
 // it does on pull and on the automatic receive.
 func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	var sink strings.Builder
 	ws := workspacetest.New(t, runEnv(t))
-	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,
@@ -309,9 +311,10 @@ func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 // id_collision kind, rather than reporting a bland success line.
 func TestReportReconcileResultCollisionExitsConflict(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	var sink strings.Builder
 	ws := workspacetest.New(t, runEnv(t))
-	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,

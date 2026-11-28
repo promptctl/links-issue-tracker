@@ -66,7 +66,7 @@ func TestApplyRefusesAFileForEveryFaultItHolds(t *testing.T) {
 }
 
 func TestLoadNamesEveryFaultTheConfigHolds(t *testing.T) {
-	_, err := Load(testEnv(), HandedProject([]byte("[sync]\ncadence = \"hourly\"\n[snapshot]\nretention_budget = 0\n[claims]\nfreshness_window = \"soon\"\n")))
+	_, err := Load(testEnv(), appliedProject("[sync]\ncadence = \"hourly\"\n[snapshot]\nretention_budget = 0\n[claims]\nfreshness_window = \"soon\"\n"))
 	if err == nil {
 		t.Fatal("loaded, want refused")
 	}
@@ -92,8 +92,5 @@ func TestTheAppliedLayerIsTheConfigInForce(t *testing.T) {
 	cfg, err := Load(testEnv(), layer)
 	if err != nil || !cfg.Quickstart.SoilMode {
 		t.Errorf("loaded (%+v, %v), want the newest apply's soil_mode", cfg.Quickstart, err)
-	}
-	if _, err := Unread().Content(); err == nil {
-		t.Error("the unread layer read, want it to refuse")
 	}
 }

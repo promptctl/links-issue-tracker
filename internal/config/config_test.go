@@ -625,39 +625,25 @@ func testEnv() environ.Env {
 	return environ.Of(os.Environ()).Without(PathEnvVars()...)
 }
 
-// A handed project layer is read from its content, never from a file, and
-// each layer says where it came from.
-func TestAHandedProjectLayerIsReadFromItsContent(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	handed := HandedProject([]byte("[quickstart]\nsoil_mode = true\n"))
-	cfg, err := Load(testEnv(), handed)
-	if err != nil {
-		t.Fatalf("Load(handed) error = %v", err)
-	}
-	if !cfg.Quickstart.SoilMode {
-		t.Fatal("Load(handed) did not read soil_mode from the handed content")
-	}
-	if got := handed.Source(); got != "handed" {
-		t.Fatalf("handed Source() = %q, want handed", got)
-	}
-}
-
-// An applied config and the same bytes handed to a worker are one layer, so a
-// launcher and its worker cannot read one config two ways.
-func TestAnAppliedLayerAndItsHandedBytesReadAlike(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	applied := appliedProject("[quickstart]\nsoil_mode = true\n")
-	content, err := applied.Content()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, layer := range []ProjectLayer{applied, HandedProject(content)} {
-		cfg, err := Load(testEnv(), layer)
-		if err != nil {
-			t.Fatalf("Load(%s) error = %v", layer, err)
+// A worker runs on the layer its launcher's applies build, so the layer the
+// launcher hands over is the launcher's own: the same config, named the same
+// on both events.
+func TestTheLayerAWorkerIsHandedIsItsLaunchers(t *testing.T) {
+	for _, launcher := range []ProjectLayer{NoProject(), appliedProject("[quickstart]\nsoil_mode = true\n")} {
+		worker := Applied(launcher.Applies())
+		if worker.Source() != launcher.Source() {
+			t.Errorf("worker source = %q, launcher's %q", worker.Source(), launcher.Source())
 		}
-		if !cfg.Quickstart.SoilMode {
-			t.Fatalf("Load(%s) did not read soil_mode", layer)
+		got, err := worker.Content()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := launcher.Content()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("worker content = %q, launcher's %q", got, want)
 		}
 	}
 }

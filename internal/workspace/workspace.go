@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
-	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
@@ -100,11 +99,6 @@ type Info struct {
 	// Remotes is this checkout's git remote configuration, asked of git once
 	// per invocation; see Remotes for who owns it.
 	Remotes *Remotes
-	// Project is the project config layer every config read of this unit of
-	// work takes: the config applied to the store, set when the store opens
-	// (config.Unread until then), or the one a detached worker was handed.
-	// [LAW:one-source-of-truth] no config read derives it again.
-	Project config.ProjectLayer
 }
 
 // PrimaryClone says this checkout is the repository's primary clone rather than
@@ -407,17 +401,16 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		// git prints --show-toplevel absolute with every symlink resolved, so its
 		// answer is a CheckoutRoot as it stands.
 		Remotes: NewRemotes(env, loc.Repository(), CheckoutRoot{path: geo.root}),
-		Project: config.Unread(),
 	}, &settlement, nil
 }
 
 // Handed is the workspace a detached worker runs against: the store at loc,
 // and the values the command that launched it handed it from its own
-// checkout — the root relative path URLs are joined to, the sync remote its
-// precedence chose, and its project config layer. Nothing is asked of a
-// checkout, which may be gone by now, and nothing is created: the store
-// exists, because the launcher ran against it. [LAW:effects-at-boundaries]
-func Handed(env environ.Env, loc Location, root CheckoutRoot, syncRemote string, project config.ProjectLayer) (Info, error) {
+// checkout — the root relative path URLs are joined to, and the sync remote
+// its precedence chose. Nothing is asked of a checkout, which may be gone by
+// now, and nothing is created: the store exists, because the launcher ran
+// against it. [LAW:effects-at-boundaries]
+func Handed(env environ.Env, loc Location, root CheckoutRoot, syncRemote string) (Info, error) {
 	cfg, err := ReadConfig(loc.ConfigPath)
 	if err != nil {
 		return Info{}, err
@@ -428,7 +421,6 @@ func Handed(env environ.Env, loc Location, root CheckoutRoot, syncRemote string,
 		WorkspaceID: cfg.WorkspaceID,
 		IssuePrefix: parseStoredPrefix(loc.ConfigPath, cfg.IssuePrefix),
 		Remotes:     HandedRemotes(env, loc.Repository(), root, syncRemote),
-		Project:     project,
 	}, nil
 }
 

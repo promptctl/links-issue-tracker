@@ -738,7 +738,7 @@ else ready.
   that store (`app.ProjectOf`; a read failure fails the command) (`cli.go`).
 - With no `--at`, opens the cwd workspace store through `runWithApp` with
   `app.AccessRead`, and the work runs with
-  `projectReadyPolicy(env, ap.Workspace.Project)` (`cli.go`).
+  `projectReadyPolicy(env, ap.Project)` (`cli.go`).
 
 **Flags** (declared in `listLeaf`, `cli.go`; read in its `work` closure,
 `cli.go`). "Only if visited" means the flag appears on the command line
@@ -955,7 +955,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   printed**.
 - The target is resolved first, so the `ready.required_fields` policy is read
   from the project config applied to the store
-  (`readyRequiredFields(env, ap.Workspace.Project)` → `config.Load`, `cli.go`)
+  (`readyRequiredFields(env, ap.Project)` → `config.Load`, `cli.go`)
   **only when a plan slice exists**. An issue in no epic reads no config, so
   an applied config that fails validation for an unrelated reason (for example
   `snapshot.retention_budget <= 0`) does not affect `lit show` on it; for an epic

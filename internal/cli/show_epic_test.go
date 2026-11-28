@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // showOutput runs `lit show <id>` text rendering and returns the captured
@@ -116,7 +116,7 @@ func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 // repo's config cannot be loaded, for reasons that have nothing to do with the
 // ready policy".
 func useUnrelatedlyBrokenConfig(ap *app.App) {
-	ap.Workspace = workspacetest.WithProject(ap.Workspace, "[snapshot]\nretention_budget = -1\n")
+	ap.Project = configtest.Applied("[snapshot]\nretention_budget = -1\n")
 }
 
 // The only parentless ticket is a top-level epic, and its plan slice — its

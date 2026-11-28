@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -24,6 +25,7 @@ import (
 // fetch left at the head the live tracking ref still names.
 func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -57,7 +59,7 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 
 	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	recorder := telemetry.Begin(telemetry.Event{})
-	receiveOnce(telemetry.With(context.Background(), recorder), workerRun(t, testStderr(t)), ws)
+	receiveOnce(telemetry.With(context.Background(), recorder), workerRun(t, testStderr(t)), ws, project)
 
 	var landing *syncTraceRecord
 	for _, record := range readSyncTraceRecords(t, ws) {

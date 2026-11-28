@@ -308,27 +308,23 @@ func configLayers(env environ.Env, project ProjectLayer) layers {
 	return layers{fileLayer{globalConfigPath(env)}, project}
 }
 
-// ProjectLayer is the project config layer, read above the global one. A
-// command runs on the config applied to its store (Applied), read when the
-// store opens; a detached worker runs on the content the command that launched
-// it was running on (HandedProject). The checkout's own file is what
-// `lit config apply` puts in force, and nothing reads it as the config in
+// ProjectLayer is the project config layer, read above the global one: the
+// config in force on a store, read from its applies (Applied). A command gets
+// it from the open of its store, and a detached worker from the command that
+// launched it, which hands over the apply in force. The checkout's own file is
+// what `lit config apply` puts in force, and nothing reads it as the config in
 // force: an edit to it has no effect until it is applied, so every clone runs
-// on one config. [LAW:one-source-of-truth] [LAW:types-are-the-program]
-// each layer is a value its holder carries, so no config read on a worker's
-// path reaches for a checkout or a store.
+// on one config. [LAW:one-source-of-truth] [LAW:types-are-the-program] the
+// only layers are a store's, so no config read runs on a config no store holds.
 type ProjectLayer interface {
-	// Content is what a launcher hands its worker.
 	layer
-	// Source names where the layer came from — applied:<digest> or handed —
-	// for the command's event: which file won is a fact of every command.
-	// [LAW:nothing-unseen]
+	// Source names the config in force — applied:<digest>, or none — for the
+	// command's event: which config won is a fact of every command, a worker's
+	// included. [LAW:nothing-unseen]
 	Source() string
-}
-
-// HandedProject is a project layer handed over as content, read from no file.
-func HandedProject(content []byte) ProjectLayer {
-	return handedLayer{content: content}
+	// Applies is what a launcher hands its worker: the apply in force, or none,
+	// so the worker's Applied layer is this one.
+	Applies() []model.ConfigApply
 }
 
 // fileLayer is a layer read from the file at path when Load runs.
@@ -353,9 +349,9 @@ func (l fileLayer) Content() ([]byte, error) {
 }
 
 // NoProject is a project layer that sets nothing: a store nothing has been
-// applied to, which runs on lit's defaults, or a worker that was handed no
-// layer. It says so on the event, where "applied" or "handed" would claim
-// something that never happened. [FRAMING:representation]
+// applied to, which runs on lit's defaults, or a worker whose handoff could
+// not be read. It says so on the event, where "applied" would claim something
+// that never happened. [FRAMING:representation]
 func NoProject() ProjectLayer { return noProjectLayer{} }
 
 type noProjectLayer struct{}
@@ -365,6 +361,8 @@ func (noProjectLayer) Content() ([]byte, error) { return nil, nil }
 func (noProjectLayer) String() string { return "no project config" }
 
 func (noProjectLayer) Source() string { return "none" }
+
+func (noProjectLayer) Applies() []model.ConfigApply { return nil }
 
 // Applied is the project layer of a store holding applies: the config in
 // force, model.ConfigInForce's pick, or NoProject when nothing has been
@@ -388,30 +386,7 @@ func (l appliedLayer) Source() string { return "applied:" + string(l.apply.Diges
 
 func (l appliedLayer) Content() ([]byte, error) { return []byte(l.apply.Content), nil }
 
-// Unread is the project layer of a workspace whose store has not been opened.
-// The project layer is read from the store, so a command that reads config
-// before opening it would run on a config no other clone runs on. It fails
-// instead, naming the defect. [LAW:no-silent-failure]
-func Unread() ProjectLayer { return unreadLayer{} }
-
-type unreadLayer struct{}
-
-func (unreadLayer) Content() ([]byte, error) {
-	return nil, errors.New("the project config is read from the store, and this command read it before opening the store")
-}
-
-func (unreadLayer) String() string { return "the unread project config" }
-
-func (unreadLayer) Source() string { return "unread" }
-
-// handedLayer is a project layer that arrived as content.
-type handedLayer struct{ content []byte }
-
-func (l handedLayer) String() string { return "handed project config" }
-
-func (l handedLayer) Source() string { return "handed" }
-
-func (l handedLayer) Content() ([]byte, error) { return l.content, nil }
+func (l appliedLayer) Applies() []model.ConfigApply { return []model.ConfigApply{l.apply} }
 
 // merge folds every layer into v in precedence order and returns the
 // concatenated required-field contributions in that same order, with every
@@ -441,9 +416,10 @@ func Load(env environ.Env, project ProjectLayer) (Config, error) {
 // CheckProject refuses a project config file for every fault it holds, read
 // alone over the defaults: what `lit config apply` puts in force must be a
 // config on every clone, whatever global config each user layers under it.
-// [LAW:single-enforcer] the check is Load's, over one layer.
+// [LAW:single-enforcer] the check is Load's, over the layer content would be
+// once applied.
 func CheckProject(content []byte) error {
-	_, err := layers{HandedProject(content)}.load()
+	_, err := layers{appliedLayer{apply: model.ConfigApply{Content: string(content)}}}.load()
 	return err
 }
 

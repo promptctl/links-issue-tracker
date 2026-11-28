@@ -212,11 +212,11 @@ func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 // receive, the only — detector of a schema refusal.
 // [LAW:dataflow-not-control-flow] every error passes through; the class decides.
 // [LAW:single-enforcer] the five foreground error paths share this one point.
-func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, err error) error {
+func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, err error) error {
 	err = asSyncFailure(err)
 	var failure SyncFailureError
 	if errors.As(err, &failure) {
-		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, failure.Failure)
 	}
 	return err
 }
@@ -229,13 +229,13 @@ func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, 
 // here, so a class arriving unmapped is reported as the bug it is rather than
 // passing as a refusal another half will page, which it never saw.
 // [LAW:single-enforcer] [LAW:no-silent-failure]
-func notifyOwnerForFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, failure SyncFailure) {
+func notifyOwnerForFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, failure SyncFailure) {
 	ev, ok := ownerNotifyEventForFailure(failure)
 	if !ok {
 		fmt.Fprintf(stderr, "lit: sync failure %q reached the owner channel with no kind of its own; the owner was not paged — this is a bug; please report it\n", failure.Class)
 		return
 	}
-	maybeNotifyOwner(ctx, stderr, env, ws, ev)
+	maybeNotifyOwner(ctx, stderr, env, ws, project, ev)
 }
 
 // ownerNotifyMarkerPath is the per-kind sent marker: its content is the episode
@@ -277,7 +277,7 @@ func ownerNotifyDue(markerPath, fingerprint string, now time.Time) bool {
 // sync trace; [LAW:effects-at-boundaries] the config read and the process spawn
 // live here, behind one named boundary, and every caller stays a pure
 // "detected this" report.
-func maybeNotifyOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, ev ownerNotifyEvent) {
+func maybeNotifyOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, ev ownerNotifyEvent) {
 	if autoSyncDisabled(env) {
 		return
 	}
@@ -285,7 +285,7 @@ func maybeNotifyOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws
 	if !ownerNotifyDue(markerPath, ev.fingerprint(), time.Now()) {
 		return
 	}
-	cfg, err := config.Load(env, ws.Project)
+	cfg, err := config.Load(env, project)
 	if err != nil {
 		fmt.Fprintf(stderr, "lit: owner notification skipped, config unreadable: %v\n", err)
 		return
@@ -375,14 +375,14 @@ func clearOwnerNotify(stderr io.Writer, ws workspace.Info, kinds ...ownerNotifyK
 // notify arms at all: pushOutcomeOf classifies them as their own non-failed
 // decisions, so this function needs no error inspection of its own — the
 // record IS the classification. [LAW:single-enforcer] [LAW:parse-dont-validate]
-func observePushOutcomeForOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, rec pushOutcomeRecord, refusal SyncFailure, refused bool) {
+func observePushOutcomeForOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, rec pushOutcomeRecord, refusal SyncFailure, refused bool) {
 	switch {
 	case rec.Decision == pushDecisionPushed:
 		clearOwnerNotify(stderr, ws, kindsEndedBy(endedByPush)...)
 	case rec.failed() && refused:
-		notifyOwnerForFailure(ctx, stderr, env, ws, refusal)
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, refusal)
 	case rec.failed():
-		maybeNotifyOwner(ctx, stderr, env, ws, ownerNotifyEvent{
+		maybeNotifyOwner(ctx, stderr, env, ws, project, ownerNotifyEvent{
 			Kind:    ownerNotifyPushFailed,
 			Summary: fmt.Sprintf("a lit sync push to %s failed: %s — local ticket changes are not reaching the shared backlog.", pushTarget(rec.Remote, rec.Branch), rec.Reason),
 			Remote:  rec.Remote,

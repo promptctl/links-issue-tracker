@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -82,6 +83,7 @@ func TestShouldReceiveNowDebounce(t *testing.T) {
 // mirror-pending claim survives either call.
 func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -92,7 +94,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	ws := workspacetest.Resolved(t, runEnv(t), root)
 	ctx := underInvocation(context.Background())
 
-	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws)
+	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws, project)
 	info, err := os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
@@ -113,7 +115,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	}
 	stamped := info.ModTime()
 
-	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws)
+	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws, project)
 	info, err = os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("absence marker vanished: %v", err)
