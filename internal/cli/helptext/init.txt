@@ -18,3 +18,8 @@ Every run prints the prefix lit stored. Normalization can change what you
 passed — it slugifies and truncates at 12 characters, so --prefix
 payment_service stores payment-serv — so you learn the real value here
 rather than from the first issue ID.
+
+Every run prints the project config the store runs on. On a store nothing
+has been applied to, a committed .lit/config.toml is applied; a store that
+already holds an applied config keeps it. `lit config apply` puts a later
+edit in force.

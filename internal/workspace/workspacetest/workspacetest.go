@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -23,10 +22,9 @@ const WorkspaceID = "test-workspace-id"
 //
 // Each is a shape production has, its geometry whole: New and StoreAt a store
 // with no checkout, Handed the root and store a detached worker is handed.
-// [LAW:types-are-the-program] Each starts with the workspace id WorkspaceID,
-// the issue prefix "test", and the project config handed as a value that
-// configures nothing, which the With functions change. A real checkout's
-// workspace is Resolved, whose identity and config are the ones on disk.
+// [LAW:types-are-the-program] Each starts with the workspace id WorkspaceID
+// and the issue prefix "test", which the With functions change. A real
+// checkout's workspace is Resolved, whose identity is the one on disk.
 
 // New is a workspace of t's own with no checkout: a store geometry under a
 // fresh temp directory, whose storage directory exists and whose store has not
@@ -53,7 +51,6 @@ func StoreAt(t testing.TB, env environ.Env, storageDir string) workspace.Info {
 		WorkspaceID: WorkspaceID,
 		IssuePrefix: prefixState(t, "test"),
 		Remotes:     workspace.NewRemotes(env, loc.Repository(), workspace.CheckoutRoot{}),
-		Project:     configtest.HandedProject(""),
 	}
 }
 
@@ -74,7 +71,7 @@ func Handed(t testing.TB, env environ.Env, root string) workspace.Info {
 }
 
 // Resolved is the workspace a command run in the repository at dir resolves:
-// workspace.Resolve itself, identity and project config included.
+// workspace.Resolve itself, identity included.
 func Resolved(t testing.TB, env environ.Env, dir string) workspace.Info {
 	t.Helper()
 	ws, err := workspace.Resolve(env, dir)
@@ -94,12 +91,6 @@ func WithWorkspaceID(ws workspace.Info, id string) workspace.Info {
 func WithIssuePrefix(t testing.TB, ws workspace.Info, raw string) workspace.Info {
 	t.Helper()
 	ws.IssuePrefix = prefixState(t, raw)
-	return ws
-}
-
-// WithProject is ws running under the handed project config toml.
-func WithProject(ws workspace.Info, toml string) workspace.Info {
-	ws.Project = configtest.HandedProject(toml)
 	return ws
 }
 

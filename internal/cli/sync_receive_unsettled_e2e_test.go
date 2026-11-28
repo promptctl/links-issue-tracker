@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -57,9 +58,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
+	project := enableOwnerNotify(t, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	if err := os.Remove(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the fetch-success marker: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		unblock := blockTheLanding(t, ws)
 		outcome := landAndRecord(ctx, testStderr(t), runEnv(t), ws, clone, fetch, remoteAdvertisement{})
 		unblock()
-		surfaceReceiveOutcome(ctx, testStderr(t), runEnv(t), ws, outcome, time.Now())
+		surfaceReceiveOutcome(ctx, testStderr(t), runEnv(t), ws, project, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
 	}
 	receive := func() map[string]any {
@@ -213,16 +214,6 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	return unblock
 }
 
-// addOwnerNotifyHook turns the owner channel on for an initialized workspace:
-// its checkout's whole project config becomes one whose only setting is the
-// owner hook hook.
-func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
-	t.Helper()
-	setRunEnv(t, DisableAutoSyncEnvVar, "0")
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	writeCheckoutProject(t, ws.RootDir, ownerHookConfig(hook))
-}
-
 // receiveTraceStops is the stopped metadata of every receive trace the
 // workspace recorded, oldest first.
 func receiveTraceStops(t *testing.T, ws workspace.Info) []string {
@@ -290,9 +281,10 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 // unsettled.first unwritten, and the next automatic receive counts it.
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	blockTheLanding(t, ws)
-	err := receivePushedReRoot(ctx, testStderr(t), runEnv(t), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	err := receivePushedReRoot(ctx, testStderr(t), runEnv(t), ws, project, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
 	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
 		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
@@ -308,12 +300,13 @@ func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 // chose failed and where.
 func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	_, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
-	liveStoreLearns(ctx, testStderr(t), runEnv(t), io.Discard, ws, clone, landed)
+	liveStoreLearns(ctx, testStderr(t), runEnv(t), io.Discard, ws, project, clone, landed)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {

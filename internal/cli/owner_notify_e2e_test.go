@@ -18,18 +18,23 @@ import (
 // step exits refusing with nothing destroyed; and a failing push reaches the
 // owner the day it happens.
 
-// writeOwnerNotifyProjectConfig makes config the whole project config of the
-// checkout at repo and holds its automatic receive off, so a test can
-// re-enable LIT_DISABLE_AUTO_SYNC=0, which the notify path requires, without
-// a background receive reconciling state out from under its assertions. The
-// receive is held off by its debounce marker, dated a day ahead, so no
-// command spawns one and the test runs each receive itself.
+// writeOwnerNotifyProjectConfig puts config in force on the checkout at repo
+// and holds its automatic receive off (deferReceive), so a test can re-enable
+// LIT_DISABLE_AUTO_SYNC=0, which the notify path requires, without a
+// background receive reconciling state out from under its assertions.
 //
 // config is usually ownerNotifyConfig: on-push cadence, so no command spawns
 // a mirror, and the owner hook appending to a sink the test reads.
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, config string) {
 	t.Helper()
-	writeCheckoutProject(t, repo, config)
+	applyProjectConfig(t, repo, config)
+	deferReceive(t, repo)
+}
+
+// deferReceive dates repo's receive debounce marker a day ahead, so no command
+// spawns a receive and the test runs each receive itself.
+func deferReceive(t *testing.T, repo string) {
+	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	if err := markReceiveAttempt(ws); err != nil {
 		t.Fatalf("mark the receive attempted in %s: %v", repo, err)
@@ -41,11 +46,19 @@ func writeOwnerNotifyProjectConfig(t *testing.T, repo, config string) {
 }
 
 // ownerNotifyConfig is a project config of on-push cadence, the receive on or
-// off, and the owner hook appending each notification to sink.
-func ownerNotifyConfig(sink string, receive bool) string {
+// off, and an owner hook appending each notification to the file the shell
+// word sink names: shPath of a path, or sharedOwnerNotifySink.
+func ownerNotifyConfig(receive bool, sink string) string {
 	return fmt.Sprintf("[sync]\ncadence = 'on-push'\nreceive = %t\n", receive) +
-		ownerHookKey(`printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+		ownerHookKey(`printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+sink)
 }
+
+// sharedOwnerNotifySink is the sink of a hook every clone shares: each
+// checkout's notifications go to its own file beside it, checkoutSink.
+const sharedOwnerNotifySink = `"$LIT_NOTIFY_REPO.notifications"`
+
+// checkoutSink is the file a shared owner hook appends dir's notifications to.
+func checkoutSink(dir string) string { return dir + ".notifications" }
 
 // maskGlobalConfig keeps the developer's real ~/.config lit settings — possibly
 // including a real notifier — out of any test that re-enables auto-sync.
@@ -103,7 +116,7 @@ func TestDivergenceNotifiesOwnerOutOfBand(t *testing.T) {
 	_, consumer, _, _ := forkedBacklogs(t, base)
 
 	sink := filepath.Join(base, "notifications")
-	writeOwnerNotifyProjectConfig(t, consumer, ownerNotifyConfig(sink, true))
+	writeOwnerNotifyProjectConfig(t, consumer, ownerNotifyConfig(true, shPath(sink)))
 	if _, err := os.Stat(sink); !os.IsNotExist(err) {
 		t.Fatalf("notification sink exists before any divergence surfaced (stat err=%v)", err)
 	}
@@ -220,7 +233,7 @@ func TestPushFailureNotifiesOwner(t *testing.T) {
 	firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-ticket", "--topic", "demo", "--type", "task", "--parent", soloEpic))
 
 	sink := filepath.Join(base, "notifications")
-	writeOwnerNotifyProjectConfig(t, repo, ownerNotifyConfig(sink, true))
+	writeOwnerNotifyProjectConfig(t, repo, ownerNotifyConfig(true, shPath(sink)))
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 
 	// Healthy push: no notification.

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
@@ -80,7 +81,7 @@ func receiveBlockPendingPath(ws workspace.Info) string {
 // twice. [LAW:single-enforcer] The debounce marker has one writer — this owner.
 // A workspace with no git remote has nothing to receive from, so it spawns
 // nothing, the same precondition the mirror's spawn checks.
-func scheduleReceive(ctx context.Context, inv Invocation, ws workspace.Info) {
+func scheduleReceive(ctx context.Context, inv Invocation, ws workspace.Info, project config.ProjectLayer) {
 	stderr, env := inv.Stderr, inv.Env
 	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
 		return
@@ -98,7 +99,7 @@ func scheduleReceive(ctx context.Context, inv Invocation, ws workspace.Info) {
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ctx, inv.withEnv(receiveEnv(env)), ws, backgroundReceiveSubcommand, ReceiveLogName, spawningProcess()); err != nil {
+	if err := spawnDetachedWorker(ctx, inv.withEnv(receiveEnv(env)), ws, project, backgroundReceiveSubcommand, ReceiveLogName, spawningProcess()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(stderr, "lit: automatic receive not started: %v\n", err)
 		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, cause)
@@ -162,7 +163,7 @@ func handedReceiveDeadline(built workerWorkspace) string {
 // spawning command may still be writing its own. [LAW:no-silent-failure]
 // [LAW:no-ambient-temporal-coupling]
 func receiveWhenQuiet(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) time.Duration {
-	stderr, env, ws := inv.Stderr, inv.Env, built.info()
+	stderr, env, ws, project := inv.Stderr, inv.Env, built.info(), built.project()
 	parentWait := workerParentWait(env.Deadlines())
 	if !from.awaitExit(ctx, os.Getppid, parentWait, workerParentPollDelay) {
 		if ctx.Err() != nil {
@@ -188,7 +189,7 @@ func receiveWhenQuiet(ctx context.Context, inv Invocation, built workerWorkspace
 		// the ordering, not the receive: say so and receive anyway.
 		fmt.Fprintf(stderr, "lit: receiving without waiting for the mirror: %v\n", err)
 	}
-	receiveOnce(ctx, inv, ws)
+	receiveOnce(ctx, inv, ws, project)
 	return waited
 }
 
@@ -278,7 +279,7 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 // failure is
 // recorded as a trace and never reaches a command's exit code.
 // [LAW:no-silent-failure]
-func receiveOnce(ctx context.Context, inv Invocation, ws workspace.Info) {
+func receiveOnce(ctx context.Context, inv Invocation, ws workspace.Info, project config.ProjectLayer) {
 	stderr, env := inv.Stderr, inv.Env
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
@@ -360,13 +361,13 @@ func receiveOnce(ctx context.Context, inv Invocation, ws workspace.Info) {
 	}
 	// The store is closed by now: surfacing can run the owner-notify hook,
 	// and nothing waiting on the store should wait on that too.
-	surfaceReceiveOutcome(ctx, stderr, env, ws, outcome, time.Now())
+	surfaceReceiveOutcome(ctx, stderr, env, ws, project, outcome, time.Now())
 	// What the settle left unpushed is owed the push a write's commit is: a
 	// refusal over a peer's commits is recorded diverged on the promise that
 	// this merge reaches the remote. The mirror waits for this worker to exit.
 	access := outcome.access()
 	telemetry.Set(ctx, "receive.push_owed", access.Writes())
-	mirrorAfterReceive(ctx, inv, access, ws)
+	mirrorAfterReceive(ctx, inv, access, ws, project)
 }
 
 // receiveAndRecord is the receive proper, run under the receive lock: clone
@@ -433,7 +434,7 @@ func landAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws wo
 // worker's ctx, not the receive's timeoutCtx: the receive fetch already
 // completed, and its remaining budget must not shorten the notifier's own.
 // [LAW:no-ambient-temporal-coupling]
-func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
+func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, project config.ProjectLayer, outcome syncReceiveOutcome, now time.Time) {
 	if failure, ok := outcome.inlineSyncFailure(now); ok {
 		block := failure.blockString()
 		// The worker's own log keeps every block it reached; the pending file
@@ -442,7 +443,7 @@ func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.En
 		if err := writeMarkerAtomic(receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
 			fmt.Fprintf(stderr, "lit: sync-failure block not left for the next command: %v\n", err)
 		}
-		notifyOwnerForFailure(ctx, stderr, env, ws, failure)
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, failure)
 		return
 	}
 	if outcome.settledCleanly() {

@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -176,16 +177,17 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	sort.Slice(mergedIssues, func(i, j int) bool { return mergedIssues[i].ID < mergedIssues[j].ID })
 
 	merged := model.Export{
-		Version:     model.ExportVersion,
-		WorkspaceID: local.WorkspaceID,
-		ExportedAt:  local.ExportedAt,
-		Issues:      mergedIssues,
-		Relations:   mergeRelations(scope, base.Relations, local.Relations, remote.Relations),
-		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (model.ID, model.ID) { return c.ID, c.IssueID }),
-		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
-		Events:      mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (model.ID, model.ID) { return e.ID, e.IssueID }),
-		Purges:      purges,
-		PlanReviews: mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (model.ID, model.ID) { return r.ID, r.IssueID }),
+		Version:       model.ExportVersion,
+		WorkspaceID:   local.WorkspaceID,
+		ExportedAt:    local.ExportedAt,
+		Issues:        mergedIssues,
+		Relations:     mergeRelations(scope, base.Relations, local.Relations, remote.Relations),
+		Comments:      mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (model.ID, model.ID) { return c.ID, c.IssueID }),
+		Labels:        mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
+		Events:        mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (model.ID, model.ID) { return e.ID, e.IssueID }),
+		Purges:        purges,
+		PlanReviews:   mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (model.ID, model.ID) { return r.ID, r.IssueID }),
+		ConfigApplies: unionApplies(local.ConfigApplies, remote.ConfigApplies),
 	}
 	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
@@ -447,5 +449,22 @@ func mergeLabels(scope issueScope, base, locals, remotes []model.Label) []model.
 		}
 		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+// unionApplies is every config apply either side holds, once, by id, in
+// model.ConfigApplyOrdering. An apply belongs to no issue, so no issue's fate
+// in the merge reaches it; and none is ever removed, so the union is the set
+// both stores converge on, and model.ConfigInForce picks one newest apply from
+// it on every store.
+func unionApplies(locals, remotes []model.ConfigApply) []model.ConfigApply {
+	byID := map[model.ID]model.ConfigApply{}
+	for _, sided := range bothSidesOf(locals, remotes) {
+		for _, apply := range sided.rows {
+			byID[apply.ID] = apply
+		}
+	}
+	out := slices.Collect(maps.Values(byID))
+	slices.SortFunc(out, model.ConfigApplyOrdering)
 	return out
 }

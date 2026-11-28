@@ -63,7 +63,7 @@ type checkoutFacts struct {
 // gatherCheckouts reads those facts, the half of a claim's reading that a read
 // of one lane and a read of the backlog share.
 func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App) (checkoutFacts, error) {
-	cfg, err := config.Load(env, ap.Workspace.Project)
+	cfg, err := config.Load(env, ap.Project)
 	if err != nil {
 		return checkoutFacts{}, err
 	}

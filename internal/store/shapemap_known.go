@@ -266,6 +266,12 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"created_at":  "plan_reviews.created_at",
 		"created_by":  "plan_reviews.created_by",
 	},
+	"config_applies": {
+		"id":         "config_applies.id",
+		"content":    "config_applies.content",
+		"created_at": "config_applies.created_at",
+		"created_by": "config_applies.created_by",
+	},
 }
 
 // bookkeepingTables are the tables a dump carries that have no domain

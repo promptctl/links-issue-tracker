@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -16,9 +17,10 @@ import (
 // event it wrote and the one value it put on receive.outcomes.
 func receiveEvent(t *testing.T, ws workspace.Info) (telemetry.Event, map[string]any) {
 	t.Helper()
+	project := configtest.Applied("")
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, workerRun(t, testStderr(t)), ws)
+	receiveOnce(ctx, workerRun(t, testStderr(t)), ws, project)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {

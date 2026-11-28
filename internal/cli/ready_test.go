@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -35,7 +36,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 	if err != nil {
 		t.Fatalf("workspace.EnsureStream() error = %v", err)
 	}
-	return app.New(ws, st, stream)
+	return app.New(ws, configtest.Applied(""), st, stream)
 }
 
 type readyTestHarness struct {
@@ -56,7 +57,7 @@ func newReadyTestHarness(t *testing.T) readyTestHarness {
 // useProjectConfig runs every later command of h under the project config
 // content.
 func (h readyTestHarness) useProjectConfig(content string) {
-	h.ap.Workspace = workspacetest.WithProject(h.ap.Workspace, content)
+	h.ap.Project = configtest.Applied(content)
 }
 
 func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {

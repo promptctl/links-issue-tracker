@@ -16,7 +16,7 @@ import (
 // setting, each with a warning on stderr. The command runs either way,
 // because a key that changes nothing is a reason to look, not to stop.
 //
-// It runs where a command acquires its workspace, once, not inside
+// It runs where a command reads its project layer from the store, once, not inside
 // config.Load, which one command can call several times and which commands
 // that read no setting never call. [LAW:single-enforcer]
 func reportConfigLayers(ctx context.Context, stderr io.Writer, env environ.Env, project config.ProjectLayer) {

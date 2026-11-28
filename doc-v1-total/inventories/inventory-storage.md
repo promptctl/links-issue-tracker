@@ -22,7 +22,7 @@ Path prefix for all citations: `/Users/bmf/code/links-issue-tracker/`
 
 ### 1.2 `Store` — the composed contract
 
-`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `PlanReviewStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `ChangeObserver` + `Close() error` (`internal/storage/contract.go`; `PlanReviewStore` is declared in `internal/storage/plan_review.go`).
+`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `PlanReviewStore` + `ConfigStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `ChangeObserver` + `Close() error` (`internal/storage/contract.go`; `PlanReviewStore` is declared in `internal/storage/plan_review.go`, `ConfigStore` in `internal/storage/config_apply.go`).
 
 - `Close() error` is in the contract so a caller can release an engine's resources without knowing what they are; for Dolt this includes the workspace lock, and discarding the error strands it (`internal/storage/contract.go`).
 - Deliberately absent from `Store` (they are capabilities): sync, schema migration, checkpoints, repair, raw test access — named as `Syncer`, `Reconciler`, `Checkpointer`, `Repairer`, `SchemaMigrator`, `Importer`, `RawExecutor` (`internal/storage/contract.go`).
@@ -147,6 +147,17 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 - Distinct from `NotFoundError`, whose remediation sends the caller to check the issue id: here the id resolved.
 
 **`DescribeVersions(count int) string`** — `internal/storage/plan_review.go`: `"1 version"` when `count == 1`, else `fmt.Sprintf("%d versions", count)`.
+
+### 1.5b `ConfigStore` (`internal/storage/config_apply.go`)
+
+Holds the applies of the project config. An apply is never edited or removed: putting another config in force applies it (`internal/storage/config_apply.go`).
+
+**`ApplyConfig(ctx, content string, actor string) (model.ConfigApply, bool, error)`** — puts `content` in force as applied by `actor` and returns the apply in force afterwards; when `content` is already the config in force it writes nothing and the bool is false.
+- Both engines decide through `NextConfigApply` with id `"cfg-" + uuid.NewString()`, the engine's `StampTally` and its clock (`internal/storage/memory/config_apply.go`; `internal/store/config_apply.go`). The memory engine appends to `applies` under its mutex; the Dolt engine reads the applies (`queryConfigApplies`) inside one `apply config` mutation and, when written, inserts the row through `insertConfigApplyTx` in the same transaction, so of two applies racing on one store the later one sees the earlier.
+
+**`ConfigApplies(ctx) ([]model.ConfigApply, error)`** — every apply, in `model.ConfigApplyOrdering`.
+
+**`NextConfigApply(applies []model.ConfigApply, id model.ID, content string, actor string, stamps *StampTally, clock Clock) (model.ConfigApply, bool)`** — `model.ConfigInForce(applies)`, then `stamps.Stamp(clock, inForce.CreatedAt)`, taken whether or not the apply writes, so a no-op apply's clock reading counts in `StampCorrections` too; an apply in force whose `Content == content` → that apply, false. Otherwise `model.ConfigApply{ID: id, Content: content, CreatedAt: the stamp's Time(), CreatedBy: model.Text(actor)}`, true — `stamp.Next`'s rule: one nanosecond after the apply in force when the clock is not past it, so an apply always takes force over every apply its writer saw. The actor is not trimmed or defaulted.
 
 ---
 
@@ -678,6 +689,7 @@ These types live in the contract, not in an engine, because a capability interfa
 | `events` | `map[string][]model.IssueEvent` | History, keyed by issue; each issue's run in insertion order, so one issue's history costs that issue's events rather than a scan of the store's |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
 | `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
+| `applies` | `[]model.ConfigApply` | The applies of the project config, in recording order; a read orders them by `model.ConfigApplyOrdering` (`configApplies`, `internal/storage/memory/config_apply.go`) |
 
 **`record`** (`internal/storage/memory/engine.go`): `id`, `title`, `description`, `prompt`, `plan`, `issueType model.IssueType`, `topic`, `assignee`, `lane`, `priority model.Priority`, `createdAt`, `updatedAt time.Time`, `status model.StatusView`, `retention model.Retention`.
 - **Rank is deliberately absent** from `record`; position lives in `Engine.order`, and a rank string beside it would be a second representation of one fact (`internal/storage/memory/engine.go`).
@@ -1086,7 +1098,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.clock.Now(), Issues, Relations: e.relationsWhere(all), Comments: e.commentsWhere(all), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
+- Returns `model.Export{Version: model.ExportVersion (6), WorkspaceID: e.workspaceID, ExportedAt: e.clock.Now(), Issues, Relations: e.relationsWhere(all), Comments: e.commentsWhere(all), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews), ConfigApplies: e.configApplies()}`; `ConfigApplies` is a copy sorted by `model.ConfigApplyOrdering`.
 - `Relations` and `Comments` come back sorted by `storage.RelationOrdering` / `storage.CommentOrdering` (`relationsWhere` / `commentsWhere` keeping every row); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
@@ -1124,9 +1136,9 @@ Stated in `internal/storage/memory/doc.go`:
 - Rule for what may be asserted: only what a caller can observe through the contract; no case may reach past the interface into engine internals (`internal/storage/conformance/conformance.go`).
 - Dolt's behavior is the tiebreak where a behavior was ambiguous; where the second engine answered better, it was moved to match rather than the contract moved to meet it (`internal/storage/conformance/conformance.go`).
 
-### 3.2 The 72 registered cases (`internal/storage/conformance/conformance.go`)
+### 3.2 The registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `a_reported_handover_is_the_one_recorded`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `a_plan_review_judges_one_version`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `rank_inversions_read_tree_order`, `interleaved_epics_hold_no_rank_inversion`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `an_import_file_refused_at_a_write_writes_nothing`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_file_orders_its_rank_top_documents`, `bulk_file_ranks_a_create_at_the_top_of_its_epic`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `a_reported_handover_is_the_one_recorded`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `a_plan_review_judges_one_version`, `a_config_apply_puts_its_content_in_force`, `a_config_apply_outranks_every_apply_it_saw`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `rank_inversions_read_tree_order`, `interleaved_epics_hold_no_rank_inversion`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `an_import_file_refused_at_a_write_writes_nothing`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_file_orders_its_rank_top_documents`, `bulk_file_ranks_a_create_at_the_top_of_its_epic`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1433,6 +1445,15 @@ Stated in `internal/storage/memory/doc.go`:
 - Writing through the returned fail's `Laws` does not change the stored review's laws.
 - `GetIssueDetail.PlanReviews` holds the pass then the fail — oldest first by instant, though the fail was recorded first. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
 - `Export.PlanReviews` holds both, the pass first.
+
+**`a_config_apply_puts_its_content_in_force`** (`internal/storage/conformance/config_apply.go`)
+- `ApplyConfig(requirePrompt, "ada")` writes an apply with that content and `CreatedBy` `ada`.
+- `ApplyConfig(requirePrompt, "grace")` again writes nothing and returns the first apply.
+- `ApplyConfig(soilMode, "grace")` writes; `ConfigApplies` holds the first then the second, and `model.ConfigInForce` of them is the second.
+- `Export.ConfigApplies` equals `ConfigApplies`, element for element.
+
+**`a_config_apply_outranks_every_apply_it_saw`** (`internal/storage/conformance/config_apply.go`)
+- An apply with the clock pinned to `laterInstant`, then another with it pinned to `earlierInstant`: the second's `CreatedAt` is after the first's, and it is the config in force.
 
 **`labels_roundtrip`**
 - `Apply` of `AddLabel`/`RemoveLabel` returns the resulting set in `Applied.Issue.Labels`, and records one event whose only change is `labels` From→To (the comma-joined sets), by the plan's actor.

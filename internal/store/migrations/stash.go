@@ -340,6 +340,7 @@ var Restores = map[int64][]Stash{
 		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Unit: ticket("id")},
 		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}, Unit: undisputed()},
 	},
+	13: {Rows{Table: "config_applies", Columns: []string{"id", "content", "created_at", "created_by"}, Key: []string{"id"}, Unit: undisputed()}},
 }
 
 // unfiledEpic is v7's stash: the unfiled epic its Up minted, whole, with

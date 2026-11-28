@@ -207,12 +207,12 @@ func waitPastFreshnessWindow(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// writeTinyFreshnessWindow puts in force in dir's checkout a
+// writeTinyFreshnessWindow puts in force on dir's workspace a
 // claims.freshness_window short enough that any claim already on disk has
 // expired the moment waitPastFreshnessWindow returns.
 func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	t.Helper()
-	writeCheckoutProject(t, dir, "[claims]\nfreshness_window = \"1ms\"\n")
+	applyProjectConfig(t, dir, "[claims]\nfreshness_window = \"1ms\"\n")
 }
 
 // TestStartTakesOverALiveLaneUnderOneSharedIdentity is the takeover that

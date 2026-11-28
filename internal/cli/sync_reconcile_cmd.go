@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -69,7 +70,7 @@ func reconcilerFor(stderr io.Writer, env environ.Env, ws workspace.Info, session
 func syncReconcileShowLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
+		ws, project, session := scope.ws, scope.project, scope.session
 		reconciler, err := reconcilerFor(inv.Stderr, inv.Env, ws, session, reconcileShowCommand)
 		if err != nil {
 			return err
@@ -87,9 +88,9 @@ func syncReconcileShowLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcile(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, project, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, reconcileShowCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, project, reconcileShowCommand, remote, branch, result, false)
 	}}
 }
 
@@ -102,7 +103,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
 	resolveActor := registerActor(fs)
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
+		ws, project, session := scope.ws, scope.project, scope.session
 		if len(*resolveValues) == 0 {
 			return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
 		}
@@ -135,9 +136,9 @@ func syncReconcileResolveLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor(inv.Env))
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, project, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, proseResolveCommand, remote, branch, result, true)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, project, proseResolveCommand, remote, branch, result, true)
 	}}
 }
 
@@ -177,7 +178,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 	// parseLeaf refuses a second one. [LAW:one-source-of-truth]
 	const usage = "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"
 	return syncLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
+		ws, project, session := scope.ws, scope.project, scope.session
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -220,7 +221,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 					Metadata:  map[string]string{"remote": remote.String(), "sync_branch": branch},
 				})
 
-				notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, SyncFailure{
+				notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, project, SyncFailure{
 					Class:  syncFailureUnrelatedHistories,
 					Remote: remote.String(),
 					Branch: branch,
@@ -228,7 +229,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 				return ownerApprovalRefusalError{Approval: approval, Remote: remote.String(), Branch: branch}
 			}
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, project, err)
 		}
 		return reportTakeOutcome(inv.Stderr, inv.Env, inv.Stdout, ws, command, remote, branch, result)
 	}}
@@ -242,7 +243,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 func syncReconcileCombineLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile combine")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
+		ws, project, session := scope.ws, scope.project, scope.session
 		reconciler, err := reconcilerFor(inv.Stderr, inv.Env, ws, session, reconcileCombineCommand)
 		if err != nil {
 			return err
@@ -260,9 +261,9 @@ func syncReconcileCombineLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, project, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, reconcileCombineCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, project, reconcileCombineCommand, remote, branch, result, false)
 	}}
 }
 
@@ -443,7 +444,7 @@ func purgedIDs(inv *storage.UnrelatedInventory) []model.ID {
 // passes through — and it feeds the owner channel the same way every surface does:
 // a held state notifies out-of-band, a converged one ends the divergence episode.
 // [LAW:single-enforcer]
-func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
+func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, project config.ProjectLayer, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
@@ -470,7 +471,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote:  resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, failure.Failure)
 		return failure
 	case storage.SyncReconcileUnrelated:
 		// [LAW:single-enforcer] one contract, every surface — the block is the error's
@@ -487,7 +488,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, failure.Failure)
 		return failure
 	case storage.SyncReconcileProsePending:
 		metadata["pending"] = strconv.Itoa(len(result.Pending))
@@ -514,7 +515,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		// A held prose state on the explicit reconcile can be the FIRST detection
 		// (auto-sync disabled), so it notifies like every other surface, de-duplicated
 		// against the automatic receive's earlier detection when there was one.
-		notifyOwnerForFailure(ctx, stderr, env, ws, SyncFailure{
+		notifyOwnerForFailure(ctx, stderr, env, ws, project, SyncFailure{
 			Class:  syncFailureProseHeld,
 			Remote: remote.String(),
 			Branch: branch,

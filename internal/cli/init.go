@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -22,6 +24,41 @@ type initReport struct {
 	DBCreated    bool            `json:"db_created"`
 	Hooks        string          `json:"hooks"`
 	Sync         initSyncOutcome `json:"sync"`
+	Config       string          `json:"config"`
+}
+
+// initConfig puts the checkout's committed project config in force on a store
+// nothing has been applied to, and says which config the store runs on. A
+// store that already holds an apply, adopted from the remote or applied
+// before, keeps the one in force: a checkout whose branch carries an older
+// file would otherwise put that older config in force for every clone, since
+// the newest apply wins.
+func initConfig(ctx context.Context, inv Invocation, ws workspace.Info) (_ string, err error) {
+	ap, err := app.Open(ctx, inv.Env, inv.Stderr, ws, app.AccessWriteRoutine)
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = errors.Join(err, ap.Close()) }()
+	applies, err := ap.Store.ConfigApplies(ctx)
+	if err != nil {
+		return "", err
+	}
+	file, err := readProjectFile(ctx, inv.Env, ws)
+	if err != nil {
+		return "", err
+	}
+	if len(applies) > 0 || !file.Committed.Present {
+		return inForceLine(applies), nil
+	}
+	content, err := file.Applicable()
+	if err != nil {
+		return "", err
+	}
+	apply, _, err := ap.Store.ApplyConfig(ctx, content, resolveIdentity(inv.Env, ""))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("applied %s (%s)", file.Path, apply.Digest().Short()), nil
 }
 
 // initLeaf declares `lit init` together with the acquisition it needs, because
@@ -126,8 +163,13 @@ func initLeaf() (wsLeaf, wsAcquire) {
 			dbCreated = bootstrap.Built()
 		}
 		telemetry.Set(ctx, "init.db_created", dbCreated)
+		configLine, err := initConfig(ctx, inv, ws)
+		if err != nil {
+			return err
+		}
 
 		report := initReport{
+			Config:       configLine,
 			Status:       "initialized",
 			WorkspaceID:  ws.WorkspaceID,
 			IssuePrefix:  prefix.Value(),
@@ -217,6 +259,9 @@ func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) erro
 		return err
 	}
 	if err := writeInitSyncLine(w, report.Sync, buildNote); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  config: %s\n", report.Config); err != nil {
 		return err
 	}
 	if len(updated) > 0 {

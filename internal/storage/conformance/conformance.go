@@ -220,6 +220,8 @@ var cases = []engineCase{
 	{"a_purged_id_is_never_minted_again", aPurgedIDIsNeverMintedAgain},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"a_plan_review_judges_one_version", aPlanReviewJudgesOneVersion},
+	{"a_config_apply_puts_its_content_in_force", aConfigApplyPutsItsContentInForce},
+	{"a_config_apply_outranks_every_apply_it_saw", aConfigApplyOutranksEveryApplyItSaw},
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},

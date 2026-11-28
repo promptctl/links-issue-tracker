@@ -167,14 +167,15 @@ type TargetKey string
 type collection string
 
 const (
-	collIssues       collection = "issues"
-	collRelations    collection = "relations"
-	collComments     collection = "comments"
-	collLabels       collection = "labels"
-	collEvents       collection = "events"
-	collEventChanges collection = "event_changes"
-	collPurges       collection = "purges"
-	collPlanReviews  collection = "plan_reviews"
+	collIssues        collection = "issues"
+	collRelations     collection = "relations"
+	collComments      collection = "comments"
+	collLabels        collection = "labels"
+	collEvents        collection = "events"
+	collEventChanges  collection = "event_changes"
+	collPurges        collection = "purges"
+	collPlanReviews   collection = "plan_reviews"
+	collConfigApplies collection = "config_applies"
 )
 
 type targetField struct {
@@ -267,6 +268,8 @@ func buildTargetRegistry() map[TargetKey]targetField {
 	add(collPurges, TransformTimestamp, required, "issue_created_at", "purged_at")
 	add(collPlanReviews, TransformIdentity, required, "id", "issue_id", "plan_digest", "verdict", "laws", "created_by")
 	add(collPlanReviews, TransformTimestamp, required, "created_at")
+	add(collConfigApplies, TransformIdentity, required, "id", "content", "created_by")
+	add(collConfigApplies, TransformTimestamp, required, "created_at")
 	return reg
 }
 
@@ -592,15 +595,16 @@ func cellsDiffer(a, b any) bool {
 // by event_id.
 func assembleExport(workspaceID string, records map[collection][]map[string]any) (model.Export, error) {
 	export := model.Export{
-		Version:     model.ExportVersion,
-		WorkspaceID: workspaceID,
-		Issues:      []model.Issue{},
-		Relations:   []model.Relation{},
-		Comments:    []model.Comment{},
-		Labels:      []model.Label{},
-		Events:      []model.IssueEvent{},
-		Purges:      []model.Purge{},
-		PlanReviews: []model.PlanReview{},
+		Version:       model.ExportVersion,
+		WorkspaceID:   workspaceID,
+		Issues:        []model.Issue{},
+		Relations:     []model.Relation{},
+		Comments:      []model.Comment{},
+		Labels:        []model.Label{},
+		Events:        []model.IssueEvent{},
+		Purges:        []model.Purge{},
+		PlanReviews:   []model.PlanReview{},
+		ConfigApplies: []model.ConfigApply{},
 	}
 	for _, rec := range records[collIssues] {
 		issue, err := buildIssue(rec)
@@ -687,6 +691,14 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			Laws:       splitLaws(cellString(rec["laws"])),
 			CreatedAt:  cellTime(rec["created_at"]),
 			CreatedBy:  model.Text(cellString(rec["created_by"])),
+		})
+	}
+	for _, rec := range records[collConfigApplies] {
+		export.ConfigApplies = append(export.ConfigApplies, model.ConfigApply{
+			ID:        model.ID(cellString(rec["id"])),
+			Content:   cellString(rec["content"]),
+			CreatedAt: cellTime(rec["created_at"]),
+			CreatedBy: model.Text(cellString(rec["created_by"])),
 		})
 	}
 	return export, nil

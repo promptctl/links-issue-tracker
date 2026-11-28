@@ -26,7 +26,7 @@ type reRootedCheckouts struct {
 
 func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 	t.Helper()
-	r, base := newSharedCheckouts(t)
+	r, _ := newSharedCheckouts(t)
 	r.cut, _ = syncHeadAndBranch(t, r.bravo)
 	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 	if concurrent {
@@ -34,13 +34,14 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 		runCLIInDir(t, r.alpha, "sync", "push")
 	}
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
-	finishSharedCheckouts(t, r, base, receivingNotifyConfig)
+	finishSharedCheckouts(t, r)
 	return r
 }
 
-// newSharedCheckouts is the start every re-rooted pair shares: alpha seeded
-// an epic holding the ticket and a filler over one git remote and pushed it,
-// and bravo adopted it. It returns the directory both live under.
+// newSharedCheckouts is the start every re-rooted pair shares: alpha put the
+// owner channel's config in force, seeded an epic holding the ticket and a
+// filler over one git remote and pushed it, and bravo adopted it, config and
+// all, so the two run on one config. It returns the directory both live under.
 func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "1")
@@ -48,7 +49,8 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
-	r := reRootedCheckouts{alpha: filepath.Join(base, "alpha"), bravo: filepath.Join(base, "bravo"), sink: filepath.Join(base, "notifications")}
+	r := reRootedCheckouts{alpha: filepath.Join(base, "alpha"), bravo: filepath.Join(base, "bravo")}
+	r.sink = checkoutSink(r.bravo)
 
 	runGit(t, base, "clone", remote, "alpha")
 	runGit(t, r.alpha, "config", "user.email", "a@a.co")
@@ -60,6 +62,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	runGit(t, r.alpha, "commit", "-m", "seed")
 	runGit(t, r.alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, r.alpha, "init", "--skip-hooks")
+	applyProjectConfig(t, r.alpha, receivingNotifyConfig())
 	r.epic = newEpicInDir(t, r.alpha, "shared-epic")
 	r.ticket = extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", r.epic))
 	runCLIInDir(t, r.alpha, "new", "--title", "filler", "--topic", "demo", "--type", "task", "--parent", r.epic)
@@ -86,19 +89,18 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 	return reRooted.Root
 }
 
-// receivingNotifyConfig is the shared checkouts' usual project config: on-push
-// cadence, the receive on, and the owner hook appending to sink.
-func receivingNotifyConfig(sink string) string { return ownerNotifyConfig(sink, true) }
+// receivingNotifyConfig is the shared checkouts' project config: on-push
+// cadence, the receive on, and the owner hook appending to each checkout's own
+// sink (checkoutSink).
+func receivingNotifyConfig() string { return ownerNotifyConfig(true, sharedOwnerNotifySink) }
 
-// finishSharedCheckouts runs each checkout under config of its own sink, the
-// whole project config that sends its owner notifications there, turns the
-// automatic sync back on, and isolates the events the test reads.
-func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string, config func(sink string) string) {
+// finishSharedCheckouts defers each checkout's receive, so its own commands
+// spawn none, turns the automatic sync back on, and isolates the events the
+// test reads.
+func finishSharedCheckouts(t *testing.T, r reRootedCheckouts) {
 	t.Helper()
-	writeOwnerNotifyProjectConfig(t, r.bravo, config(r.sink))
-	// alpha gets the same config so its own commands spawn no background
-	// receive; its notifications go elsewhere.
-	writeOwnerNotifyProjectConfig(t, r.alpha, config(filepath.Join(base, "alpha-notifications")))
+	deferReceive(t, r.bravo)
+	deferReceive(t, r.alpha)
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
 }

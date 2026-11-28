@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
@@ -113,7 +114,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
 		ctx := underInvocation(context.Background())
-		outcome, err := performSyncPush(ctx, ctx, testStderr(t), runEnv(t), session, resolved, "", syncPushCommand, false, false, pushStep(tc.superseded))
+		outcome, err := performSyncPush(ctx, ctx, testStderr(t), runEnv(t), session, resolved, configtest.Applied(""), "", syncPushCommand, false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

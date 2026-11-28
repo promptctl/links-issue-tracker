@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -176,12 +177,13 @@ func reportEventValues[T interface{ EventValue() map[string]any }](ctx context.C
 	telemetry.Append(ctx, key, values...)
 }
 
-// syncScope is what a sync leaf's work runs against: the workspace plus the
-// open sync session. It is the ACQUIRED half of a sync command — which is why a
-// sync leaf's declaration cannot see it, and why asking one for help opens no
-// sync store. [LAW:effects-at-boundaries]
+// syncScope is what a sync leaf's work runs against: the workspace, the open
+// sync session, and the config in force on its store. It is the ACQUIRED half
+// of a sync command — which is why a sync leaf's declaration cannot see it,
+// and why asking one for help opens no sync store. [LAW:effects-at-boundaries]
 type syncScope struct {
 	ws      workspace.Info
+	project config.ProjectLayer
 	session syncSession
 }
 
@@ -201,10 +203,28 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 		l := declare()
 		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 			return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
-				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
+				project, err := sessionProject(ctx, inv, session)
+				if err != nil {
+					return err
+				}
+				return l.work(ctx, inv, syncScope{ws: ws, project: project, session: session}, positional)
 			})
 		})
 	}
+}
+
+// sessionProject is the config in force on session's store, read once the
+// session opens and reported on the command's event: every command that works
+// in a sync session pushes or pulls under it, the remote downgrade and the
+// lift included, whose push keeps the history bound and pages the owner.
+// [LAW:single-enforcer] [LAW:nothing-unseen]
+func sessionProject(ctx context.Context, inv Invocation, session syncSession) (config.ProjectLayer, error) {
+	project, err := app.ProjectOf(ctx, session.engine)
+	if err != nil {
+		return nil, err
+	}
+	reportConfigLayers(ctx, inv.Stderr, inv.Env, project)
+	return project, nil
 }
 
 // runWithSyncSession opens the workspace's sync session, runs work in it,
@@ -369,7 +389,7 @@ func syncPullLeaf() syncLeaf {
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
+		ws, project, session := scope.ws, scope.project, scope.session
 		progressf(inv.Stderr, "sync pull", "starting: reconciling remotes and resolving the sync source")
 		target, err := resolveSyncTarget(ctx, inv.Stderr, inv.Env, session, ws, *remote)
 		if err != nil {
@@ -402,7 +422,7 @@ func syncPullLeaf() syncLeaf {
 			// schema ahead of this binary surfaces as the one sync-failure contract
 			// (exit ExitValidation as the schema-ahead refusal it wraps, naming
 			// `lit upgrade`), not the raw store refusal, and pages the owner.
-			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, project, err)
 		}
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
 		// successfully (the fetch is the first step of every outcome branch below),
@@ -428,7 +448,7 @@ func syncPullLeaf() syncLeaf {
 			recordSyncHeldTrace(inv.Stderr, inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
 			// A held pull is a detection moment: the owner hears out-of-band, the day
 			// it happens, not through later archaeology (links-sync-pgct.4).
-			notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, failure.Failure)
+			notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, project, failure.Failure)
 			return failure
 		}
 		landingMetadata(pullTraceMetadata, result.Landing)
@@ -547,7 +567,7 @@ func syncPushLeaf() syncLeaf {
 	force := fs.Bool("force", false, "Replace the remote head this checkout last fetched (a lease on it; refused if the remote moved or the branch was never fetched here)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		return pushLiveStore(ctx, inv, scope.ws, scope.session, strings.TrimSpace(*remote), livePushOptions{command: syncPushCommand, setUpstream: *setUpstream, force: *force, verbose: *verbose})
+		return pushLiveStore(ctx, inv, scope.ws, scope.project, scope.session, strings.TrimSpace(*remote), livePushOptions{command: syncPushCommand, setUpstream: *setUpstream, force: *force, verbose: *verbose})
 	}}
 }
 
@@ -609,7 +629,7 @@ func requireLivePushTarget(ctx context.Context, inv Invocation, ws workspace.Inf
 // push` itself, `lit downgrade --remote` with its held head, and `lit upgrade
 // --remote` with its lifted one. [LAW:single-enforcer] one live push, so each
 // gets the one sync-failure contract, trace, and advertisement proof.
-func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, session syncSession, remote string, options livePushOptions) error {
+func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, project config.ProjectLayer, session syncSession, remote string, options livePushOptions) error {
 	// This push answers for every mutation committed before this engine
 	// session opened: clear the mirror-pending marker so their commands (and
 	// later ones observing it) stop counting on a further mirror. Sound only
@@ -626,7 +646,7 @@ func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, sessi
 	// backs) compacts atomically with the push; the on-change mirror pushes
 	// without compaction. The choice is the push step passed as a value, so
 	// performSyncPush has no compaction branch and a skipped push never compacts.
-	outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, remote, options.command, options.setUpstream, options.force, session.syncer.SyncCompactAndPush)
+	outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, project, remote, options.command, options.setUpstream, options.force, session.syncer.SyncCompactAndPush)
 	if err != nil {
 		// A could-not-attempt failure (performSyncPush returned before reaching
 		// its own trace-recording push attempt) — traced here, matching the
@@ -773,7 +793,7 @@ func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, res
 // (livePushOptions.command); every trace the attempt records names it.
 // env's deadlines are the run's: the push deadline a cut names, the history
 // bound's and the proof's.
-func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote string, command []string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, project config.ProjectLayer, remote string, command []string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -788,10 +808,10 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 	// [LAW:no-silent-failure]
 	defer func() {
 		if r := recover(); r != nil {
-			completePushAttempt(completionCtx, stderr, env, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			completePushAttempt(completionCtx, stderr, env, ws, project, outcome, fmt.Errorf("sync push panicked: %v", r))
 			panic(r)
 		}
-		completePushAttempt(completionCtx, stderr, env, ws, outcome, retErr)
+		completePushAttempt(completionCtx, stderr, env, ws, project, outcome, retErr)
 	}()
 	// Each step the push deadline bounds takes its verdict where it returns,
 	// so the attempt's record — this function's own, through the defer — is
@@ -814,7 +834,7 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 	// maintenance says the bound was not kept and why, and the event's
 	// history_bound.window_error carries the refusal, null when the window
 	// was read. [LAW:no-silent-failure]
-	cfg, cfgErr := config.Load(env, ws.Project)
+	cfg, cfgErr := config.Load(env, project)
 	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
 	window := storage.BoundWindowRead(cfg.Sync.HistoryWindow, cfgErr)
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.

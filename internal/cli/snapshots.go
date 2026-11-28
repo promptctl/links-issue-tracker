@@ -74,7 +74,11 @@ func snapshotsNewLeaf() wsLeaf {
 	// v1 specification quotes this exact message, and the docclaims gate holds
 	// the code to what the chapter says ships. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		cfg, err := config.Load(inv.Env, ws.Project)
+		project, err := appliedProject(ctx, inv.Env, inv.Stderr, ws)
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(inv.Env, project)
 		if err != nil {
 			return err
 		}

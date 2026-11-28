@@ -206,7 +206,7 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
 | `XDG_STATE_HOME` | `internal/config/config.go` | When non-empty, `StateDir(env)` = `$XDG_STATE_HOME/links-issue-tracker`; otherwise `$HOME/.local/state/links-issue-tracker` (`internal/config/config.go`). |
 | `HOME` | `internal/environ/environ.go` | `Env.HomeDir`, the home of `ConfigDir` and `StateDir`; `USERPROFILE` on Windows, `home` on Plan 9; unset → `$HOME is not defined` (`internal/environ/environ.go`). |
 | `LIT_CONFIG_GLOBAL_PATH` | `internal/config/config.go`, read at | Overrides the global config file path entirely; otherwise `ConfigDir()/config.toml` (`internal/config/config.go`). |
-| `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go`, read at | Overrides the project config file path; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`). |
+| `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go`, read at | Overrides the project config file path `config.ProjectPath` returns; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`). That file is what `lit config apply` and `lit config status` read; no command reads it as the config in force (`internal/cli/project_config.go`). |
 | `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go`; read at `internal/cli/sync_cadence.go` and `internal/cli/owner_notify.go` | When truthy, no command schedules a push mirror or a receive, prints a pending receive block, **or** compacts (`internal/cli/sync_cadence.go`), and the owner-notify hook never runs (`internal/cli/owner_notify.go`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go`). |
 | `CLAUDE_CODE_SESSION_ID` | `internal/cli/cli.go` | When non-empty (after trim), the acting identity is always `claude_<sessionID>`, overriding `--by`; otherwise the trimmed explicit value passes through (`internal/cli/cli.go`). |
 | `LNKS_AUTOMATION_TRIGGER` | const `internal/cli/automation_trace.go`; read | Non-empty enables automation-trace recording for the command; the value becomes the trace's `Trigger` field (`internal/cli/automation_trace.go`). Empty ⇒ no trace is written. |
@@ -262,10 +262,45 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
      (`internal/config/config.go`). `ConfigDir()` = `$XDG_CONFIG_HOME/links-issue-tracker`
      if `XDG_CONFIG_HOME` is set, else `$HOME/.config/links-issue-tracker`; empty string if the
      home directory cannot be determined (`internal/config/config.go`).
-  2. Project: `$LIT_CONFIG_PROJECT_PATH`, else `<workspaceRoot>/.lit/config.toml`
-     (`internal/config/config.go`).
-- A missing file is not an error; a parse error is (`parse config %s: %w`) and a merge error is
-  (`merge config %s: %w`) (`internal/config/config.go`).
+  2. Project: the `ProjectLayer`, the config in force on a store, which every store open
+     returns and each config read takes as a value (`internal/config/config.go`); its
+     `Applies()` is what a launcher hands its worker — the apply in force, or none:
+     - `Applied(applies)` — the content of `model.ConfigInForce(applies)`; `Source()`
+       `applied:<digest>`, `String()` `the applied project config <short digest>`;
+       `NoProject()` when nothing has been applied. Returned as `App.Project` by `app.Open`
+       through `app.ProjectOf(ctx, st)` (`internal/app/app.go`), which wraps a read failure as
+       `read the applied project config: %w`.
+     - `NoProject()` — sets nothing, `Source()` `none`, `String()` `no project config`; also
+       a worker's whose handoff could not be read.
+- `CheckoutProjectPath(env, workspaceRoot)` — `$LIT_CONFIG_PROJECT_PATH`, else
+  `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`): the file `lit config apply`
+  puts in force, not a layer.
+- A missing global file is not an error; a parse error is (`parse config %s: %w`) and a merge
+  error is (`merge config %s: %w`) (`internal/config/config.go`). `Load` (and its `load` over a
+  layer chain) collects every fault with `errors.Join`: each layer's merge error, then the
+  `snapshot.retention_budget`, `sync.cadence`, `claims.freshness_window` and
+  `sync.history_bound` checks; only a decode failure returns at once, joined with the merge
+  errors (`internal/config/config.go`).
+- `CheckProject(content []byte) error` — `load` over the one layer content would be once
+  applied: the project content alone over the defaults, refused for every fault it holds
+  (`internal/config/config.go`).
+- `internal/config/standing.go`: `FileVersion{Present bool; Content string}`;
+  `ProjectFile{Path string; Working, Committed FileVersion}`; `Standing` with
+  `StandingInForce` `in_force`, `StandingNotApplied` `not_applied`, `StandingUncommitted`
+  `uncommitted`, `StandingNoFile` `no_file`. `StandingOf(file, applies)`, in order: working ≠
+  committed → `uncommitted`; no working file and an apply held → `no_file`; no working file →
+  `in_force`; an apply held whose content equals the working file → `in_force`; else
+  `not_applied`. `(ProjectFile).Applicable() (string, error)` joins every fault —
+  `there is no project config file at %s`; `%s is not committed: only a committed file is applied, so commit it first`;
+  `%s has uncommitted changes: only the committed file is applied, so commit them first`;
+  `%s is not a config lit can run on: %w` (the `CheckProject` error) — else returns the
+  committed content.
+- `workspace.ReadProjectFile(ctx, env, root, path)` (`internal/workspace/project_file.go`):
+  `os.ReadFile` for the working version (absent → not present; other errors
+  `read the project config %s: %w`); a path not local to `root` →
+  `the project config %s is outside the checkout %s, so no commit of the checkout holds it`;
+  `git rev-parse --verify --quiet HEAD:<rel>` (exit 1 → no committed version, including a
+  HEAD that does not exist), then `git cat-file blob <blob>` for the committed version.
 - An empty path (`PathSpec.IsEmpty()`) contributes nothing (`internal/config/config.go`).
 - Each layer additionally contributes `ready.required_fields` **and** the legacy top-level
   `required_fields`, concatenated across layers in precedence order

@@ -117,6 +117,10 @@ func withDowngradeAcquisition(declare func() downgradeDeclaration) wsLeafFn {
 					if err != nil {
 						return err
 					}
+					project, err := sessionProject(ctx, inv, session)
+					if err != nil {
+						return err
+					}
 					// The remote is resolved before the store is lowered and
 					// held, so a remote the push would skip leaves the store as
 					// it was.
@@ -124,7 +128,7 @@ func withDowngradeAcquisition(declare func() downgradeDeclaration) wsLeafFn {
 						return err
 					}
 					return remoteDowngradeWork(ctx, inv, request, remoteDowngradeScope{schema: migrator, current: current, push: func(ctx context.Context, inv Invocation) error {
-						return pushLiveStore(ctx, inv, ws, session, request.remote, livePushOptions{command: command})
+						return pushLiveStore(ctx, inv, ws, project, session, request.remote, livePushOptions{command: command})
 					}})
 				})
 			}

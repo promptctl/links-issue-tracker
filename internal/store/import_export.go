@@ -43,10 +43,14 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
+	applies, err := queryConfigApplies(ctx, s.db)
+	if err != nil {
+		return model.Export{}, err
+	}
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges, PlanReviews: planReviews}, nil
+	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges, PlanReviews: planReviews, ConfigApplies: applies}, nil
 }
 
 // auditLogTables are the tables whose orphan rows Doctor reports as the
@@ -497,7 +501,7 @@ func cutByHeldPurges(ctx context.Context, tx *sql.Tx, export model.Export) (mode
 // re-listing them here would be a second, drift-prone statement of a fact the
 // schema owns.
 func writeWholeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
-	for _, table := range []string{"labels", "comments", "relations", "issues", "purges"} {
+	for _, table := range []string{"labels", "comments", "relations", "issues", "purges", "config_applies"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}

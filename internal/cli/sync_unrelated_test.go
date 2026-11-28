@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
@@ -127,9 +128,10 @@ func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
 // operator sees what each side holds on `lit sync reconcile`.
 func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	var sink strings.Builder
 	ws := workspacetest.New(t, runEnv(t))
-	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  1,
 		Behind: 1,
@@ -172,9 +174,10 @@ func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 // the same exit a held prose conflict gives — rather than a bland success line.
 func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	var sink strings.Builder
 	ws := workspacetest.New(t, runEnv(t))
-	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, project, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  7,
 		Behind: 7,

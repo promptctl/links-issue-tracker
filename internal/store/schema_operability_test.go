@@ -89,6 +89,10 @@ func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 	}
 }
 
+// configAppliesMigrationVersion is the newest migration that declares the
+// minimum writer schema.
+const configAppliesMigrationVersion = 13
+
 // TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps pins the other side:
 // a workspace ahead of this binary whose minimum writer schema this binary
 // supports, or which declares none, opens for writing, and the open reports
@@ -108,8 +112,8 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 	}{
 		// The newer migration declares nothing of its own, so the store keeps
 		// the declaration the registry's own migrations left in it: the
-		// timestamps migration declares its own version.
-		"the registry's own declaration kept": {"", false, timestampsMigrationVersion},
+		// config applies migration declares its own version.
+		"the registry's own declaration kept": {"", false, configAppliesMigrationVersion},
 		"none declared anywhere":              {"", true, 0},
 		"one this binary has":                 {fmt.Sprint(registryMax), false, registryMax},
 		"an older one it has":                 {"7", false, 7},

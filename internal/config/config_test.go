@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
@@ -412,12 +413,6 @@ install_hooks = false
 	}
 	t.Setenv("XDG_CONFIG_HOME", globalRoot)
 
-	workspaceRoot := t.TempDir()
-	projectDir := filepath.Join(workspaceRoot, ".lit")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	projectFile := filepath.Join(projectDir, "config.toml")
 	projectContent := `
 [sync]
 cadence = "on-push"
@@ -426,30 +421,27 @@ future_setting = 1
 [claims]
 freshness_window = "2h"
 `
-	if err := os.WriteFile(projectFile, []byte(projectContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
+	got, err := UnknownKeys(testEnv(), appliedProject(projectContent))
 	if err != nil {
 		t.Fatalf("UnknownKeys error = %v", err)
 	}
 	want := []UnknownKey{
 		{Key: "init.install_hooks", File: globalFile},
 		{Key: "snapshot.retention_budgt", File: globalFile},
-		{Key: "sync.future_setting", File: projectFile},
+		{Key: "sync.future_setting", File: "the applied project config " + model.DigestConfig(projectContent).Short()},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("UnknownKeys = %#v, want %#v", got, want)
 	}
 }
 
-// With no config file in either layer there is nothing unknown, and the list
-// is empty rather than nil, so "checked and found none" encodes as [].
-func TestUnknownKeysIsEmptyWithNoConfigFiles(t *testing.T) {
+// With no global file and nothing applied there is nothing unknown, and the
+// list is empty rather than nil, so "checked and found none" encodes as [].
+func TestUnknownKeysIsEmptyWithNoConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(t.TempDir())))
+	got, err := UnknownKeys(testEnv(), NoProject())
 	if err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("UnknownKeys = %#v, %v; want an empty, non-nil list", got, err)
 	}
@@ -467,18 +459,11 @@ func TestUnknownKeysReportsAnUnparseableLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", globalRoot)
-	workspaceRoot := t.TempDir()
-	projectFile := filepath.Join(workspaceRoot, ".lit", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(projectFile, []byte("[sync\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
-	if err == nil || !strings.Contains(err.Error(), projectFile) {
-		t.Fatalf("UnknownKeys error = %v, want one naming %s", err, projectFile)
+	project := appliedProject("[sync\n")
+	got, err := UnknownKeys(testEnv(), project)
+	if err == nil || !strings.Contains(err.Error(), project.String()) {
+		t.Fatalf("UnknownKeys error = %v, want one naming %s", err, project)
 	}
 	if want := []UnknownKey{{Key: "init.install_hooks", File: globalFile}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("UnknownKeys = %#v, want the global layer's key %#v", got, want)
@@ -549,22 +534,14 @@ required_fields = ["description", "assignee"]
 	}
 	t.Setenv("XDG_CONFIG_HOME", globalRoot)
 
-	workspaceRoot := t.TempDir()
-	projectConfigDir := filepath.Join(workspaceRoot, ".lit")
-	if err := os.MkdirAll(projectConfigDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	projectContent := `
 [ready]
 required_fields = ["title", "description"]
 `
-	if err := os.WriteFile(filepath.Join(projectConfigDir, "config.toml"), []byte(projectContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
+	cfg, err := Load(testEnv(), appliedProject(projectContent))
 	if err != nil {
-		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
+		t.Fatalf("Load(applied) error = %v", err)
 	}
 	want := []string{"description", "assignee", "title", "description"}
 	if !reflect.DeepEqual(cfg.Ready.RequiredFields, want) {
@@ -588,22 +565,14 @@ owner_notify_cmd = "global-notify"
 	}
 	t.Setenv("XDG_CONFIG_HOME", globalRoot)
 
-	workspaceRoot := t.TempDir()
-	projectConfigDir := filepath.Join(workspaceRoot, ".lit")
-	if err := os.MkdirAll(projectConfigDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	projectContent := `
 [sync]
 receive = false
 `
-	if err := os.WriteFile(filepath.Join(projectConfigDir, "config.toml"), []byte(projectContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
+	cfg, err := Load(testEnv(), appliedProject(projectContent))
 	if err != nil {
-		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
+		t.Fatalf("Load(applied) error = %v", err)
 	}
 	if cfg.Sync.Receive {
 		t.Fatal("expected project sync.receive=false to override global")
@@ -613,24 +582,21 @@ receive = false
 	}
 }
 
-func TestLoadHonorsProjectEnvOverrideWithoutWorkspaceRoot(t *testing.T) {
-	// The project layer is part of the precedence chain whether or not a
-	// workspace root is present; an explicit env override is never silently
-	// dropped. Pins the layer chain as data, not a conditional merge.
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-
-	projectFile := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(projectFile, []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
-		t.Fatal(err)
+// The file `lit config apply` puts in force is the one LIT_CONFIG_PROJECT_PATH
+// names, whether or not a workspace root is present, and the checkout's
+// .lit/config.toml when it names none: an explicit override is never silently
+// dropped.
+func TestCheckoutProjectPathHonorsTheEnvOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "config.toml")
+	env := testEnv().With(projectConfigPathEnv + "=" + override)
+	for _, root := range []pathspec.PathSpec{{}, pathspec.New(t.TempDir())} {
+		if got := CheckoutProjectPath(env, root).String(); got != override {
+			t.Errorf("CheckoutProjectPath(root %q) under the override = %q, want %q", root, got, override)
+		}
 	}
-	env := testEnv().With(projectConfigPathEnv + "=" + projectFile)
-
-	cfg, err := Load(env, CheckoutProject(env, pathspec.PathSpec{}))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.Quickstart.SoilMode {
-		t.Fatal("expected soil_mode=true from env-overridden project layer")
+	root := t.TempDir()
+	if got, want := CheckoutProjectPath(testEnv(), pathspec.New(root)).String(), filepath.Join(root, ".lit", "config.toml"); got != want {
+		t.Errorf("CheckoutProjectPath(%q) = %q, want %q", root, got, want)
 	}
 }
 
@@ -659,52 +625,30 @@ func testEnv() environ.Env {
 	return environ.Of(os.Environ()).Without(PathEnvVars()...)
 }
 
-// A handed project layer is read from its content, never from a file, and
-// each layer says where it came from.
-func TestAHandedProjectLayerIsReadFromItsContent(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	handed := HandedProject([]byte("[quickstart]\nsoil_mode = true\n"))
-	cfg, err := Load(testEnv(), handed)
-	if err != nil {
-		t.Fatalf("Load(handed) error = %v", err)
-	}
-	if !cfg.Quickstart.SoilMode {
-		t.Fatal("Load(handed) did not read soil_mode from the handed content")
-	}
-	if got := handed.Source(); got != "handed" {
-		t.Fatalf("handed Source() = %q, want handed", got)
-	}
-	root := t.TempDir()
-	if got, want := CheckoutProject(testEnv(), pathspec.New(root)).Source(), "checkout:"+filepath.Join(root, ".lit", "config.toml"); got != want {
-		t.Fatalf("checkout Source() = %q, want %q", got, want)
-	}
-	if content, err := CheckoutProject(testEnv(), pathspec.New(root)).Content(); err != nil || content != nil {
-		t.Fatalf("Content() of a checkout with no config file = %q, %v; want none", content, err)
+// A worker runs on the layer its launcher's applies build, so the layer the
+// launcher hands over is the launcher's own: the same config, named the same
+// on both events.
+func TestTheLayerAWorkerIsHandedIsItsLaunchers(t *testing.T) {
+	for _, launcher := range []ProjectLayer{NoProject(), appliedProject("[quickstart]\nsoil_mode = true\n")} {
+		worker := Applied(launcher.Applies())
+		if worker.Source() != launcher.Source() {
+			t.Errorf("worker source = %q, launcher's %q", worker.Source(), launcher.Source())
+		}
+		got, err := worker.Content()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := launcher.Content()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("worker content = %q, launcher's %q", got, want)
+		}
 	}
 }
 
-// A project file and the same bytes handed to a worker are one layer: both
-// read as TOML, whatever the file is named, so a launcher and its worker
-// cannot read one config two ways.
-func TestAFileLayerAndItsHandedBytesReadAlike(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	path := filepath.Join(t.TempDir(), "lit.yaml")
-	if err := os.WriteFile(path, []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env := testEnv().With(projectConfigPathEnv + "=" + path)
-	file := CheckoutProject(env, pathspec.PathSpec{})
-	content, err := file.Content()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, layer := range []ProjectLayer{file, HandedProject(content)} {
-		cfg, err := Load(testEnv(), layer)
-		if err != nil {
-			t.Fatalf("Load(%s) error = %v", layer, err)
-		}
-		if !cfg.Quickstart.SoilMode {
-			t.Fatalf("Load(%s) did not read soil_mode", layer)
-		}
-	}
+// appliedProject is the project layer of a store content was applied to.
+func appliedProject(content string) ProjectLayer {
+	return Applied([]model.ConfigApply{{ID: "cfg-test", Content: content}})
 }

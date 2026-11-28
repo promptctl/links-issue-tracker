@@ -11,13 +11,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
+
+// projectInForce is the config in force on the store of the checkout at dir,
+// as a command there reads it when its store opens.
+func projectInForce(t testing.TB, dir string) config.ProjectLayer {
+	t.Helper()
+	project, err := readAppliedProject(context.Background(), runEnv(t), testStderr(t), workspacetest.Resolved(t, runEnv(t), dir))
+	if err != nil {
+		t.Fatalf("read the applied project config at %s: %v", dir, err)
+	}
+	return project
+}
 
 // workerHandoffStdin is the handoff a command run in dir hands the worker it
 // spawns, built by the launcher's own function, from a run in t's environment.
@@ -30,7 +44,7 @@ func workerHandoffStdin(t testing.TB, dir string) string {
 func workerHandoffStdinUnder(t testing.TB, dir string, deadlines deadline.Deadlines) string {
 	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	handoff, err := handoffOf(underInvocation(context.Background()), ws, withFactParts(runEnv(t), func(p *suiteenv.FactParts) { p.Deadlines = deadlines }))
+	handoff, err := handoffOf(underInvocation(context.Background()), ws, projectInForce(t, dir), withFactParts(runEnv(t), func(p *suiteenv.FactParts) { p.Deadlines = deadlines }))
 	if err != nil {
 		t.Fatalf("handoffOf(%s): %v", dir, err)
 	}
@@ -79,14 +93,16 @@ func twoRemoteCheckout(t *testing.T) string {
 		t.Fatal(err)
 	}
 	runGit(t, root, "init", "-b", "trunk")
-	runGit(t, root, "-c", "user.email=h@h.co", "-c", "user.name=h", "commit", "--allow-empty", "-m", "seed")
+	// Committed with the seed, so `lit init` puts it in force.
+	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
+	runGit(t, root, "add", ".lit/config.toml")
+	runGit(t, root, "-c", "user.email=h@h.co", "-c", "user.name=h", "commit", "-m", "seed")
 	for _, remote := range []string{"origin", "backup"} {
 		runGit(t, base, "init", "--bare", "-b", "trunk", remote+".git")
 		runGit(t, root, "remote", "add", remote, filepath.Join(base, remote+".git"))
 		runGit(t, root, "push", remote, "HEAD")
 	}
 	runGit(t, root, "branch", "--set-upstream-to", "origin/trunk")
-	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
 	runCLIInDir(t, root, "init", "--skip-hooks")
 	return root
 }
@@ -98,6 +114,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	ws := workspacetest.Resolved(t, runEnv(t), root)
+	project := projectInForce(t, root)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	// The launcher's run carries facts the worker's own process does not, so
@@ -107,12 +124,12 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 		p.ReleasedSchema = version.SchemaCeiling{Max: 7, Source: "the launcher's own", Bound: version.BoundReleased}
 		p.RaisePolicy = version.RaisePolicy{Release: false}
 	})
-	handed, err := handoffOf(ctx, ws, launcher)
+	handed, err := handoffOf(ctx, ws, project, launcher)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if handed.SyncRemote != "origin" || handed.CheckoutRoot != ws.RootDir || string(handed.Project) != "[sync]\nreceive = false\n" {
-		t.Fatalf("handoffOf = %+v; want origin, root %s, and the checkout's config", handed, ws.RootDir)
+	if handed.SyncRemote != "origin" || handed.CheckoutRoot != ws.RootDir || !reflect.DeepEqual(handed.Applies, project.Applies()) {
+		t.Fatalf("handoffOf = %+v; want origin, root %s, and the apply in force", handed, ws.RootDir)
 	}
 	payload, err := json.Marshal(handed)
 	if err != nil {
@@ -122,8 +139,8 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if !ok {
 		t.Fatalf("buildWorkerWorkspace did not build the handed workspace")
 	}
-	if built.ws.WorkspaceID != ws.WorkspaceID || built.ws.Project.Source() != "handed" {
-		t.Fatalf("built workspace id %q source %q; want %q handed", built.ws.WorkspaceID, built.ws.Project.Source(), ws.WorkspaceID)
+	if built.ws.WorkspaceID != ws.WorkspaceID || built.project().Source() != project.Source() {
+		t.Fatalf("built workspace id %q config %q; want %q under the launcher's %q", built.ws.WorkspaceID, built.project().Source(), ws.WorkspaceID, project.Source())
 	}
 	if built.env.Facts() != launcher.Facts() {
 		t.Fatalf("the worker runs under deadlines %+v, ceiling %+v, policy %+v; want the launcher's %+v, %+v, %+v",
@@ -133,7 +150,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if ev.Facts["run_facts"] != launcher.Facts() || ev.Facts["run_facts.source"] != runFactsHanded {
 		t.Fatalf("the worker's event records run facts %+v from %v; want the launcher's, handed", ev.Facts["run_facts"], ev.Facts["run_facts.source"])
 	}
-	reHanded, err := handoffOf(ctx, built.ws, built.env)
+	reHanded, err := handoffOf(ctx, built.ws, built.project(), built.env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +178,7 @@ func TestAHandoffWithoutItsRunFactsIsRefused(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	ws := workspacetest.Resolved(t, runEnv(t), root)
-	handed, err := handoffOf(underInvocation(context.Background()), ws, runEnv(t))
+	handed, err := handoffOf(underInvocation(context.Background()), ws, projectInForce(t, root), runEnv(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +247,7 @@ func editJSON(t *testing.T, doc []byte, path []string, set json.RawMessage) []by
 // in the environment it was given, reading the handoff's own encoding.
 func TestTheWorkerSpecIsTheSpawnsDecision(t *testing.T) {
 	t.Parallel()
-	handoff := workerHandoff{CheckoutRoot: "/checkout", SyncRemote: "origin", Project: []byte("[sync]\n"), Facts: runEnv(t).Facts()}
+	handoff := workerHandoff{CheckoutRoot: "/checkout", SyncRemote: "origin", Applies: configtest.Applied("[sync]\n").Applies(), Facts: runEnv(t).Facts()}
 	from, err := parseSpawner("4242")
 	if err != nil {
 		t.Fatal(err)
@@ -338,18 +355,18 @@ func TestAReceiveWithAnUnreadableHandoffRecordsAReceiveError(t *testing.T) {
 	}
 }
 
-// Which project layer a command read is on its event: the checkout's file for
-// a command run in a checkout, and the handed one for a worker.
-func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
+// Which config a command ran on is on its event: the config in force on its
+// store, and for a detached worker the one its launcher ran on, named alike.
+func TestTheEventNamesTheConfigInForce(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
+	want := "applied:" + string(model.DigestConfig("[sync]\nreceive = false\n"))
 	runCLIInDir(t, root, "backlog")
-	checkoutFile := filepath.Join(workspacetest.Resolved(t, runEnv(t), root).RootDir, ".lit", "config.toml")
-	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+checkoutFile; got != want {
+	if got := lastEvent(t).Facts["config.project"]; got != want {
 		t.Fatalf("backlog's config.project = %v, want %q", got, want)
 	}
 	runWorkerInDir(t, root, backgroundReceiveSubcommand)
-	if got := lastEvent(t).Facts["config.project"]; got != "handed" {
-		t.Fatalf("the receive worker's config.project = %v, want handed", got)
+	if got := lastEvent(t).Facts["config.project"]; got != want {
+		t.Fatalf("the receive worker's config.project = %v, want its launcher's %q", got, want)
 	}
 }

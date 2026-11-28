@@ -176,7 +176,7 @@ func TestMeasureFootprintOfAnAbsentStoreFails(t *testing.T) {
 // budgeting for a store no default setting produces. [LAW:one-source-of-truth]
 func TestTheCeilingBudgetsTheDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg, err := config.Load(testEnv(), configtest.HandedProject(""))
+	cfg, err := config.Load(testEnv(), configtest.Applied(""))
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}

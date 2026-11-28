@@ -99,6 +99,10 @@ type state struct {
 	// purges are the records of the tickets this engine has purged. A purged
 	// ticket holds no row anywhere above, and its id is never minted again.
 	purges []model.Purge
+
+	// applies are the applies of the project config, in the order they were
+	// recorded; a read orders them by model.ConfigApplyOrdering.
+	applies []model.ConfigApply
 }
 
 // clone is a deep copy of s: no map, slice or record it holds is shared with
@@ -119,6 +123,7 @@ func (s state) clone() state {
 		labels:      cloneRuns(s.labels),
 		planReviews: slices.Clone(s.planReviews),
 		purges:      slices.Clone(s.purges),
+		applies:     slices.Clone(s.applies),
 	}
 }
 

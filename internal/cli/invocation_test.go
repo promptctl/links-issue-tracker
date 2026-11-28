@@ -122,14 +122,15 @@ func TestRunRefusesAnInvocationGivenNoStream(t *testing.T) {
 	}
 }
 
-// writeCheckoutProject makes toml the whole checkout project config of the
-// checkout at dir, written where config.CheckoutProject reads it, so every lit
-// run there runs under it. It returns the path it wrote.
+// writeCheckoutProject makes toml the whole project config file of the
+// checkout at dir, written where `lit config apply` reads it. It returns the
+// path it wrote. The file is in force only once committed and applied, which
+// applyProjectConfig does.
 //
 // [LAW:one-source-of-truth] it is the one place a test writes a checkout's
-// config, used where lit resolves the checkout from disk: the config path
-// itself, sync between clones, a worker. Every other test holds its config as
-// a value, through configtest.HandedProject.
+// config file, used where lit reads the checkout from disk: the file's
+// standing, its apply, and sync between clones. Every other test holds its
+// config as a value, through configtest.Applied.
 func writeCheckoutProject(t testing.TB, dir, toml string) string {
 	t.Helper()
 	path := config.CheckoutProjectPath(runEnv(t), pathspec.New(dir)).String()

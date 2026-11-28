@@ -227,13 +227,17 @@ func withWorkspaceSchema(declare func() upgradeDeclaration) wsLeafFn {
 					if err != nil {
 						return err
 					}
+					project, err := sessionProject(ctx, inv, session)
+					if err != nil {
+						return err
+					}
 					// The remote is resolved before the hold is lifted, so a
 					// remote the push would skip leaves the store held.
 					if err := requireLivePushTarget(ctx, inv, ws, session, remote, command); err != nil {
 						return err
 					}
 					return liftRemoteHoldWork(ctx, inv, remote, liftScope{holder: migrator, push: func(ctx context.Context, inv Invocation) error {
-						return pushLiveStore(ctx, inv, ws, session, remote, livePushOptions{command: command})
+						return pushLiveStore(ctx, inv, ws, project, session, remote, livePushOptions{command: command})
 					}})
 				})
 			}

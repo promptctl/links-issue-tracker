@@ -292,12 +292,12 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
 	claimHeld(t, ws, time.Now())
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, project, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
@@ -330,10 +330,10 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf sent >> `+shPath(sink))
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, project, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
@@ -354,11 +354,11 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	project := enableOwnerNotify(t, `printf sent >> `+shPath(sink))
 	claimHeld(t, ws, time.Now())
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, project, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
@@ -386,7 +386,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 	dir := t.TempDir()
 	stamp := filepath.Join(dir, "stopped")
 	sink := filepath.Join(dir, "sink")
-	ws = enableOwnerNotify(t, ws, `test -f `+shPath(stamp)+` && printf yes >> `+shPath(sink)+` || printf no >> `+shPath(sink))
+	project := enableOwnerNotify(t, `test -f `+shPath(stamp)+` && printf yes >> `+shPath(sink)+` || printf no >> `+shPath(sink))
 
 	stopAnswering := func() {
 		f, err := os.Create(stamp)
@@ -397,7 +397,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 		_ = f.Close()
 	}
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, stopAnswering); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, project, cause, stopAnswering); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	payload, err := os.ReadFile(sink)

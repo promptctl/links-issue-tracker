@@ -77,13 +77,24 @@ func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 
 func driveTheBound(t *testing.T, rounds int) {
 	r, base := newSharedCheckouts(t)
-	finishSharedCheckouts(t, r, base, func(sink string) string {
-		return receivingNotifyConfig(sink) + historyWindowConfig(checkpointReRootAt, checkpointKeep)
-	})
+	finishSharedCheckouts(t, r)
 	remote := filepath.Join(base, "remote.git")
-	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
+	alpha := newBoundCheckout(t, "alpha", r.alpha, checkoutSink(r.alpha))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)
 	historyBefore := historyBytes(t, remote, alpha, "before the first re-root")
+	// alpha's first write puts the window in force, and its push carries the
+	// window to bravo: the config is the pair's, and a write of alpha's, so it
+	// follows the measurement, which reads alpha at the remote's head. It is
+	// the write, and not one beside it, so that push brings bravo one commit
+	// and its cut falls below bravo's head, where bravo's receive follows it.
+	write := func(writer *boundCheckout, round int) {
+		t.Helper()
+		if writer == alpha && round == 0 {
+			applyProjectConfig(t, r.alpha, receivingNotifyConfig()+historyWindowConfig(checkpointReRootAt, checkpointKeep))
+			return
+		}
+		runCLIInDir(t, writer.dir, "update", r.epic, "--description", fmt.Sprintf("%s-round-%d", writer.name, round))
+	}
 	// The seeded history is above the bound, so the first push re-roots, and
 	// every checkpointPeriod-th push after it.
 	pushes := 0
@@ -98,7 +109,7 @@ func driveTheBound(t *testing.T, rounds int) {
 	for round := range rounds {
 		for _, turn := range [][2]*boundCheckout{{alpha, bravo}, {bravo, alpha}} {
 			writer, reader := turn[0], turn[1]
-			runCLIInDir(t, writer.dir, "update", r.epic, "--description", fmt.Sprintf("%s-round-%d", writer.name, round))
+			write(writer, round)
 			landOnSchedule(writer, fmt.Sprintf("round %d", round))
 			reader.receive(t)
 			for _, side := range []*boundCheckout{writer, reader} {

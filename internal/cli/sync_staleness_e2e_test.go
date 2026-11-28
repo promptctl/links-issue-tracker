@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -186,6 +187,7 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 // record rather than naming one.
 func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(t *testing.T) {
 	t.Parallel()
+	project := configtest.Applied("")
 	dir := soloCheckout(t)
 	runGit(t, dir, "remote", "set-url", "origin", filepath.Join(filepath.Dir(dir), "gone.git"))
 
@@ -204,7 +206,7 @@ func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(
 	if err := os.Chtimes(record, started, started); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws)
+	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws, project)
 	fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now())
 	if fetch == nil || fetch.basis != noFetchSucceeded {
 		t.Fatalf("record after a failed receive = %+v; want noFetchSucceeded", fetch)

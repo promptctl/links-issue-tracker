@@ -265,7 +265,7 @@ func resolveEpicContext(ctx context.Context, env environ.Env, ap *app.App, detai
 	if target == nil {
 		return nil, nil
 	}
-	requiredFields, err := readyRequiredFields(env, ap)
+	requiredFields, err := readyRequiredFields(env, ap.Project)
 	if err != nil {
 		return nil, err
 	}
